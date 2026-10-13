@@ -639,7 +639,23 @@ paths:
         - { name: output_id, in: query, schema: { type: integer, format: int64 } }
         - { name: mine, in: query, description: true=仅当前发明人, schema: { type: boolean } }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 分页披露列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/Disclosure' }
     post:
       tags: [disclosure]
       operationId: createDisclosure
@@ -712,7 +728,23 @@ paths:
         - { name: output_id, in: query, schema: { type: integer, format: int64 } }
         - { name: enterpartner_id, in: query, schema: { type: integer, format: int64 } }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 分页交易列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/Deal' }
     post:
       tags: [deal]
       operationId: createDeal
@@ -997,7 +1029,23 @@ paths:
         - { $ref: '#/components/parameters/PageParam' }
         - { $ref: '#/components/parameters/SizeParam' }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 分页分配明细列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/DistributionRecord' }
 
   /annual-report/generate:
     post:

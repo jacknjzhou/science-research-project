@@ -257,6 +257,51 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
 
+  /consumable:
+    get:
+      tags: [consumable]
+      operationId: listConsumables
+      summary: 耗材库存台账列表（A-05/A-13，多维筛选·分页）
+      description: >-
+        试剂/耗材按 SKU 管理库存水位、临期与呆滞判定；is_hazard 标识危化品（双人双锁/专库存管）。
+        按法人/密级隔离，非涉密域过滤 security_level>=SECRET 明细。
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/ConsumableStatus'
+        - name: category
+          in: query
+          schema: { type: string }
+        - name: is_hazard
+          in: query
+          schema: { type: boolean }
+        - name: keyword
+          in: query
+          description: 名称/SKU/库位模糊
+          schema: { type: string }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 分页耗材库存列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items:
+                                  $ref: '#/components/schemas/Consumable'
+
   /consumable/{sku}/stock-in:
     post:
       tags: [consumable]
@@ -614,6 +659,25 @@ components:
     DisposalStatus:
       type: string
       enum: [APPLIED, APPRAISED, APPROVED, EXECUTING, BOOKED, ARCHIVED]
+
+    Consumable:
+      type: object
+      description: 耗材/试剂库存台账（DDL A_CONSUMABLE，按 SKU 管理）。
+      properties:
+        sku:          { type: string, description: '耗材 SKU 业务编码（主键）' }
+        name:         { type: string }
+        category:     { type: string, description: '耗材类别（试剂/耗材/危化品/标样等）' }
+        qty:          { type: integer, description: '当前库存数量' }
+        unit:         { type: string, description: '计量单位' }
+        safe_stock:   { type: integer, description: '安全库存线' }
+        status:       { $ref: '#/components/schemas/ConsumableStatus' }
+        expire_date:  { type: string, format: date, nullable: true, description: '有效期/保质期' }
+        is_hazard:    { type: boolean, description: '是否危化品（双人双锁/专库存管）' }
+        consumed_30d: { type: integer, description: '近 30 日领用量（周转/呆滞判定）' }
+        location:     { type: string, nullable: true, description: '存放库位' }
+        legal_entity_id: { type: integer, format: int64 }
+        security_level:  { $ref: '#/components/schemas/SecurityLevel' }
+        policy_pack_id:  { type: integer, format: int64, nullable: true }
 
     Asset:
       type: object

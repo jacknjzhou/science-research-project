@@ -418,7 +418,23 @@ paths:
         - { name: output_type, in: query, schema: { type: string, enum: [PAPER, PATENT, SOFTWARE, STANDARD, AWARD, BOOK, DATASET, CONFERENCE] } }
         - { name: year, in: query, schema: { type: integer } }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 分页成果列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/Output' }
 
   /output/pending-claim:
     get:
@@ -431,7 +447,23 @@ paths:
         - { $ref: '#/components/parameters/SizeParam' }
         - { name: min_confidence, in: query, schema: { type: number, format: double, default: 0.7 } }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 分页待认领成果列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/Output' }
 
   /output/claim:
     post:

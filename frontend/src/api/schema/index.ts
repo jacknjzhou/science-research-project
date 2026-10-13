@@ -84,9 +84,34 @@ export function resolveRef(doc: any, ref: string): any {
   return cur
 }
 
+/** OpenAPI 模板路径 -> 锚定正则：{var} 支持整段或段内内嵌（如 /tasks/{id}:score 冒号自定义动作） */
+const tplReCache = new Map<string, RegExp>()
+function templateRegex(tpl: string): RegExp {
+  const hit = tplReCache.get(tpl)
+  if (hit) return hit
+  let re = ''
+  for (const part of tpl.split(/(\{[^/}]+\})/)) {
+    if (/^\{[^/}]+\}$/.test(part)) re += '([^/]+?)'
+    else re += part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  }
+  const rx = new RegExp('^' + re + '$')
+  tplReCache.set(tpl, rx)
+  return rx
+}
+
+/** 模板"具体度"= 去掉 {var} 后的字面量字符数；越大越优先（避免 /{id} 抢走 /{id}:score） */
+const tplLitCache = new Map<string, number>()
+function literalLen(tpl: string): number {
+  const hit = tplLitCache.get(tpl)
+  if (hit != null) return hit
+  const n = tpl.replace(/\{[^/}]+\}/g, '').length
+  tplLitCache.set(tpl, n)
+  return n
+}
+
 /**
  * 归一化请求 URL → 匹配模板路由。
- * 去掉 /api/v1 前缀、query、以及 host；对 {var} 段做通配匹配。
+ * 去掉 /api/v1 前缀、query、以及 host；对 {var}（含段内内嵌）做正则匹配，多命中取最具体。
  */
 export function matchRoute(method: string, url: string): OpenApiOperation | null {
   let path = url
@@ -101,21 +126,15 @@ export function matchRoute(method: string, url: string): OpenApiOperation | null
   const methodUp = method.toUpperCase()
   const exact = routeIndex.get(`${methodUp} ${path}`)
   if (exact) return exact
-  // 模板匹配：把 path 拆段，与每个模板比
-  const reqSegs = path.split('/').filter(Boolean)
+  let best: OpenApiOperation | null = null
+  let bestLit = -1
   for (const op of routeIndex.values()) {
     if (op.method.toUpperCase() !== methodUp) continue
-    const tplSegs = op.path.split('/').filter(Boolean)
-    if (tplSegs.length !== reqSegs.length) continue
-    let ok = true
-    for (let i = 0; i < tplSegs.length; i++) {
-      const t = tplSegs[i]
-      if (t.startsWith('{') && t.endsWith('}')) continue
-      if (t !== reqSegs[i]) { ok = false; break }
-    }
-    if (ok) return op
+    if (!templateRegex(op.path).test(path)) continue
+    const lit = literalLen(op.path)
+    if (lit > bestLit) { bestLit = lit; best = op }
   }
-  return null
+  return best
 }
 
 export function totalOperations(): number {

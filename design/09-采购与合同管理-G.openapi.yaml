@@ -195,7 +195,91 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /procurement/orders:
+    get:
+      tags: [order]
+      operationId: listOrders
+      summary: 采购订单/到货验收列表（G-12/G-17，多维筛选·分页）
+      description: >-
+        采购订单与到货验收台账。delivery_status=ACCEPTED 且 converted_asset=0 时可一键转资产（联动 A-03）。
+        按法人/密级隔离，非涉密域过滤 security_level>=SECRET 明细。code 前缀 ORD。
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/OrderStatus' }
+        - name: delivery_status
+          in: query
+          schema: { $ref: '#/components/schemas/DeliveryStatus' }
+        - name: project_id
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: supplier_id
+          in: query
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 分页采购订单列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/Order' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
   /contract:
+    get:
+      tags: [contract]
+      operationId: listContracts
+      summary: 合同台账列表（G-07/G-12，多维筛选·分页）
+      description: >-
+        采购/外协分包/横向委托/技术服务合同台账。按法人/密级隔离，非涉密域过滤 security_level>=SECRET 明细。
+        risk 为 G-14 AI 风险摘要等级（列表页展示，详情见 ai_risk_json）。
+      parameters:
+        - name: contract_type
+          in: query
+          schema: { type: string, enum: ['采购','外协分包','横向委托','技术服务','其他'] }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/ContractStatus' }
+        - name: project_id
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: supplier_id
+          in: query
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 分页合同列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/Contract' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
     post:
       tags: [contract]
       summary: 合同创建（G-07/G-10）
@@ -829,6 +913,31 @@ components:
         archive_checklist_id: { type: integer, format: int64, nullable: true, description: "逻辑引用 E_ARCHIVE_CHECKLIST" }
         ai_parse_json:    { type: object, nullable: true, description: "G-13 解析结果（建议）" }
         ai_risk_json:     { type: object, nullable: true, description: "G-14 风险提示（建议）" }
+        risk:             { type: string, enum: [HIGH, MED, LOW], nullable: true, description: "AI 风险摘要等级（G-14 建议，列表页展示；详情见 ai_risk_json）" }
+
+    Order:
+      type: object
+      description: 采购订单/到货验收单（DDL G_ORDER）。
+      properties:
+        id:               { type: integer, format: int64 }
+        code:             { type: string, description: "ORD-年-序" }
+        tenant_id:        { type: integer, format: int64 }
+        legal_entity_id:  { type: integer, format: int64 }
+        security_level:   { $ref: '#/components/schemas/SecurityLevel' }
+        policy_pack_id:   { type: integer, format: int64, nullable: true }
+        requisition_id:   { type: integer, format: int64, nullable: true }
+        contract_id:      { type: integer, format: int64, nullable: true }
+        project_id:       { type: integer, format: int64, nullable: true }
+        supplier_id:      { type: integer, format: int64, nullable: true }
+        supplier_name:    { type: string, nullable: true, description: "冗余供应商名（列表展示）" }
+        item_name:        { type: string }
+        amount:           { type: string, description: "订单金额 NUMERIC(18,2)" }
+        saving:           { type: string, nullable: true, description: "比价节支 NUMERIC(18,2)" }
+        status:           { $ref: '#/components/schemas/OrderStatus' }
+        delivery_status:  { $ref: '#/components/schemas/DeliveryStatus' }
+        converted_asset:  { type: integer, enum: [0, 1], description: "0=未转资产，1=已转（联动 A-03）" }
+        created_at:       { type: string, format: date-time }
+        updated_at:       { type: string, format: date-time }
 
     ContractRequest:
       type: object

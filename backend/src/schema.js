@@ -63,6 +63,7 @@ function loadOne(file) {
         summary: op.summary,
         tag: Array.isArray(op.tags) ? op.tags[0] : undefined,
         responseSchema,
+        doc,
         raw: op,
       })
     }
@@ -75,19 +76,53 @@ export function loadAll() {
   return { specs, routeIndex, files }
 }
 
-/** 从 200 schema 抽出 ApiResponse.data 子 schema（allOf 结构） */
+/** 从 200 schema 抽出 ApiResponse.data 子 schema（解析 $ref + allOf 结构） */
 export function extractDataSchema(op) {
-  const rs = op?.responseSchema
-  if (!rs) return null
+  const doc = op?.doc
+  const deref = (s) => (s && typeof s.$ref === 'string' && doc) ? resolveRef(doc, s.$ref) : s
+  const rs = deref(op?.responseSchema)
+  if (!rs) return op?.responseSchema ?? null
+  // data 子 schema 是否"有结构"：区别于 ApiResponse 的泛型 data（{type:object} 无任何约束）
+  const isStructured = (d) => !!(d && typeof d === 'object' &&
+    (d.$ref || d.allOf || d.oneOf || d.anyOf || d.items || (d.properties && Object.keys(d.properties).length)))
   if (Array.isArray(rs.allOf)) {
+    // 遍历 allOf 各成员，优先取内联覆写的结构化 data，跳过 ApiResponse 的泛型 data；
+    // 若无覆写则退回泛型（仅校验包裹），再否则 null。
+    let generic = null
     for (const sub of rs.allOf) {
-      if (sub?.properties?.data) return sub.properties.data
+      const d = deref(sub)?.properties?.data
+      if (!d) continue
+      if (isStructured(d)) return d
+      if (!generic) generic = d
     }
-    // allOf 里可能是 $ref 到 ApiResponse + 内联 {properties:{data}}
-    return null
+    // allOf 仅 $ref 到 ApiResponse（无内联 data 覆写）→ 取 ApiResponse.data 泛型
+    return generic
   }
   if (rs.properties?.data) return rs.properties.data
   return rs
+}
+
+/** OpenAPI 模板路径 -> 锚定正则：{var} 支持整段或段内内嵌（如 /tasks/{id}:score 冒号自定义动作） */
+const _tplReCache = new Map()
+function templateRegex(tpl) {
+  if (_tplReCache.has(tpl)) return _tplReCache.get(tpl)
+  let re = ''
+  for (const part of tpl.split(/(\{[^/}]+\})/)) {
+    if (/^\{[^/}]+\}$/.test(part)) re += '([^/]+?)'
+    else re += part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  }
+  const rx = new RegExp('^' + re + '$')
+  _tplReCache.set(tpl, rx)
+  return rx
+}
+
+/** 模板"具体度"= 去掉 {var} 后的字面量字符数；越大越优先（避免 /{id} 抢走 /{id}:score） */
+const _tplLitCache = new Map()
+function literalLen(tpl) {
+  if (_tplLitCache.has(tpl)) return _tplLitCache.get(tpl)
+  const n = tpl.replace(/\{[^/}]+\}/g, '').length
+  _tplLitCache.set(tpl, n)
+  return n
 }
 
 /** 匹配请求路径 -> op（供写流程与调试用） */
@@ -98,18 +133,13 @@ export function matchRoute(method, urlPath) {
   const mu = method.toUpperCase()
   const exact = routeIndex.get(`${mu} ${p}`)
   if (exact) return exact
-  const reqSegs = p.split('/').filter(Boolean)
+  let best = null
+  let bestLit = -1
   for (const op of routeIndex.values()) {
     if (op.method.toUpperCase() !== mu) continue
-    const tplSegs = op.path.split('/').filter(Boolean)
-    if (tplSegs.length !== reqSegs.length) continue
-    let ok = true
-    for (let i = 0; i < tplSegs.length; i++) {
-      const t = tplSegs[i]
-      if (t.startsWith('{') && t.endsWith('}')) continue
-      if (t !== reqSegs[i]) { ok = false; break }
-    }
-    if (ok) return op
+    if (!templateRegex(op.path).test(p)) continue
+    const lit = literalLen(op.path)
+    if (lit > bestLit) { bestLit = lit; best = op }
   }
-  return null
+  return best
 }
