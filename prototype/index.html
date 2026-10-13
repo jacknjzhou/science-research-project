@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>科研管理系统 · 高保真原型 v1.0</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ================= 登录浮层 ================= -->
+<div class="login-wrap" id="loginScreen">
+  <div class="login-paper">
+    <span class="login-close" onclick="hideLogin()">✕</span>
+    <h2>科研管理系统</h2>
+    <div class="sub">ResearchOS · Scientific Research Management · V9</div>
+    <div class="fld"><label>统一身份账号 / ORCID</label><input placeholder="请输入工号或 ORCID"></div>
+    <div class="fld"><label>密码 / 动态码</label><input type="password" placeholder="••••••••"></div>
+    <button class="btn seal login-btn" onclick="hideLogin();toast('登录成功 · 欢迎回来，周研究员')">登 录</button>
+    <div class="login-foot">支持 <b>信创环境</b> · 等保三级 · <span style="color:var(--ai)">AI 助手已就绪</span></div>
+  </div>
+</div>
+
+<div class="shell">
+  <!-- ================= 侧边导航 ================= -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="zh">科研管理</div>
+      <div class="en">ResearchOS</div>
+      <span class="ver">PROTOTYPE v1.1</span>
+    </div>
+    <nav class="nav">
+      <div class="nav-group"><div class="t">总 览</div>
+        <div class="nav-item active" data-v="dash"><span class="ic">◈</span>工作台驾驶舱</div>
+        <div class="nav-item" data-v="bigscreen"><span class="ic">▣</span>经费监督大屏</div>
+      </div>
+      <div class="nav-group"><div class="t">项目管理</div>
+        <div class="nav-item" data-v="guide"><span class="ic">◉</span>申报指南<span class="bdg">6</span></div>
+        <div class="nav-item" data-v="editor"><span class="ic">✎</span>申报书撰写</div>
+        <div class="nav-item" data-v="review"><span class="ic">☰</span>评审工作台<span class="bdg">3</span></div>
+        <div class="nav-item" data-v="projects"><span class="ic">▦</span>我的项目</div>
+        <div class="nav-item" data-v="project"><span class="ic">◫</span>项目详情</div>
+      </div>
+      <div class="nav-group"><div class="t">经费 · 成果</div>
+        <div class="nav-item" data-v="expense"><span class="ic">¥</span>报销填单</div>
+        <div class="nav-item" data-v="claim"><span class="ic">✧</span>成果认领<span class="bdg">12</span></div>
+        <div class="nav-item" data-v="transfer"><span class="ic">⇄</span>转化看板</div>
+      </div>
+      <div class="nav-group"><div class="t">资 产 · 采 购</div>
+        <div class="nav-item" data-v="procurement"><span class="ic">⧉</span>采购与合同<span class="bdg">5</span></div>
+        <div class="nav-item" data-v="asset"><span class="ic">▤</span>资产与耗材台账</div>
+      </div>
+      <div class="nav-group"><div class="t">人 员</div>
+        <div class="nav-item" data-v="portrait"><span class="ic">◍</span>PI 画像</div>
+      </div>
+    </nav>
+    <div class="side-foot">启元研究院 · 租户演示</div>
+  </aside>
+
+  <!-- ================= 主区 ================= -->
+  <div class="main">
+    <div class="topbar">
+      <div class="crumb"><span id="crumbZh">工作台驾驶舱</span><small id="crumbEn">DASHBOARD</small></div>
+      <div class="top-search">
+        <span>⌕</span><input placeholder="问点什么… 例如「去年到账经费最高的三个 PI」"><span class="ai-tag">AI 直达</span>
+      </div>
+      <span class="bell" onclick="toast('3 条未读：经费预警 ×1 · 待评审 ×2')">🔔</span>
+      <div class="role-chip" onclick="toast('切换角色（演示）：科研人员 → 管理员 → 领导')"><div class="av">周</div><div class="nm"><b>周明远</b><span>研究员 / PI</span></div></div>
+    </div>
+
+    <div class="content">
+
+      <!-- ============ V1 工作台驾驶舱 ============ -->
+      <section class="view on" id="v-dash">
+        <div class="page-head">
+          <div><div class="page-title">早安，<em>周明远</em> 研究员</div>
+          <div class="page-sub mono">2026 年 10 月 13 日 · 星期二 · 你有 <b style="color:var(--seal)">5</b> 项待办与 <b style="color:var(--ai)">2</b> 条 AI 建议</div></div>
+          <button class="btn seal" onclick="go('editor')">＋ 新申报</button>
+        </div>
+        <div class="kpi-strip">
+          <div class="card stat"><span class="corner">◫</span><div class="lbl">在研项目</div><div class="num">8<small> 项</small></div><div class="delta up">▲ 本季新增 2</div></div>
+          <div class="card stat red"><span class="corner">¥</span><div class="lbl">可支经费</div><div class="num">¥312<small> 万</small></div><div class="delta down">▼ 执行率 54%</div></div>
+          <div class="card stat gold"><span class="corner">✧</span><div class="lbl">本年度成果</div><div class="num">23<small> 项</small></div><div class="delta up">▲ SCI Q1 ×6</div></div>
+          <div class="card stat ai"><span class="corner">✎</span><div class="lbl">待办申报</div><div class="num">2</div><div class="delta down">国自然面上 · 剩 12 天</div></div>
+          <div class="card stat"><span class="corner">☰</span><div class="lbl">待评审</div><div class="num">3<small> 份</small></div><div class="delta">截止 10 月 20 日</div></div>
+        </div>
+        <div class="grid g21">
+          <div class="card">
+            <div class="card-h"><h4>AI 科研助手 · 今日态势</h4><span class="tag ai">大模型生成</span></div>
+            <div class="card-b">
+              <div class="alert-line b-add">⚠ <b>风险提醒：</b>重点研发计划《面向高端装备的…》(PRJ-2024-00087) 经费执行率 <b>31%</b>，距结题 5 个月，存在<b>突击支出风险</b>，建议尽快安排设备采购。<a style="color:var(--seal);cursor:pointer;text-decoration:underline" onclick="go('project')">查看项目 →</a></div>
+              <div class="alert-line b-med">◷ <b>截止提醒：</b>省自然科学基金集中申报将于 <b>10 月 25 日 17:00</b> 截止，你有一份申报书尚未完成形式审查。</div>
+              <div class="alert-line b-info">✧ <b>成果匹配：</b>系统为你的团队发现 <b>4 篇</b>疑似新发表论文（Web of Science 增量），等待认领。<a style="color:var(--ai);cursor:pointer;text-decoration:underline" onclick="go('claim')">前往认领 →</a></div>
+              <div class="divider-double"></div>
+              <div style="display:flex;gap:26px">
+                <div style="flex:1"><div style="font-size:12px;color:var(--ink-mute);margin-bottom:8px">近 6 月经费支出趋势</div>
+                  <div class="spark"><i style="height:40%"></i><i style="height:55%"></i><i style="height:35%"></i><i style="height:70%"></i><i style="height:62%"></i><i class="hl" style="height:88%"></i></div>
+                  <div class="mono" style="font-size:10px;color:var(--ink-mute);margin-top:6px;display:flex;justify-content:space-between"><span>5月</span><span>10月 ▲ 支出加速</span></div>
+                </div>
+                <div style="flex:1"><div style="font-size:12px;color:var(--ink-mute);margin-bottom:8px">项目健康度分布</div>
+                  <div class="hbar"><span class="nm">健康 (绿)</span><div class="track"><i style="width:62%"></i></div><span class="v">5 项</span></div>
+                  <div class="hbar"><span class="nm">关注 (黄)</span><div class="track"><i style="width:25%;background:var(--warn)"></i></div><span class="v">2 项</span></div>
+                  <div class="hbar"><span class="nm">风险 (红)</span><div class="track"><i style="width:13%;background:var(--bad)"></i></div><span class="v">1 项</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h4>关键动态</h4><span class="mono" style="font-size:11px;color:var(--ink-mute)">近 30 天</span></div>
+            <div class="card-b">
+              <div class="timeline">
+                <div class="tl-item"><div class="t">10-12 09:30</div>报销单 EXP-2026-1187 <b>已支付</b>，凭证同步财务系统</div>
+                <div class="tl-item"><div class="t">10-10 15:12</div>论文《Diffusion-guided topo optimization》<b>被认领入库</b>，JCR Q1</div>
+                <div class="tl-item red"><div class="t">10-08 11:00</div>项目《面向高端装备…》健康度 <b>由 78 → 64</b>，扣分来源：经费执行偏离</div>
+                <div class="tl-item"><div class="t">10-05 10:00</div>伦理批件 ETH-2026-023 <b>年度复审通过</b>，有效期至 2027-10</div>
+                <div class="tl-item"><div class="t">09-28 16:40</div>专利「一种自适应减振结构」<b>获授权</b>，进入可转化池</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ V2 指南列表 ============ -->
+      <section class="view" id="v-guide">
+        <div class="page-head"><div><div class="page-title">申报<em>指南</em></div><div class="page-sub">根据你的研究方向（先进制造 · 机器人学）智能排序 · <span style="color:var(--ai)">AI 已为你匹配 4 条高相关指南</span></div></div>
+        <button class="btn ghost" onclick="toast('订阅设置（演示）')">✉ 订阅推送</button></div>
+        <div class="filter-row">
+          <span class="chip on">全部 (6)</span><span class="chip">国家自然科学基金</span><span class="chip">重点研发计划</span><span class="chip">院自立项目</span><span class="chip">省部级</span><span class="chip">横向委托</span>
+          <span class="chip" style="border-style:dashed;color:var(--ai)">◈ AI 推荐匹配</span>
+        </div>
+        <div class="grid" style="gap:12px">
+          <div class="card guide-card" onclick="go('editor')">
+            <div class="ico" style="background:var(--seal)">自然</div>
+            <div><h5>2027 年度国家自然科学基金 · 面上项目 / 青年科学基金</h5>
+              <div class="meta"><span>发布单位：国家自然科学基金委</span><span>资助强度：面上 ≤ 50 万 / 青年 ≤ 30 万</span><span>限项：在研+申请 ≤ 2</span></div>
+              <div style="margin-top:8px"><span class="tag seal">与你方向高度匹配 0.93</span> <span class="tag info">需伦理前置审查</span> <span class="tag ok">可申报</span></div></div>
+            <div class="count-down"><div class="d">12</div><div class="l">天后截止</div></div>
+          </div>
+          <div class="card guide-card" onclick="toast('查看指南详情（演示）')">
+            <div class="ico" style="background:var(--ink)">重点</div>
+            <div><h5>「智能机器人」重点专项 2026 年度第三批公开申报（揭榜挂帅）</h5>
+              <div class="meta"><span>发布单位：科技部</span><span>专项总盘子：2.4 亿</span><span>组织形式：揭榜挂帅 · 需联合企业</span></div>
+              <div style="margin-top:8px"><span class="tag warn">需牵头单位资质</span> <span class="tag info">预算制 · 间接费用 20%</span></div></div>
+            <div class="count-down"><div class="d">27</div><div class="l">天后截止</div></div>
+          </div>
+          <div class="card guide-card" onclick="toast('查看指南详情（演示）')">
+            <div class="ico" style="background:var(--gold)">自立</div>
+            <div><h5>启元研究院 2026 年度「探索者计划」自立项目（第三批）</h5>
+              <div class="meta"><span>发布单位：院科研管理部</span><span>资助强度：≤ 80 万 · 包干制</span><span>面向：35 岁以下研究人员</span></div>
+              <div style="margin-top:8px"><span class="tag ok">包干制 · 免编明细预算</span> <span class="tag ai">AI 可一键起草申报书</span></div></div>
+            <div class="count-down"><div class="d">5</div><div class="l">天后截止</div></div>
+          </div>
+          <div class="card guide-card" onclick="toast('查看指南详情（演示）')">
+            <div class="ico" style="background:#41598C">省基</div>
+            <div><h5>省自然科学基金 2027 年度集中接收（创新研究群体 / 重点项目）</h5>
+              <div class="meta"><span>发布单位：省科技厅</span><span>资助强度：重点 ≤ 100 万 / 群体 300 万</span></div>
+              <div style="margin-top:8px"><span class="tag info">形式审查由科研办统一办理</span></div></div>
+            <div class="count-down" style="opacity:.45"><div class="d" style="color:var(--ink-mute)">—</div><div class="l">未开放</div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ V3 申报书编辑器 ============ -->
+      <section class="view" id="v-editor" style="margin:-26px">
+        <div class="editor">
+          <div class="ed-toc">
+            <div class="t">申报书结构 · 面上项目</div>
+            <div class="toc-item on">① 立项依据<span class="dot filled"></span></div>
+            <div class="toc-item">② 研究目标<span class="dot filled"></span></div>
+            <div class="toc-item">③ 研究内容<span class="dot"></span></div>
+            <div class="toc-item">④ 技术路线<span class="dot"></span></div>
+            <div class="toc-item">⑤ 创新点<span class="dot"></span></div>
+            <div class="toc-item">⑥ 研究基础<span class="dot filled"></span></div>
+            <div class="toc-item">⑦ 进度安排<span class="dot"></span></div>
+            <div class="toc-item">⑧ 预算说明<span class="dot"></span></div>
+            <div class="toc-item">⑨ 附件材料<span class="dot"></span></div>
+            <div class="hr-rule"></div>
+            <div style="padding:0 18px;font-size:11px;color:var(--ink-mute)">完整度<br><div class="bar b-warn" style="margin-top:6px"><i style="width:44%"></i></div><div class="mono" style="margin-top:4px">44% · 4/9 节完成</div></div>
+          </div>
+          <div class="ed-body">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+              <span class="tag info mono">PRJ-APPLY-2026-00412 · 草稿 v3</span>
+              <span style="font-size:11px;color:var(--ink-mute)" class="mono">autosaved 10:42:17 · 本地缓存正常</span>
+            </div>
+            <div class="paper-title">基于扩散模型的复杂曲面自适应磨抛机理研究</div>
+            <div style="text-align:center;font-size:12px;color:var(--ink-mute);margin-bottom:8px">国家自然科学基金 · 面上项目 · 申报代码 E0513</div>
+            <div style="display:flex;gap:10px;justify-content:center;margin-bottom:4px;flex-wrap:wrap"><span class="tag ok">PI 周明远 · 研究员</span><span class="tag info">成员 5 人</span><span class="tag info">执行期 48 个月</span><span class="tag warn">直接经费 48.6 万</span></div>
+            <div class="divider-double"></div>
+            <h6><span class="sec-no">§1</span>立项依据（研究意义与科学问题）</h6>
+            <textarea class="ed-text" rows="7">复杂大型曲面的高效高一致性磨抛是高端装备制造的共性瓶颈。现有刚性/恒力柔轮工具缺乏对曲面曲率时变特征的自适应能力，导致表面完整性不一致……本项目拟解决的关键科学问题是：材料去除率与接触载荷-曲率-转速的多场耦合映射机理，及其在线自整定边界。
+
+（本节由 AI 参考 3 项已中标同类项目辅助起草，PI 已修订 40%）</textarea>
+            <div class="word-count">612 / 2000 字</div>
+            <h6><span class="sec-no">§2</span>研究目标</h6>
+            <textarea class="ed-text" rows="4">建立曲面磨抛自适应调控理论模型 1 套；研制原理样机并在 3 类典型件验证，表面粗糙度 Ra≤0.2μm 一致性提升 30%；发表 SCI 论文 5-8 篇，授权发明专利 4 项。</textarea>
+            <div class="word-count">128 / 800 字</div>
+            <h6><span class="sec-no">§3</span>研究内容</h6>
+            <textarea class="ed-text" rows="3" placeholder="点击右侧 AI 助手起草本节，或手动输入…"></textarea>
+            <div class="word-count">0 / 1500 字</div>
+            <h6><span class="sec-no">§8</span>预算说明 · 摘要</h6>
+            <table class="tbl">
+              <thead><tr><th>科目</th><th>金额(万)</th><th>占比</th><th>AI 合规审查</th></tr></thead>
+              <tbody>
+                <tr><td>设备费</td><td class="mono">18.0</td><td class="mono">37%</td><td><span class="tag ok">✓ 合规</span></td></tr>
+                <tr><td>材料/测试化验</td><td class="mono">12.6</td><td class="mono">26%</td><td><span class="tag ok">✓ 合规</span></td></tr>
+                <tr><td>劳务费（研究生）</td><td class="mono">9.0</td><td class="mono">19%</td><td><span class="tag warn">⚠ 接近上限 20%</span></td></tr>
+                <tr><td>差旅/会议</td><td class="mono">6.0</td><td class="mono">12%</td><td><span class="tag ok">✓ 合规</span></td></tr>
+                <tr><td>间接费用</td><td class="mono">—</td><td class="mono">20%</td><td><span class="tag info">按政策计提</span></td></tr>
+              </tbody>
+            </table>
+            <div class="compliance-card">⚠ <b>AI 预算检查：</b>劳务费占比 19%（上限 20%），若后续调增其他科目可能触发超限。依据：《国家自然科学基金资助项目资金管理办法》财教〔2021〕177 号 第十四条。<b style="color:var(--ai);cursor:pointer">查看条款原文 →</b></div>
+          </div>
+          <div class="ai-panel">
+            <div class="ai-head"><div class="ai-orb"></div><div><b style="font-size:13px">科研申报助手</b><div style="font-size:11px;color:var(--ink-mute)">RAG · 已检索本所 217 份中标书</div></div></div>
+            <div class="ai-msgs">
+              <div class="ai-bubble bot">你好，我是申报助手。检测到当前指南为<b>面上项目</b>，限 2000 字立项依据。需要我基于关键词「扩散模型 / 曲面磨抛 / 自适应」起草 §3 研究内容吗？
+                <div class="ai-actions"><button class="btn sm ai" onclick="aiDraft()">✦ 起草 §3</button><button class="btn sm ghost" onclick="toast('将检索近3年同领域热点')">看热点</button></div>
+              </div>
+              <div class="ai-bubble user">起草，但要突出与 E05 学部去年资助趋势的差异化。</div>
+              <div class="ai-bubble bot" id="draftResp" style="display:none">好的。§3 建议分三条主线：①<b>多场耦合去除模型</b>（理论）；②<b>曲率在线估计与力位混合控制</b>（方法）；③<b>典型件实验验证</b>（验证）。差异化点：去年资助的 12 项同类课题均基于传统阻抗控制，未引入生成式模型做轨迹先验——可作为创新点表述。
+                <div class="ai-cite">参考：<b>[1]</b> PRJ-2024-00087（在研，通过会议评审）<b>[2]</b> 某工大 2025 面上中标（自适应磨抛）<b>[3]</b> E05 学部 2025 资助清单（公开）</div>
+              </div>
+              <div class="ai-bubble bot" style="border-left:3px solid var(--warn)">◈ <b>形式审查预检</b>（自动）：研究基础缺少 5 篇代表作全文；合作协议未上传；伦理批件 ETH-2026-011 已关联 ✓。<div class="ai-actions"><button class="btn sm ghost" onclick="toast('定位到缺失附件区（演示）')">定位缺失项</button></div></div>
+            </div>
+            <div class="ai-input"><input placeholder="向 AI 描述你的研究思路…"><button class="btn sm ai" onclick="toast('AI 正在思考…（演示）')">发送</button></div>
+          </div>
+        </div>
+        <div class="ed-foot">
+          <span class="mono" style="font-size:11px;color:var(--ink-mute)">提交前将执行：字数校验 · 附件完整性 · 限项检查 · AI 查重（相似度预估 <b style="color:var(--ok)">11%</b>）</span>
+          <div style="margin-left:auto;display:flex;gap:10px">
+            <button class="btn ghost sm" onclick="toast('草稿已保存 v4')">保存草稿</button>
+            <button class="btn sm" onclick="toast('已发起部门预审，流程进入「形式审查」节点')">提交预审</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ V4 评审工作台 ============ -->
+      <section class="view" id="v-review">
+        <div class="page-head"><div><div class="page-title">评审<span style="color:var(--seal)">工作台</span></div><div class="page-sub">通讯评审 · 匿名模式 · 你的负荷 3/5 · 评审截止 10-20</div></div>
+        <span class="stamp">评审中</span></div>
+        <div class="review-grid">
+          <div class="card review-doc">
+            <div style="text-align:center;margin-bottom:14px">
+              <div style="font-family:var(--serif);font-size:18px;font-weight:900">基于生成式模型的多轴机床颤振主动抑制研究</div>
+              <div style="font-size:11px;color:var(--ink-mute);margin-top:6px" class="mono">申请书编号 MS-2026-1187 · 受理代码 E0513-04 · 申请人信息 <span class="redact">隐藏</span></div>
+            </div>
+            <div class="divider-double"></div>
+            <h6 style="font-family:var(--serif);margin:14px 0 6px">§1 立项依据</h6>
+            <p style="font-size:12.5px;line-height:1.9;color:var(--ink-soft)">颤振是限制切削效率的首要因素。现有传递函数在线辨识方法在变参数工况下收敛慢……申请人前期在 <span class="redact">本单位</span> 搭建了半物理仿真平台，具备研究基础。</p>
+            <h6 style="font-family:var(--serif);margin:14px 0 6px">§2 研究内容与技术路线</h6>
+            <p style="font-size:12.5px;line-height:1.9;color:var(--ink-soft)">拟提出「生成先验 + 在线微调」双阶段颤振预测框架：以扩散模型构建稳定性叶片的概率先验…技术路线见图 3（附仿真验证矩阵与考核指标：临界切深提升 ≥ 25%）。</p>
+            <div style="margin-top:12px;padding:12px;background:var(--paper-deep);border-radius:5px;font-size:12px">📎 附件：报告正文.pdf（32 页）· 代表性论文 5 篇 · 基金委格式审查通过</div>
+            <div class="compliance-card bad" style="margin-top:14px">◈ <b>AI 查重提示：</b>§2.3 与 2024 年某在研项目文本相似度 <b>23.6%</b>（重点段落 2.3.2「…概率叶片构建…」相似度 61%）。<b style="cursor:pointer;color:var(--bad)">查看高亮对比 →</b>　<em style="color:var(--ink-mute)">（仅供参考，不作为唯一依据）</em></div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:16px">
+            <div class="card"><div class="card-h"><h4>评分卡 · 面上标准</h4><span class="tag ai">点击打分</span></div>
+              <div class="card-b" style="padding-top:4px">
+                <div class="score-row"><span class="nm">创新性</span><div class="score-dots" id="d1"></div><span class="mono" style="font-size:11px;color:var(--ink-mute)">/5</span></div>
+                <div class="score-row"><span class="nm">科学问题</span><div class="score-dots" id="d2"></div><span class="mono" style="font-size:11px;color:var(--ink-mute)">/5</span></div>
+                <div class="score-row"><span class="nm">研究方案</span><div class="score-dots" id="d3"></div><span class="mono" style="font-size:11px;color:var(--ink-mute)">/5</span></div>
+                <div class="score-row" style="border-bottom:0"><span class="nm">研究基础</span><div class="score-dots" id="d4"></div><span class="mono" style="font-size:11px;color:var(--ink-mute)">/5</span></div>
+                <div style="display:flex;justify-content:space-between;padding:10px 2px 0"><span style="font-size:12px">综合</span><b style="font-family:var(--serif);font-size:20px" id="totalScore">—</b></div>
+              </div></div>
+            <div class="card"><div class="card-h"><h4>评审意见</h4><button class="btn sm ai" onclick="genComment()">✦ AI 起草</button></div>
+              <div class="card-b"><textarea id="commentBox" class="ed-text" rows="6" style="min-height:130px;background:#fff" placeholder="撰写意见，或点击 AI 根据评分要点起草…"></textarea>
+              <div style="display:flex;gap:8px;margin-top:12px"><button class="btn seal" style="flex:1;justify-content:center" onclick="toast('意见已提交 · 感谢评审（演示）')">提交评审</button><button class="btn ghost" onclick="toast('已保存为草稿')">暂存</button></div></div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ V5 项目卡片墙 ============ -->
+      <section class="view" id="v-projects">
+        <div class="page-head"><div><div class="page-title">我的<em>项目</em></div><div class="page-sub">在研 8 · 中检 2 · 年内结题 1 · 健康度每日刷新</div></div>
+        <div style="display:flex;gap:8px"><span class="chip on">卡片</span><span class="chip" onclick="toast('表格视图（演示）')">列表</span><span class="chip" onclick="toast('甘特视图（演示）')">甘特</span></div></div>
+        <div class="grid g3">
+          <div class="card proj-card" onclick="go('project')">
+            <div class="health-badge"><div class="v h-bad">58</div><div class="l">HEALTH</div></div>
+            <h5>面向高端装备的复杂曲面自适应磨抛关键技术研究</h5><div class="no">PRJ-2024-00087 · 国家重点研发 · 2024.01–2027.12</div>
+            <div class="rows"><div class="r"><span>经费执行</span><span class="mono">¥412万/680万 · 61%</span></div><div class="bar b-warn"><i style="width:61%"></i></div>
+            <div class="r" style="margin-top:8px"><span>进度完成</span><span class="mono">5 里程碑/8</span></div><div class="bar b-ok"><i style="width:63%"></i></div></div>
+            <div class="risk">⚠ AI：剩余 14 个月需支出 268 万，月均 19 万为历史均值 2.3 倍</div>
+          </div>
+          <div class="card proj-card" onclick="go('project')">
+            <div class="health-badge"><div class="v h-ok">86</div><div class="l">HEALTH</div></div>
+            <h5>机器人柔性抓取中的触觉-视觉融合感知机制</h5><div class="no">PRJ-2025-00103 · 国自然面上 · 2025.01–2028.12</div>
+            <div class="rows"><div class="r"><span>经费执行</span><span class="mono">¥31万/50万 · 62%</span></div><div class="bar b-ok"><i style="width:62%"></i></div>
+            <div class="r" style="margin-top:8px"><span>成果产出</span><span class="mono">4 论文 / 目标 8</span></div><div class="bar b-ok"><i style="width:50%"></i></div></div>
+            <div class="risk warn" style="opacity:.85">◷ 2026 年报将于 11-30 到期，AI 可预起草</div>
+          </div>
+          <div class="card proj-card" onclick="go('project')">
+            <div class="health-badge"><div class="v h-ok">91</div><div class="l">HEALTH</div></div>
+            <h5>院所自立「探索者计划」· 数字孪生装配质量追溯</h5><div class="no">PRJ-2026-00012 · 院自立 · 包干制 · 2026.03–2028.02</div>
+            <div class="rows"><div class="r"><span>经费执行</span><span class="mono">¥22万/80万 · 28%</span></div><div class="bar b-ok"><i style="width:28%"></i></div>
+            <div class="r" style="margin-top:8px"><span>包干制</span><span class="mono">免科目管控</span></div></div>
+            <div class="tag ok" style="margin-top:10px">✓ 一切正常 · 无需干预</div>
+          </div>
+          <div class="card proj-card" onclick="go('project')">
+            <div class="health-badge"><div class="v h-warn">72</div><div class="l">HEALTH</div></div>
+            <h5>某型航空结构件搅拌摩擦焊工艺开发（横向）</h5><div class="no">PRJ-2024-00559 · 横向委托 · 2024.06–2026.12</div>
+            <div class="rows"><div class="r"><span>经费执行</span><span class="mono">¥156万/180万 · 87%</span></div><div class="bar b-warn"><i style="width:87%"></i></div>
+            <div class="r" style="margin-top:8px"><span>交付物</span><span class="mono">3/5 · 中检待定</span></div></div>
+            <div class="risk warn">⚠ 委托方验收标准变更，需补充协议审批</div>
+          </div>
+          <div class="card proj-card" onclick="go('project')">
+            <div class="health-badge"><div class="v h-ok">83</div><div class="l">HEALTH</div></div>
+            <h5>在役风电主轴焊根缺陷的电磁超声检测</h5><div class="no">PRJ-2025-00230 · 省重点 · 参与（非PI）</div>
+            <div class="rows"><div class="r"><span>角色</span><span class="mono">子课题负责人</span></div><div class="r"><span>经费（本方）</span><span class="mono">¥48万 · 执行 55%</span></div></div>
+          </div>
+          <div class="card proj-card" onclick="toast('打开项目（演示）')" style="opacity:.65">
+            <div class="health-badge"><div class="v" style="color:var(--ink-mute);font-size:16px">归档</div></div>
+            <h5>薄壁件低应力制造机理（已结题）</h5><div class="no">PRJ-2021-00044 · 国自然面上 · 2021–2025</div>
+            <div class="rows"><div class="r"><span>结题结论</span><span class="tag ok">优秀</span></div><div class="r"><span>成果</span><span class="mono">14 SCI · 6 发明</span></div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ V6 项目详情 ============ -->
+      <section class="view" id="v-project">
+        <div class="page-head"><div><div class="page-title" style="font-size:21px">面向高端装备的复杂曲面自适应磨抛关键技术研究</div>
+        <div class="page-sub mono">PRJ-2024-00087 · 国家重点研发计划 · PI 周明远 · 2024-01-01 → 2027-12-31 · 剩余 <b style="color:var(--seal)">14 个月</b></div></div>
+        <div style="display:flex;gap:10px"><button class="btn ghost" onclick="go('expense')">＋ 发起报销</button><button class="btn" onclick="toast('变更申请向导（演示）')">发起变更</button></div></div>
+        <div class="tabs">
+          <div class="tab on" data-t="pt1">概览</div><div class="tab" data-t="pt2">任务里程碑</div><div class="tab" data-t="pt3">经费</div><div class="tab" data-t="pt4">成果</div><div class="tab" data-t="pt5">档案</div><div class="tab" data-t="pt6">变更记录</div><div class="tab" data-t="pt7">外协与合同</div>
+        </div>
+        <div class="pane pt1">
+          <div class="grid g3">
+            <div class="card">
+              <div class="card-h"><h4>项目健康度</h4><span class="tag ai">AI 归因</span></div>
+              <div class="card-b">
+                <div class="gauge"><div class="in"><b>64</b><span>WATCH</span></div></div>
+                <div style="margin-top:14px;font-size:12px;line-height:1.9">较上月 <b style="color:var(--bad)">▼14</b>。扣分来源：
+                <div class="hbar" style="margin-top:8px"><span class="nm">经费偏离</span><div class="track"><i style="width:70%;background:var(--bad)"></i></div><span class="v">-14</span></div>
+                <div class="hbar"><span class="nm">逾期任务</span><div class="track"><i style="width:35%;background:var(--warn)"></i></div><span class="v">-5</span></div>
+                <div class="hbar"><span class="nm">成果滞后</span><div class="track"><i style="width:14%;background:var(--gold)"></i></div><span class="v">-2</span></div></div>
+                <div class="ai-hint" style="margin-top:12px">✦ 建议：优先启动 M6 里程碑（样机集成），并于 Q4 完成 60 万设备采购以拉平执行率。</div>
+              </div>
+            </div>
+            <div class="card"><div class="card-h"><h4>经费概览</h4><a class="mono" style="font-size:11px;color:var(--ai);cursor:pointer" onclick="tabTo('pt3')">明细 →</a></div>
+              <div class="card-b" style="display:flex;flex-direction:column;gap:14px">
+                <div style="display:flex;justify-content:space-between"><div><div class="lbl" style="font-size:11px;color:var(--ink-mute)">总批复</div><div style="font-family:var(--serif);font-size:22px;font-weight:900">¥680<small style="font-size:12px">万</small></div></div>
+                <div style="text-align:right"><div style="font-size:11px;color:var(--ink-mute)">已到账</div><div style="font-family:var(--serif);font-size:22px;font-weight:900">¥610<small style="font-size:12px">万</small></div></div></div>
+                <div><div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:5px"><span>执行 61%</span><span class="mono" style="color:var(--bad)">应达 78%</span></div><div class="bar b-warn"><i style="width:61%"></i></div></div>
+                <div class="spark" style="height:54px"><i style="height:30%"></i><i style="height:42%"></i><i style="height:36%"></i><i style="height:50%"></i><i style="height:44%"></i><i style="height:38%"></i><i style="height:52%"></i><i style="height:47%"></i><i style="height:55%"></i><i class="hl" style="height:30%"></i></div>
+                <div style="font-size:11px;color:var(--ink-mute)" class="mono">AI 预测结题执行率：92% ±4% · 置信 0.81</div>
+              </div></div>
+            <div class="card"><div class="card-h"><h4>里程碑与团队</h4></div>
+              <div class="card-b">
+                <div class="hbar"><span class="nm" style="width:130px">M1-M5 已完成</span><div class="track"><i style="width:62%;background:var(--ok)"></i></div><span class="v">5/8</span></div>
+                <div class="hbar"><span class="nm" style="width:130px">M6 样机集成</span><div class="track"><i style="width:30%;background:var(--warn)"></i></div><span class="v">临期</span></div>
+                <div class="hbar"><span class="nm" style="width:130px">M7-M8 验证</span><div class="track"><i style="width:4%"></i></div><span class="v">未启</span></div>
+                <div class="divider-double"></div>
+                <div style="display:flex;align-items:center;margin-bottom:10px">
+                  <span class="p-avatar" style="width:32px;height:32px;font-size:13px;border-width:2px">周</span><span class="p-avatar" style="width:32px;height:32px;font-size:12px;background:linear-gradient(135deg,#41598C,#1C2B4A);border-width:2px;margin-left:-8px">李</span><span class="p-avatar" style="width:32px;height:32px;font-size:12px;background:linear-gradient(135deg,#A8842F,#7a5f1f);border-width:2px;margin-left:-8px">王</span><span class="p-avatar" style="width:32px;height:32px;font-size:11px;background:var(--paper-deep);color:var(--ink);border-width:2px;margin-left:-8px">+5</span>
+                  <span style="margin-left:12px;font-size:12px;color:var(--ink-soft)">课题组 8 人 · 2 博后 3 博士</span>
+                </div>
+                <span class="tag info">关联伦理批件 ETH-2026-011 ✓ 有效</span>
+              </div></div>
+          </div>
+        </div>
+        <div class="pane pt2" style="display:none">
+          <div class="card"><div class="card-h"><h4>任务分解 · 甘特</h4><span class="tag ai">拖拽可改期</span></div>
+            <div class="card-b" style="display:flex;flex-direction:column;gap:10px">
+              <div style="display:flex;align-items:center;gap:10px;font-size:12px"><span style="width:190px">T6.1 磨抛样机机械集成</span><div style="flex:1;background:var(--paper-deep);height:16px;border-radius:3px;position:relative"><i style="position:absolute;left:20%;width:28%;top:2px;bottom:2px;background:var(--warn);border-radius:2px;display:block"></i></div><span class="mono" style="font-size:10px;color:var(--warn)">逾期 12d</span></div>
+              <div style="display:flex;align-items:center;gap:10px;font-size:12px"><span style="width:190px">T6.2 力位混合控制器开发</span><div style="flex:1;background:var(--paper-deep);height:16px;border-radius:3px;position:relative"><i style="position:absolute;left:12%;width:44%;top:2px;bottom:2px;background:var(--ink);border-radius:2px;display:block"></i></div><span class="mono" style="font-size:10px;color:var(--ok)">进行 70%</span></div>
+              <div style="display:flex;align-items:center;gap:10px;font-size:12px"><span style="width:190px">T6.3 曲面曲率在线估计算法</span><div style="flex:1;background:var(--paper-deep);height:16px;border-radius:3px;position:relative"><i style="position:absolute;left:5%;width:30%;top:2px;bottom:2px;background:var(--ok);border-radius:2px;display:block"></i></div><span class="mono" style="font-size:10px;color:var(--ok)">完成</span></div>
+              <div style="display:flex;align-items:center;gap:10px;font-size:12px"><span style="width:190px">T7.1 三类典型件试验矩阵</span><div style="flex:1;background:var(--paper-deep);height:16px;border-radius:3px;position:relative"><i style="position:absolute;left:62%;width:20%;top:2px;bottom:2px;background:var(--line-hard);border-radius:2px;display:block"></i></div><span class="mono" style="font-size:10px;color:var(--ink-mute)">未开始</span></div>
+            </div></div>
+        </div>
+        <div class="pane pt3" style="display:none">
+          <div class="card"><div class="card-h"><h4>预算执行表</h4><button class="btn sm" onclick="go('expense')">＋ 报销</button></div>
+            <div class="card-b" style="padding:0"><table class="tbl">
+              <thead><tr><th>科目</th><th>批复</th><th>已用</th><th>冻结</th><th>执行率</th><th>状态</th></tr></thead>
+              <tbody>
+                <tr><td>设备费</td><td class="mono">280.0</td><td class="mono">121.4</td><td class="mono">18.0</td><td><div class="bar b-warn" style="width:100px"><i style="width:43%"></i></div></td><td><span class="tag warn">AI：偏慢</span></td></tr>
+                <tr><td>材料/测试化验加工</td><td class="mono">160.0</td><td class="mono">118.9</td><td class="mono">4.2</td><td><div class="bar b-ok" style="width:100px"><i style="width:74%"></i></div></td><td><span class="tag ok">✓</span></td></tr>
+                <tr><td>差旅/会议/国际合作</td><td class="mono">68.0</td><td class="mono">52.1</td><td class="mono">0</td><td><div class="bar b-ok" style="width:100px"><i style="width:77%"></i></div></td><td><span class="tag ok">✓</span></td></tr>
+                <tr><td>劳务费</td><td class="mono">96.0</td><td class="mono">63.4</td><td class="mono">1.1</td><td><div class="bar b-ok" style="width:100px"><i style="width:66%"></i></div></td><td><span class="tag ok">✓</span></td></tr>
+                <tr><td>间接费用（计提）</td><td class="mono">76.0</td><td class="mono">45.6</td><td class="mono">—</td><td><div class="bar b-ok" style="width:100px"><i style="width:60%"></i></div></td><td><span class="tag info">计提</span></td></tr>
+              </tbody></table></div></div>
+        </div>
+        <div class="pane pt4" style="display:none">
+          <div class="grid g2"><div class="card"><div class="card-h"><h4>本项目成果 9 项</h4><span class="tag ok">结题可直接引用</span></div><div class="card-b" style="padding:0">
+            <table class="tbl"><tbody>
+            <tr><td>论文</td><td>Adaptive polishing of freeform surfaces via diffusion priors</td><td><span class="tag info">RCIM Q1</span></td></tr>
+            <tr><td>论文</td><td>曲率时变的力位混合鲁棒控制</td><td><span class="tag info">机械工程学报</span></td></tr>
+            <tr><td>专利</td><td>一种自适应磨抛末端执行器</td><td><span class="tag ok">已授权</span></td></tr>
+            <tr><td>专利</td><td>曲率在线估计方法（发明在审）</td><td><span class="tag warn">实审中</span></td></tr>
+            <tr><td>标准</td><td>《复杂曲面机器人磨抛工艺规范》团标</td><td><span class="tag info">发布</span></td></tr>
+            </tbody></table></div></div>
+          <div class="card"><div class="card-h"><h4>结题指标达成</h4></div><div class="card-b">
+            <div class="hbar"><span class="nm" style="width:120px">论文 8 篇</span><div class="track"><i style="width:75%"></i></div><span class="v">6/8</span></div>
+            <div class="hbar"><span class="nm" style="width:120px">发明专利 4 项</span><div class="track"><i style="width:75%"></i></div><span class="v">3/4</span></div>
+            <div class="hbar"><span class="nm" style="width:120px">样机 1 台</span><div class="track"><i style="width:60%"></i></div><span class="v">集成中</span></div>
+            <div class="hbar"><span class="nm" style="width:120px">Ra≤0.2μm 验证</span><div class="track"><i style="width:40%;background:var(--warn)"></i></div><span class="v">0.23</span></div>
+            <div class="ai-hint" style="margin-top:10px">✦ AI：按当前节奏结题前可达成 87% 指标；建议 Q1 前完成验证件试验。</div>
+          </div></div></div>
+        </div>
+        <div class="pane pt5" style="display:none"><div class="card"><div class="card-h"><h4>项目档案 · 23 份文档</h4><input class="mono" style="padding:6px 10px;border:1px solid var(--line);border-radius:4px;font-size:12px" placeholder="全文检索档案…"></div><div class="card-b" style="padding:0"><table class="tbl">
+          <thead><tr><th>类别</th><th>文件</th><th>版本</th><th>上传</th><th></th></tr></thead><tbody>
+          <tr><td><span class="tag info">任务书</span></td><td>重点研发计划任务书（含签章）</td><td class="mono">v1 终</td><td class="mono">2024-03-12</td><td><a style="color:var(--ai);cursor:pointer">预览</a></td></tr>
+          <tr><td><span class="tag info">中期报告</span></td><td>2025 年中检查报告与专家意见</td><td class="mono">v2</td><td class="mono">2025-08-30</td><td><a style="color:var(--ai);cursor:pointer">预览</a></td></tr>
+          <tr><td><span class="tag seal">变更批复</span></td><td>关于课题参与单位调整的批复</td><td class="mono">终</td><td class="mono">2025-11-04</td><td><a style="color:var(--ai);cursor:pointer">预览</a></td></tr>
+          <tr><td><span class="tag info">经费</span></td><td>专项经费到位通知 / 财务凭证包</td><td class="mono">—</td><td class="mono">持续</td><td><a style="color:var(--ai);cursor:pointer">预览</a></td></tr>
+        </tbody></table></div></div></div>
+        <div class="pane pt6" style="display:none"><div class="card"><div class="card-h"><h4>变更历史</h4></div><div class="card-b"><div class="timeline">
+          <div class="tl-item"><div class="t">2025-11 · 已批准</div>参与单位新增：XX大学（设备共享协议），经专家组与主管部门两级批复</div>
+          <div class="tl-item"><div class="t">2025-06 · 已批准</div>考核指标微调：一致性提升 40%→30%（原因：工件矩阵扩大）</div>
+          <div class="tl-item red"><div class="t">2026-09 · 审批中</div>申请副课题负责人变更 → 财务与科研办复核中</div>
+        </div></div></div></div>
+        <div class="pane pt7" style="display:none">
+          <div class="grid g3">
+            <div class="card"><div class="card-h"><h4>外协 / 分包合同</h4><span class="tag ai">关联 F-22 外拨</span></div><div class="card-b" style="padding:0"><table class="tbl">
+              <thead><tr><th>外协单位</th><th>事项</th><th>金额</th><th>外拨进度</th></tr></thead><tbody>
+              <tr><td>XX大学 · 精密测量实验室<br><span class="mono" style="font-size:10px;color:var(--ink-mute)">外协库 A 级</span></td><td>工件矩阵精度标定</td><td class="mono">¥48万</td><td><div class="bar b-ok"><i style="width:75%"></i></div><span class="mono" style="font-size:10px">36/48 万</span></td></tr>
+              <tr><td>某智能装备公司<br><span class="mono" style="font-size:10px;color:var(--ink-mute)">外协库 B 级 ⚠</span></td><td>磨抛样机试制</td><td class="mono">¥62万</td><td><div class="bar b-warn"><i style="width:40%"></i></div><span class="mono" style="font-size:10px">24.8/62 万</span></td></tr>
+              </tbody></table>
+              <div class="ai-hint" style="margin:12px">✦ <b>外拨核验：</b>第二笔外协款到账凭证与阶段验收报告尚未上传，按制度包「外协付款前需阶段验收」自动冻结本次出账，补齐后解冻。</div>
+            </div></div>
+            <div class="card"><div class="card-h"><h4>合同台账 · 电子签章</h4><span class="tag seal">G-11</span></div><div class="card-b" style="display:flex;flex-direction:column;gap:10px">
+              <div class="inv-card"><div style="flex:1"><b style="font-size:13px">国家重点研发计划任务书</b><div style="font-size:11px;color:var(--ink-mute);margin-top:3px">主合同 · 已签 · 2024-01-08 · 编号 CON-2024-0087</div></div><span class="tag ok">✔ 已签章</span></div>
+              <div class="inv-card"><div style="flex:1"><b style="font-size:13px">参与单位合作协议（XX大学）</b><div style="font-size:11px;color:var(--ink-mute);margin-top:3px">横向协作 · 已签 · 2025-11-20</div></div><span class="tag ok">✔ 已签章</span></div>
+              <div class="inv-card"><div style="flex:1"><b style="font-size:13px">磨抛样机外协加工合同 v2</b><div style="font-size:11px;color:var(--ink-mute);margin-top:3px">外协 · 对方待签</div></div><span class="tag warn">⏳ 签章中</span></div>
+              <div class="hr-rule"></div><div style="font-size:11.5px;color:var(--ink-mute)">合同变更（金额/周期/指标）全程留痕，逐条可反向追溯至任务书条款。</div>
+            </div></div>
+            <div class="card"><div class="card-h"><h4>双向追溯链</h4><span class="tag ai">E-11</span></div><div class="card-b">
+              <div class="timeline">
+                <div class="tl-item"><div class="t">任务书 · 指标 3</div>磨抛一致性提升 ≥30%</div>
+                <div class="tl-item"><div class="t">外协 · XX大学</div>精度标定协议 → ¥48万 → 已到账 75%</div>
+                <div class="tl-item"><div class="t">经费 · 外拨</div>EXP→DISB-2025-0031 · 凭证/验收齐全</div>
+                <div class="tl-item"><div class="t">成果 · 支撑</div>软著 2 件 + 论文 1 篇（由该外协产出）</div>
+              </div>
+              <button class="btn sm ghost" style="margin-top:10px" onclick="toast('已从成果反查至任务书条款（演示）')">⇠ 从成果反查条款</button>
+            </div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ V7 报销填单 ============ -->
+      <section class="view" id="v-expense">
+        <div class="page-head"><div><div class="page-title">发起<em>报销</em></div><div class="page-sub">上传发票 → OCR 结构化 → AI 预审 → 审批链自动路由 · 平均到账 <b>0.8 工作日</b></div></div>
+        <span class="tag ai" style="font-size:12px;padding:6px 14px">✦ AI 预审已开启</span></div>
+        <div class="grid g21">
+          <div class="card"><div class="card-h"><h4>报销信息</h4><span class="mono" style="font-size:11px;color:var(--ink-mute)">单号 EXP-2026-1204（草稿）</span></div>
+            <div class="card-b">
+              <div class="expense-drop" onclick="toast('已识别 2 张发票 · 自动填单成功（演示）')"><div class="big-ic">🧾</div><div style="font-family:var(--serif);font-size:16px;font-weight:700;margin-top:8px">拖入 / 拍摄 发票</div><div style="font-size:12px;color:var(--ink-mute);margin-top:4px">支持 PDF / OFD / JPG · 增值税专票、电子普票、行程单自动识别<br><span style="color:var(--ai)">同一商家连号发票、重复报销将在 AI 预审拦截</span></div></div>
+              <div class="hr-rule"></div>
+              <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+                <div class="inv-card"><div class="inv-thumb">专票</div><div style="flex:1"><b style="font-size:13px">¥ 23,400.00</b> <span style="font-size:12px;color:var(--ink-mute)">砂轮耗材 · XX精密工具公司</span><div style="font-size:11px;color:var(--ink-mute)" class="mono">发票号 04412317 · 2026-10-02 · 税局接口查验 ✓</div></div><span class="tag ok">AI 合规 0.97</span></div>
+                <div class="inv-card"><div class="inv-thumb">行程</div><div style="flex:1"><b style="font-size:13px">¥ 1,860.00</b> <span style="font-size:12px;color:var(--ink-mute)">北京→沈阳往返机票</span><div style="font-size:11px;color:var(--ink-mute)" class="mono">行程单 20260928 · 出差审批 TRIP-0087 ✓</div></div><span class="tag warn">AI 提示 0.82</span></div>
+              </div>
+              <div class="form-grid">
+                <div class="fg"><label>归属项目 <em>*</em></label><select><option>PRJ-2024-00087 磨抛关键技术（可支 ¥268万）</option><option>PRJ-2025-00103 触觉感知（可支 ¥19万）</option></select></div>
+                <div class="fg"><label>支出科目 <em>*</em></label><select><option>材料费（执行 74%）</option><option>测试化验加工费</option><option>差旅费</option></select></div>
+                <div class="fg money-input"><label>报销金额 <em>*</em></label><input value="25,260.00"></div>
+                <div class="fg"><label>支付方式</label><select><option>公务卡转账（默认）</option><option>对公转账</option></select></div>
+                <div class="fg" style="grid-column:span 2"><label>事由说明 <em>*</em></label><textarea rows="3">M6 样机集成耗材采购（砂轮/夹柄/冷却液）；出差参加学会年会并对接联合验证单位。</textarea></div>
+              </div>
+              <div class="compliance-card" style="margin-top:14px">⚠ <b>AI 预审建议（置信 0.82）：</b>行程单出发日期（9-28）早于出差审批起始日（9-30）2 天，请补充说明或修改出差单。依据《院内差旅管理办法》第 8 条。<b style="color:var(--ai);cursor:pointer">处理建议 →</b></div>
+              <div style="display:flex;gap:10px;margin-top:18px"><button class="btn seal">提交（金额 ¥2.5万 · 路由 PI→科研办→财务）</button><button class="btn ghost">存草稿</button></div>
+            </div></div>
+          <div class="card"><div class="card-h"><h4>我的经费水位</h4></div><div class="card-b" style="display:flex;flex-direction:column;gap:16px">
+            <div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px"><span>磨抛项目 · 材料费</span><b class="mono">74%</b></div><div class="bar b-ok"><i style="width:74%"></i></div></div>
+            <div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px"><span>磨抛项目 · 设备费</span><b class="mono" style="color:var(--warn)">43%</b></div><div class="bar b-warn"><i style="width:43%"></i></div></div>
+            <div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px"><span>差旅包干</span><b class="mono">77%</b></div><div class="bar b-ok"><i style="width:77%"></i></div></div>
+            <div class="divider-double"></div>
+            <div style="font-size:12.5px;line-height:2">近 4 单状态：<br>
+              <span class="tag ok">已支付</span> ¥23,400 · 耗材<br><br>
+              <span class="tag info">出纳待付</span> ¥8,200 · 测试<br><br>
+              <span class="tag warn">财务复核</span> ¥1,860 · 差旅<br><br>
+              <span class="tag bad">AI 驳回</span> ¥12,000 · 连号拆分嫌疑<span style="font-size:11px;color:var(--ink-mute)">（已申诉）</span></div>
+          </div></div>
+        </div>
+      </section>
+
+      <!-- ============ V8 成果认领 ============ -->
+      <section class="view" id="v-claim">
+        <div class="page-head"><div><div class="page-title">成果<em>认领</em></div><div class="page-sub">来自 WoS / Scopus / CNKI 增量抓取 12 条 · 匹配置信度排序 · 认领后自动进入绩效</div></div>
+        <button class="btn seal" onclick="toast('已批量认领 9 条高置信记录（演示）')">⚡ 一键认领高置信</button></div>
+        <div class="grid" style="gap:12px">
+          <div class="claim-card"><div class="conf-ring" style="--p:96%"><b>96%</b></div>
+            <div style="flex:1"><div style="font-family:var(--serif);font-weight:700;font-size:14px">Diffusion-guided trajectory priors for robotic surface finishing</div>
+            <div style="font-size:12px;color:var(--ink-mute);margin-top:4px"><b style="color:var(--ok)">Mingyuan Zhou*</b>, Li K., Wang H. — <i>Robotics and Computer-Integrated Manufacturing</i> · 2026 · <span class="tag ok">SCI Q1</span> <span class="tag info">IF 7.6</span> <span class="tag warn">通讯作者</span></div>
+            <div style="font-size:11px;color:var(--ai);margin-top:5px">✦ 建议关联：PRJ-2024-00087（论文致谢含项目号）</div></div>
+            <div class="claim-actions"><button class="btn sm seal" onclick="toast('已认领 → 待关联项目 ✓')">认领</button><button class="btn sm ghost" onclick="toast('已反馈非本人，模型将学习此负例')">不是我的</button></div></div>
+          <div class="claim-card"><div class="conf-ring" style="--p:88%"><b>88%</b></div>
+            <div style="flex:1"><div style="font-family:var(--serif);font-weight:700;font-size:14px">自适应磨抛末端执行器及其力位混合控制方法</div>
+            <div style="font-size:12px;color:var(--ink-mute);margin-top:4px">周明远，李工，王同学 — <span class="tag info">发明专利</span> CN 119xxxxxx · 实审 · 代理机构协同</div></div>
+            <div class="claim-actions"><button class="btn sm seal" onclick="toast('认领 ✓')">认领</button><button class="btn sm ghost" onclick="toast('标记存疑')">存疑</button></div></div>
+          <div class="claim-card"><div class="conf-ring" style="--p:61%"><b style="color:var(--warn)">61%</b></div>
+            <div style="flex:1"><div style="font-family:var(--serif);font-weight:700;font-size:14px">On chatter suppression with generative priors <span style="font-weight:400;color:var(--warn)">（同名歧义："M. Zhou" 与本院 3 位学者重名）</span></div>
+            <div style="font-size:12px;color:var(--ink-mute);margin-top:4px">— <i>Journal of Sound and Vibration</i> · 单位地址含 "Qiyuan…" · ORCID 未匹配</div>
+            <div style="margin-top:6px"><button class="btn sm ghost" onclick="toast('展开对比：合作者/单位/摘要相似度（演示）')">查看匹配证据</button></div></div>
+            <div class="claim-actions"><button class="btn sm" onclick="toast('需人工确认认领 ✓')">认领</button><button class="btn sm ghost" onclick="toast('已转交科研办仲裁')">仲裁</button></div></div>
+          <div class="claim-card" style="opacity:.6"><div class="conf-ring"><b style="font-size:10px;color:var(--ink-mute)">待办</b></div>
+            <div style="flex:1"><div style="font-weight:700;font-size:13.5px">另有 9 条低置信与外部成果池记录</div><div style="font-size:12px;color:var(--ink-mute);margin-top:3px">系统持续增量抓取，每日 06:00 更新待认领清单。</div></div>
+            <button class="btn sm ghost" onclick="toast('展开其余 9 条（演示）')">展开全部</button></div>
+        </div>
+      </section>
+
+      <!-- ============ V9 转化看板 ============ -->
+      <section class="view" id="v-transfer">
+        <div class="page-head"><div><div class="page-title">成果转化<em>看板</em></div><div class="page-sub">披露 → 评估 → 谈判 → 签约 → 到账 → 分配 · 全流程留痕 · 年度公示自动</div></div>
+        <button class="btn seal" onclick="toast('披露向导已打开（演示）')">＋ 披露新成果</button></div>
+        <div style="display:flex;gap:10px;margin-bottom:16px;overflow-x:auto;padding-bottom:6px">
+          <div class="card stat" style="min-width:180px"><div class="lbl">待评估披露</div><div class="num">6</div></div>
+          <div class="card stat gold" style="min-width:180px"><div class="lbl">谈判中交易</div><div class="num">3</div></div>
+          <div class="card stat" style="min-width:180px"><div class="lbl">本年到账</div><div class="num">¥412<small>万</small></div></div>
+          <div class="card stat red" style="min-width:180px"><div class="lbl">奖励到人</div><div class="num">¥247<small>万</small></div><div class="delta">团队 70/院所 15/个人 15</div></div>
+        </div>
+        <div class="grid g2">
+          <div class="card"><div class="card-h"><h4>进行中的交易</h4><span class="tag ai">AI 风险条款审查</span></div><div class="card-b" style="padding:0"><table class="tbl">
+            <thead><tr><th>标的</th><th>方式</th><th>对方</th><th>金额</th><th>阶段</th></tr></thead><tbody>
+            <tr><td>自适应磨抛执行器<br><span class="mono" style="font-size:10px;color:var(--ink-mute)">PAT-2025-0114</span></td><td><span class="tag info">普通许可</span></td><td>沈阳某重装集团</td><td class="mono">¥180万+提成3%</td><td><span class="tag warn">合同审批 ⚠</span></td></tr>
+            <tr><td>曲面曲率估计算法<br><span class="mono" style="font-size:10px;color:var(--ink-mute)">软著 2026SR…</span></td><td><span class="tag info">转让</span></td><td>苏州某智能制造</td><td class="mono">¥95万</td><td><span class="tag ok">已签约 · 公示中</span></td></tr>
+            <tr><td>减振结构专利族<br><span class="mono" style="font-size:10px;color:var(--ink-mute)">3 件</span></td><td><span class="tag seal">作价入股</span></td><td>Spinoff 筹备</td><td class="mono">评估 ¥600万</td><td><span class="tag info">外部评估中</span></td></tr>
+            </tbody></table>
+            <div style="margin:0 18px 18px;padding:12px;background:var(--warn-soft);border-radius:5px;font-size:12px;line-height:1.7">⚠ <b>AI 合同审查：</b>「许可协议 v3」第 7.2 条约定<b>改进成果归受让方独有</b>，与院所知识产权政策冲突（参照院知发〔2024〕9号 第十二条），建议改为共有。<b style="cursor:pointer;color:var(--bad)">查看修订建议 →</b></div>
+          </div></div>
+          <div class="card"><div class="card-h"><h4>AI 撮合推荐 · 潜在买家</h4><span class="tag ai">专利族 ↔ 企业需求</span></div><div class="card-b" style="display:flex;flex-direction:column;gap:12px">
+            <div class="inv-card"><div class="conf-ring" style="--p:91%"><b>91%</b></div><div style="flex:1"><b style="font-size:13px">某风电集团 · 「叶片修复自动化」技术需求榜</b><div style="font-size:11px;color:var(--ink-mute);margin-top:4px">与你「电磁超声检测+磨抛」专利族语义相似 · 发布于 9-21 · 预算 ¥500-800万</div><div style="margin-top:6px"><button class="btn sm" onclick="toast('已生成推介材料草稿（演示）')">生成推介材料</button></div></div></div>
+            <div class="inv-card"><div class="conf-ring" style="--p:78%"><b>78%</b></div><div style="flex:1"><b style="font-size:13px">某汽车模具厂 · 公开技改指南</b><div style="font-size:11px;color:var(--ink-mute);margin-top:4px">曲面抛光工位机器人化改造意向 · 历史同类成交 ¥120 万</div></div></div>
+            <div class="hr-rule"></div><div style="font-size:11.5px;color:var(--ink-mute)">撮合引擎每周基于 2.1 万条公开企业技术需求增量匹配，仅推送给你的成果；转化办拥有全部线索池视图。</div>
+          </div></div>
+        </div>
+      </section>
+
+      <!-- ============ V12 采购与合同 ============ -->
+      <section class="view" id="v-procurement">
+        <div class="page-head"><div><div class="page-title">采购与合同<em>管理</em></div><div class="page-sub">申请 → 预算冻结 → 采购方式判定 → 招标比价 → 订单验收 → 合同/签章 → 付款 → 转资产 · P2P 全链留痕</div></div>
+        <button class="btn seal" onclick="toast('采购申请向导已打开（演示）')">＋ 发起采购申请</button></div>
+        <div style="display:flex;gap:10px;margin-bottom:16px;overflow-x:auto;padding-bottom:6px">
+          <div class="card stat" style="min-width:170px"><div class="lbl">待审采购申请</div><div class="num">8</div><div class="delta">已冻结预算 ¥326万</div></div>
+          <div class="card stat gold" style="min-width:170px"><div class="lbl">进行中合同</div><div class="num">14</div><div class="delta">采购 9 / 外协 3 / 横向 2</div></div>
+          <div class="card stat red" style="min-width:170px"><div class="lbl">AI 风险条款命中</div><div class="num">3</div><div class="delta">需法务复核</div></div>
+          <div class="card stat ai" style="min-width:170px"><div class="lbl">本年采购节支</div><div class="num">¥118<small>万</small></div><div class="delta">比价优化 12%</div></div>
+        </div>
+        <div class="grid g21">
+          <div class="card"><div class="card-h"><h4>采购台账</h4><span class="tag info">制度包驱动 · 限额判定</span></div><div class="card-b" style="padding:0"><table class="tbl">
+            <thead><tr><th>申请</th><th>预算科目</th><th>金额</th><th>采购方式</th><th>状态</th></tr></thead><tbody>
+            <tr><td>高精度五轴加工中心<br><span class="mono" style="font-size:10px;color:var(--ink-mute)">REQ-2026-0142</span></td><td>设备购置 · PRJ-00087</td><td class="mono">¥280万</td><td><span class="tag seal">公开招标</span></td><td><span class="tag warn">评标中</span></td></tr>
+            <tr><td>SEM 扫描电镜耗材包<br><span class="mono" style="font-size:10px;color:var(--ink-mute)">REQ-2026-0138</span></td><td>试剂耗材 · 材料所</td><td class="mono">¥12.6万</td><td><span class="tag info">电子卖场</span></td><td><span class="tag ok">已下单</span></td></tr>
+            <tr><td>曲面测量外协服务<br><span class="mono" style="font-size:10px;color:var(--ink-mute)">REQ-2026-0131</span></td><td>外协 · PRJ-00087</td><td class="mono">¥62万</td><td><span class="tag info">竞争性磋商</span></td><td><span class="tag ok">合同签订</span></td></tr>
+            <tr><td>高性能工控机 ×6<br><span class="mono" style="font-size:10px;color:var(--ink-mute)">REQ-2026-0127</span></td><td>设备 · 信息室</td><td class="mono">¥9.8万</td><td><span class="tag">自行采购</span></td><td><span class="tag ok">到货验收</span></td></tr>
+            </tbody></table></div></div>
+          <div class="card"><div class="card-h"><h4>采购方式判定引擎</h4><span class="tag ai">G-03 制度包</span></div><div class="card-b" style="display:flex;flex-direction:column;gap:10px">
+            <div class="inv-card"><div class="conf-ring" style="--p:100%"><b>≥200万</b></div><div style="flex:1"><b style="font-size:13px">高精度五轴加工中心</b><div style="font-size:11px;color:var(--ink-mute);margin-top:3px">单价 ≥ 公开招标限额（院采〔2024〕5号 §3）→ <b>强制公开招标</b>，不可拆分规避</div></div></div>
+            <div class="inv-card"><div class="conf-ring" style="--p:100%"><b>10-50万</b></div><div style="flex:1"><b style="font-size:13px">曲面测量外协服务</b><div style="font-size:11px;color:var(--ink-mute);margin-top:3px">服务类 · 三家可比 → <b>竞争性磋商</b>，已附 3 家供应商报价</div></div></div>
+            <div class="hr-rule"></div>
+            <div class="ai-hint">✦ <b>AI 合同风险审查：</b>外协合同 v2 第 5 条「知识产权全部归外协方」与院所政策冲突，建议改为「背景知识产权各自所有，前景共有」。 <b style="cursor:pointer;color:var(--bad)">查看修订 →</b></div>
+            <div style="font-size:11.5px;color:var(--ink-mute)">到货合格后可一键转入资产台账（G-17 → A-03），自动生成资产卡与条码。</div>
+          </div></div>
+        </div>
+      </section>
+
+      <!-- ============ V13 资产与耗材台账 ============ -->
+      <section class="view" id="v-asset">
+        <div class="page-head"><div><div class="page-title">资产与耗材<em>台账</em></div><div class="page-sub">建卡 → 领用/调拨 → 折旧计提 → 盘点 → 处置 · 项目全成本分摊 · 危化品双人双锁</div></div>
+        <button class="btn ghost" onclick="toast('导入盘点表（演示）')">⇪ 盘点导入</button></div>
+        <div style="display:flex;gap:10px;margin-bottom:16px;overflow-x:auto;padding-bottom:6px">
+          <div class="card stat" style="min-width:170px"><div class="lbl">固定资产原值</div><div class="num">¥4,286<small>万</small></div><div class="delta">净值 ¥2,103 万</div></div>
+          <div class="card stat gold" style="min-width:170px"><div class="lbl">本月折旧计提</div><div class="num">¥38.6<small>万</small></div><div class="delta">已入 F-20 成本池</div></div>
+          <div class="card stat red" style="min-width:170px"><div class="lbl">库存低于安全线</div><div class="num">7</div><div class="delta">危化品 2 项</div></div>
+          <div class="card stat ai" style="min-width:170px"><div class="lbl">疑似重复购置</div><div class="num">2</div><div class="delta">AI 跨院所比对</div></div>
+        </div>
+        <div class="grid g21">
+          <div class="card"><div class="card-h"><h4>资产台账</h4><span class="tag info">RFID · 账实一致</span></div><div class="card-b" style="padding:0"><table class="tbl">
+            <thead><tr><th>资产</th><th>存放 / 责任人</th><th>原值</th><th>净值</th><th>状态</th></tr></thead><tbody>
+            <tr><td>扫描电子显微镜 SEM-7<br><span class="mono" style="font-size:10px;color:var(--ink-mute)">AST-2023-0088</span></td><td>材料所 · 李工</td><td class="mono">¥186万</td><td class="mono">¥98.7万</td><td><span class="tag ok">在用 · 共享</span></td></tr>
+            <tr><td>五轴加工中心（在途）<br><span class="mono" style="font-size:10px;color:var(--ink-mute)">AST-2026-0142</span></td><td>制造所 · 待验收</td><td class="mono">¥280万</td><td class="mono">—</td><td><span class="tag warn">到货验收中</span></td></tr>
+            <tr><td>高性能计算集群 GPU×8<br><span class="mono" style="font-size:10px;color:var(--ink-mute)">AST-2024-0210</span></td><td>信息室 · 王工</td><td class="mono">¥124万</td><td class="mono">¥83.9万</td><td><span class="tag ai">大型仪器共享</span></td></tr>
+            <tr><td>三坐标测量机<br><span class="mono" style="font-size:10px;color:var(--ink-mute)">AST-2019-0031</span></td><td>制造所 · 周明远</td><td class="mono">¥68万</td><td class="mono">¥6.8万</td><td><span class="tag">待处置</span></td></tr>
+            </tbody></table></div></div>
+          <div style="display:flex;flex-direction:column;gap:16px">
+            <div class="card"><div class="card-h"><h4>耗材库存预警</h4><span class="tag ai">A-16 智能补货</span></div><div class="card-b" style="display:flex;flex-direction:column;gap:9px">
+              <div class="alert-line b-add"><span>◍</span><div><b>无水乙醇（分析纯）</b> 库存 3L / 安全线 10L · 危化品 · 双人双锁 · 建议立即补货</div></div>
+              <div class="alert-line b-med"><span>◐</span><div><b>金相砂纸 P1200</b> 库存 40 张 / 安全线 100 · 近 30 日消耗 60 张</div></div>
+              <div class="alert-line b-info"><span>○</span><div><b>氩气（高纯）</b> 库存 2 瓶 · 消耗平稳</div></div>
+            </div></div>
+            <div class="card"><div class="card-h"><h4>项目成本分摊</h4><span class="tag seal">A-12 ↔ F-20</span></div><div class="card-b">
+              <div class="hbar"><span class="nm">PRJ-00087 折旧</span><div class="track"><i style="width:62%;background:var(--ai)"></i></div><span class="v">¥19.4万</span></div>
+              <div class="hbar"><span class="nm">PRJ-00042 耗材</span><div class="track"><i style="width:24%;background:var(--gold)"></i></div><span class="v">¥7.6万</span></div>
+              <div class="hbar"><span class="nm">公用仪器工时</span><div class="track"><i style="width:14%;background:var(--seal)"></i></div><span class="v">¥4.2万</span></div>
+              <div style="margin-top:10px;font-size:11.5px;color:var(--ink-mute)">按使用机时/领用单自动归集到项目全成本池，供决算与绩效评价（D-03）取数。</div>
+            </div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ V10 经费监督大屏（深色） ============ -->
+      <section class="view" id="v-bigscreen">
+        <div class="screen-view">
+          <div class="scr-title"><h3>科研经费监督 · 一舱三预警</h3><div class="stsub">SUPERVISION COCKPIT · 数据截至 2026-10-12 · T+1 · 演示租户：启元研究院</div></div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:16px">
+            <div class="scr-card"><h6>经费总盘子</h6><div class="scr-kpi">¥ 21,483<small> 万</small></div><div style="font-size:11px;color:#8FA9CD;margin-top:6px">纵向 62% · 横向 24% · 自立 14%</div></div>
+            <div class="scr-card"><h6>本年度支出执行</h6><div class="scr-kpi">68.4<small>%</small> <span style="font-size:14px;color:#F0B43C">应达 76%</span></div><div style="font-size:11px;color:#8FA9CD;margin-top:6px">偏离项目 <b style="color:#E05645">9</b> 个</div></div>
+            <div class="scr-card"><h6>AI 拦截可疑支出</h6><div class="scr-kpi" style="color:#F0B43C">23<small> 单 · 拒付 ¥61.2万</small></div><div style="font-size:11px;color:#8FA9CD;margin-top:6px">拆分报销 7 · 连号发票 4 · 类目异常 12</div></div>
+            <div class="scr-card"><h6>审计追溯完整率</h6><div class="scr-kpi" style="color:#3FA0DC">99.6<small>%</small></div><div style="font-size:11px;color:#8FA9CD;margin-top:6px">证据链缺项 14 → 已整改 11</div></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:16px;margin-bottom:16px">
+            <div class="scr-card"><h6>预警滚动 · 事前(预算) 事中(支出) 事后(决算)</h6>
+              <div class="scr-alert p1"><span>●</span><div><b>[事中·高]</b> PRJ-2024-00087 月均支出需达历史 2.3 倍（突击支出风险）→ PI 已确认关注</div></div>
+              <div class="scr-alert p1"><span>●</span><div><b>[事中·高]</b> PRJ-2023-00042 差旅费 92% 集中于 12 月 → 财务复核</div></div>
+              <div class="scr-alert p2"><span>◐</span><div><b>[事前·中]</b> 4 个在研项目劳务费科目执行超序时 30% → 已提示预算调剂</div></div>
+              <div class="scr-alert p3"><span>○</span><div><b>[事后·低]</b> 2 笔决算间接费用计提尾差 &lt;1% → 自动豁免归档</div></div>
+              <div class="scr-alert p1"><span>●</span><div><b>[AI识别]</b> 「同商家 3 日内连号 4 张发票」命中 EXP-2026-1193 → 拆分嫌疑，已转人工</div></div>
+            </div>
+            <div class="scr-card"><h6>部门执行率热力</h6>
+              <div class="scr-bars">
+                <i data-v="88%" style="height:88%"></i><i data-v="74%" style="height:74%"></i><i class="hot" data-v="31%" style="height:31%"></i><i data-v="66%" style="height:66%"></i><i data-v="79%" style="height:79%"></i><i class="hot" data-v="42%" style="height:42%"></i><i data-v="71%" style="height:71%"></i>
+              </div>
+              <div style="display:flex;gap:6px;font-size:9px;color:#5F7DAB;margin-top:8px;justify-content:space-between"><span>制造所</span><span>机器人所</span><span>传感所▲</span><span>材料所</span><span>信息室</span><span>工艺▲</span><span>联合</span></div>
+              <div style="margin-top:14px;font-size:11px;color:#8FA9CD">▲ = 偏离阈值 · 点击柱体下钻项目清单</div>
+            </div>
+            <div class="scr-card"><h6>全院项目分布</h6><div class="scr-map" style="height:170px">
+              <svg width="100%" height="100%" viewBox="0 0 300 170"><g stroke="#1E3350" fill="none"><path d="M20,150 L60,90 L110,110 L150,60 L200,95 L250,40 L285,80"/><path d="M40,150 L90,120 L140,140 L190,110 L240,130 L290,90"/></g>
+              <circle cx="60" cy="90" r="4" fill="#3FA0DC"/><circle cx="150" cy="60" r="6" fill="#F0B43C"/><circle cx="200" cy="95" r="4" fill="#3FA0DC"/><circle cx="250" cy="40" r="5" fill="#E05645"/></svg>
+              <div class="pulse" style="left:50%;top:36%"></div><div class="pulse" style="left:66%;top:55%;animation-delay:.8s"></div>
+              <div style="position:absolute;bottom:4px;left:0;right:0;text-align:center;font-size:10px;color:#5F7DAB">研究集群地理分布（虚构演示）</div>
+            </div></div>
+          </div>
+          <div class="scr-card" style="margin-bottom:16px"><h6>项目全成本分摊 · F-20 ↔ A-12（折旧/耗材/仪器工时/间接费用）</h6>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:6px">
+              <div><div style="font-size:11px;color:#8FA9CD">PRJ-2024-00087</div><div class="scr-bars" style="height:70px"><i data-v="直接72%" style="height:72%"></i><i class="hot" data-v="间接28%" style="height:28%"></i></div><div class="scr-kpi" style="font-size:18px;margin-top:4px">¥512<small>万 · 全成本</small></div></div>
+              <div><div style="font-size:11px;color:#8FA9CD">设备折旧归集</div><div class="scr-bars" style="height:70px"><i data-v="84%" style="height:84%"></i></div><div class="scr-kpi" style="font-size:18px;margin-top:4px;color:#3FA0DC">¥38.6<small>万 / 月</small></div></div>
+              <div><div style="font-size:11px;color:#8FA9CD">耗材 · 危化品</div><div class="scr-bars" style="height:70px"><i class="hot" data-v="46%" style="height:46%"></i></div><div class="scr-kpi" style="font-size:18px;margin-top:4px;color:#F0B43C">¥7.6<small>万 · 预警 7 项</small></div></div>
+              <div><div style="font-size:11px;color:#8FA9CD">大型仪器共享工时</div><div class="scr-bars" style="height:70px"><i data-v="61%" style="height:61%"></i></div><div class="scr-kpi" style="font-size:18px;margin-top:4px">¥4.2<small>万 · 内部结算</small></div></div>
+            </div>
+            <div style="margin-top:12px;font-size:11px;color:#8FA9CD">全成本口径（政府会计制度平行记账）自动归集，为决算审计与绩效评价（D-03）提供可追溯的成本证据链。</div>
+          </div>
+          <div class="scr-card" style="font-size:11px;color:#8FA9CD;display:flex;gap:24px"><span>① 一图：全量数据概览</span><span>② 一舱：预警监督驾驶舱</span><span>③ 三预警：事前 / 事中 / 事后</span><span style="margin-left:auto" class="mono">等保三级 · 不可篡改日志 · 哈希链校验 ✓</span></div>
+        </div>
+      </section>
+
+      <!-- ============ V11 PI 画像 ============ -->
+      <section class="view" id="v-portrait">
+        <div class="page-head"><div><div class="page-title">PI <em>画像</em></div><div class="page-sub">每周自动刷新 · 数据源：项目 / 经费 / 成果 / 合作 / 诚信 · 供评审、引才、梯队决策参考</div></div>
+        <button class="btn ghost" onclick="toast('导出学术简历 PDF（演示）')">⇩ 导出简历</button></div>
+        <div class="portrait-head" style="margin-bottom:18px">
+          <div class="p-avatar">周</div>
+          <div><div style="font-family:var(--serif);font-size:24px;font-weight:900">周明远 <span style="font-size:13px;font-weight:400;opacity:.75">研究员 / 博导 · 先进制造所</span></div>
+          <div style="font-size:12px;opacity:.8;margin-top:8px;line-height:1.9;max-width:640px">✦ <b>AI 画像摘要：</b>处于<b>成熟期</b>学者；方向聚焦「机器人化精密制造」，与 LWM、WH 等 6 人长期合作（含 2 位企业）；近 3 年引用增长 25%；承担国自然面上等 4 项在研课题，累计经费 ¥1,394 万；获授权发明 11 件，其中 2 件已实现许可转化。</div>
+          <div style="margin-top:10px;display:flex;gap:8px"><span class="tag" style="background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.3);color:#fff">省级人才计划</span><span class="tag" style="background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.3);color:#fff">ORCID 0000-…-4471</span><span class="tag" style="background:rgba(62,124,75,.3);border-color:rgba(62,124,75,.5);color:#9fd3ab">诚信档案 · 无失信</span></div></div>
+          <div style="margin-left:auto;text-align:center"><div style="font-family:var(--serif);font-size:44px;font-weight:900">82.4</div><div style="font-size:11px;opacity:.7;letter-spacing:2px">综合画像分</div></div>
+        </div>
+        <div class="grid g3">
+          <div class="card"><div class="card-h"><h4>能力雷达</h4></div><div class="card-b radar-wrap">
+            <svg width="240" height="210" viewBox="0 0 240 210"><g stroke="#D8CFBC" fill="none"><polygon points="120,15 195,55 205,140 120,190 35,140 45,55"/><polygon points="120,50 165,72 170,128 120,152 70,128 75,72"/></g>
+            <polygon points="120,25 190,62 188,132 120,178 55,125 60,68" fill="rgba(194,64,44,.16)" stroke="var(--seal)" stroke-width="1.5"/>
+            <g font-size="9" fill="#7C869E" text-anchor="middle"><text x="120" y="10">项目承担</text><text x="213" y="52">经费规模</text><text x="222" y="146">成果产出</text><text x="120" y="204">影响力</text><text x="18" y="146">人才培养</text><text x="28" y="52">合作网络</text></g></svg></div></div>
+          <div class="card"><div class="card-h"><h4>合作网络</h4><span class="tag ai">力导向</span></div><div class="card-b">
+            <svg width="100%" height="210" viewBox="0 0 300 210"><g stroke="#C9BFAC" stroke-width="1"><line x1="150" y1="105" x2="60" y2="50"/><line x1="150" y1="105" x2="240" y2="60"/><line x1="150" y1="105" x2="70" y2="165"/><line x1="150" y1="105" x2="245" y2="150"/><line x1="150" y1="105" x2="150" y2="30"/><line x1="60" y1="50" x2="70" y2="165"/><line x1="240" y1="60" x2="245" y2="150"/></g>
+            <circle cx="150" cy="105" r="16" fill="var(--seal)"/><text x="150" y="109" text-anchor="middle" font-size="9" fill="#fff">周</text>
+            <circle cx="60" cy="50" r="10" fill="#41598C"/><text x="60" y="53" text-anchor="middle" font-size="7" fill="#fff">李</text>
+            <circle cx="240" cy="60" r="12" fill="#A8842F"/><text x="240" y="63" text-anchor="middle" font-size="7" fill="#fff">王</text>
+            <circle cx="70" cy="165" r="9" fill="#7C869E"/><circle cx="245" cy="150" r="8" fill="#3E7C4B"/><circle cx="150" cy="30" r="7" fill="#C2402C" opacity=".7"/>
+            <text x="295" y="205" font-size="8" fill="#7C869E" text-anchor="end">● 本人　○ 同事/企业伙伴　△ 跨机构桥接</text></svg></div></div>
+          <div class="card"><div class="card-h"><h4>关键数字</h4></div><div class="card-b" style="display:flex;flex-direction:column;gap:2px">
+            <div class="hbar"><span class="nm" style="width:130px">在研/主持</span><div class="track"><i style="width:64%"></i></div><span class="v">4 / 6</span></div>
+            <div class="hbar"><span class="nm" style="width:130px">累计经费</span><div class="track"><i style="width:82%"></i></div><span class="v">1394万</span></div>
+            <div class="hbar"><span class="nm" style="width:130px">SCI 论文</span><div class="track"><i style="width:70%"></i></div><span class="v">41</span></div>
+            <div class="hbar"><span class="nm" style="width:130px">H 指数</span><div class="track"><i style="width:58%;background:var(--seal)"></i></div><span class="v">18</span></div>
+            <div class="hbar"><span class="nm" style="width:130px">授权发明</span><div class="track"><i style="width:44%;background:var(--gold)"></i></div><span class="v">11</span></div>
+            <div class="hbar"><span class="nm" style="width:130px">转化成交</span><div class="track"><i style="width:20%;background:var(--ok)"></i></div><span class="v">2</span></div>
+            <div class="divider-double"></div>
+            <div style="font-size:11.5px;color:var(--ink-mute)">近 3 年引用 <b class="mono" style="color:var(--ok)">+25%</b> · 培养毕业博士 7 · 团队梯队：2 博后 / 3 博 / 4 硕</div>
+          </div></div>
+        </div>
+      </section>
+
+    </div><!-- content end -->
+  </div><!-- main end -->
+</div><!-- shell end -->
+
+<div id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>
