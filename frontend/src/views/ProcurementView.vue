@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { api, list } from '@/api/client'
+import { toNum } from '@/utils/money'
 
 // —— 模块 G 实体（snake_case，对齐 09-采购与合同管理-G.openapi.yaml）——
 interface Requisition {
@@ -52,10 +53,7 @@ const RISK: Record<string, { l: string; c: string }> = {
   HIGH: { l: '高风险', c: 'bad' }, MED: { l: '中风险', c: 'warn' }, LOW: { l: '低风险', c: 'info' },
 }
 
-const num = (v?: string | number | null) => {
-  const n = typeof v === 'number' ? v : Number(v ?? 0)
-  return Number.isFinite(n) ? n : 0
-}
+const num = (v?: string | number | null) => toNum(v)
 const fmtWan = (v?: string | number | null) =>
   (num(v) / 10000).toLocaleString('zh-CN', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
 

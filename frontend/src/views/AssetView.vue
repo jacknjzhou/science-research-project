@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { api, list } from '@/api/client'
+import { toNum } from '@/utils/money'
 
 // —— 模块 A 实体（Asset 为 camelCase，对齐 10-资产与耗材管理-A.openapi.yaml）——
 interface Asset {
@@ -37,7 +38,7 @@ const CUST: Record<number, string> = { 4501: '李工', 4510: '王工', 4490: '�
 const custName = (id?: number | null) => (id ? CUST[id] || `#${id}` : '待认领')
 const deptName = (id?: number | null) => (id ? DEPT[id] || `#${id}` : '—')
 
-const num = (v?: number | string | null) => (Number.isFinite(Number(v ?? 0)) ? Number(v ?? 0) : 0)
+const num = (v?: number | string | null) => toNum(v)
 const fmtWan = (v?: number | string | null) =>
   (num(v) / 10000).toLocaleString('zh-CN', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
 

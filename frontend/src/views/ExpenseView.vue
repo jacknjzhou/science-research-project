@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { api, list } from '@/api/client'
+import { toNum } from '@/utils/money'
 
 // —— F 模块契约类型（camelCase）——
 interface Subject { id: number; code: string; name: string; category: string; isLeaf?: boolean }
@@ -13,7 +14,7 @@ interface AiIssue { rule: string; reason: string; clauseRef?: string }
 interface AiReviewResult { verdict: string; confidence: number; issues?: AiIssue[] }
 
 const toast = (m: string) => (window as any).toast?.(m)
-const num = (v?: string | number | null) => (v == null || v === '' ? 0 : Number(v) || 0)
+const num = (v?: string | number | null) => toNum(v)
 
 const loading = ref(true)
 const submitting = ref(false)

@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import type { CSSProperties } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '@/api/client'
+import { toNum, toWan, toPct } from '@/utils/money'
 
 interface Kpi { budgetExecRate: string; milestoneCompletionRate: string; outputCount: number }
 interface FundingLine { subject: string; approved: string; used: string; frozen: string; rate: string; status: string }
@@ -42,9 +43,9 @@ const checklist = ref<EArchiveChecklist | null>(null)
 const loading = ref(true)
 const tabLoading = ref<Record<TabKey, boolean>>({ info: false, mile: false, fund: false, member: false, doc: false })
 
-const num = (s?: string | null) => Number(s || 0)
-const wan = (s?: string | null) => Math.round(num(s) / 10000)
-const pct = (r?: string) => Math.round(num(r) * 100)
+const num = (s?: string | number | null) => toNum(s)
+const wan = (s?: string | number | null) => toWan(s)
+const pct = (r?: string | number | null) => toPct(r)
 
 const execPct = computed(() => pct(detail.value?.kpi?.budgetExecRate))
 const msRatePct = computed(() => pct(detail.value?.kpi?.milestoneCompletionRate))

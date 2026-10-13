@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '@/api/client'
+import { toNum, toWan } from '@/utils/money'
 
 interface EProject {
   id: number; code: string; status: string; title: string; projectType: string
@@ -18,8 +19,8 @@ const total = ref(0)
 const loading = ref(true)
 const viewMode = ref<'card' | 'list' | 'gantt'>('card')
 
-const num = (s?: string) => Number(s || 0)
-const wan = (s?: string) => Math.round(num(s) / 10000)
+const num = (s?: string | number | null) => toNum(s)
+const wan = (s?: string | number | null) => toWan(s)
 const ym = (d?: string) => (d ? d.slice(0, 7).replace('-', '.') : '—')
 const execPct = (p: EProject) => {
   const r = num(p.receivedAmount)

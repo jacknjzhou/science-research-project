@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { api } from '@/api/client'
+import { toWan } from '@/utils/money'
 
 interface RadarDimension { dimension: string; value: number; normalized: number }
 interface Portrait {
@@ -70,7 +71,7 @@ const NODE_COLORS = ['#41598C', '#A8842F', '#7C869E', '#3E7C4B', '#C2402C', '#5B
 function nodeRadius(size: number) { return Math.min(20, Math.max(7, Math.round(size / 2.2))) }
 
 // —— 关键数字（均由画像快照派生）——
-const wan = (v: number) => Math.round(v / 10000)
+const wan = (v: number | string | null) => toWan(v)
 const keyNumbers = computed(() => {
   const p = portrait.value?.latest
   if (!p) return []

@@ -42,6 +42,15 @@ function genString(schema: any, keyHint: string): string {
   }
   if (k.includes('phone') || k.includes('mobile')) return faker.phone.number('138####1234')
   if (k.includes('idcard') || k.includes('identity')) return '310***********1234'
+  // 比率：契约以 string 承载 0~1 小数（如 budgetExecRate），须早于金额判定，避免含 budget 的比率被当金额
+  if (k.includes('rate') || k.includes('ratio') || k.includes('pct') || k.includes('percent'))
+    return faker.number.float({ min: 0, max: 1 }).toFixed(4)
+  // 金额：契约以 string 承载 NUMERIC(18,2) 精度，产出两位小数的数字字符串（非 lorem）
+  const desc = String(schema?.description || '')
+  if (k.includes('budget') || k.includes('amount') || k.includes('envelope') || k.includes('received') ||
+      k.includes('spent') || k.includes('cost') || k.includes('price') || k.includes('money') || k.includes('fee') ||
+      /NUMERIC|金额/.test(desc))
+    return faker.finance.amount({ min: 1000, max: 5_000_000, dec: 2 })
   if (k.endsWith('_name') || k === 'name' || k.includes('title')) return pickNameish(keyHint)
   if (k.includes('code')) return pickCodeish(keyHint)
   if (k.includes('summary') || k.includes('desc') || k.includes('note') || k.includes('content') || k.includes('answer') || k.includes('remark'))

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { api, list } from '@/api/client'
+import { toNum, toWan } from '@/utils/money'
 
 // —— F-18 大屏聚合（camelCase + 演示扩展字段）——
 interface Dept { departmentId: number; deptName: string; executionRate: number; amount: string }
@@ -21,8 +22,8 @@ interface Screen { id: number; code: string; name: string; theme?: string; statu
 interface MetricValue { code: string; name: string; unit: string; value: number }
 
 const toast = (m: string) => (window as any).toast?.(m)
-const num = (v?: string | number | null) => (v == null || v === '' ? 0 : Number(v) || 0)
-const wan = (s?: string | number | null) => Math.round(num(s) / 10000)
+const num = (v?: string | number | null) => toNum(v)
+const wan = (s?: string | number | null) => toWan(s)
 
 const loading = ref(true)
 const f = ref<Funding>({} as Funding)
