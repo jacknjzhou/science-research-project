@@ -63,6 +63,11 @@ function pathVar(p) {
   return m ? m[1] : null
 }
 
+// 极少数实体名 snake 后与 DDL 表基名不一致（历史命名），显式登记别名，避免误判"表不存在"回落。
+const ENTITY_TABLE_ALIAS = {
+  EntPartner: 'enterpartner', // DDL: t_enterpartner
+}
+
 /** 契约实体名 → 业务表名：`${模块代号小写}_${snake(实体)}`（p_application / a_asset / d_report…）*/
 export function deriveTable(op, entity) {
   const mod = String(op.module).toLowerCase()
@@ -72,7 +77,8 @@ export function deriveTable(op, entity) {
   if (name.length > 1 && name[0].toLowerCase() === mod && /^[A-Z]/.test(name.slice(1))) {
     name = name.slice(1)
   }
-  return `${mod}_${toSnake(name)}`
+  const base = ENTITY_TABLE_ALIAS[String(entity)] || toSnake(name)
+  return `${mod}_${base}`
 }
 
 function classify(op, has = hasTable) {

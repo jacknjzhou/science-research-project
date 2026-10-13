@@ -781,7 +781,16 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/Team' }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 新建团队回显
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Team' }
         '400': { $ref: '#/components/responses/BadRequest' }
 
   /teams/{id}:
@@ -818,7 +827,24 @@ paths:
         - { $ref: '#/components/parameters/PageParam' }
         - { $ref: '#/components/parameters/SizeParam' }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 分页团队成员列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/Membership' }
+                          total: { type: integer, format: int64 }
+                          page: { type: integer }
+                          size: { type: integer }
     post:
       tags: [team]
       operationId: addTeamMember
@@ -897,7 +923,16 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/VisitorApplyRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 访客申请回显
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Visitor' }
         '400': { $ref: '#/components/responses/BadRequest' }
 
   /visitors/{id}/approve:
@@ -935,7 +970,16 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/StudentRegisterRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 学生登记回显
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Student' }
         '400': { $ref: '#/components/responses/BadRequest' }
 
   /staff/{id}/talent-plans:

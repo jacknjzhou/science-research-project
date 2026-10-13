@@ -403,7 +403,16 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/OutputCreateRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 新建成果回显
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Output' }
         '400': { $ref: '#/components/responses/BadRequest' }
 
   /output/mine:
@@ -698,6 +707,15 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/OutputId' }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 成果详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Output' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }

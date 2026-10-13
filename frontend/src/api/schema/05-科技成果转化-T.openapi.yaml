@@ -666,7 +666,16 @@ paths:
         content:
           application/json: { schema: { $ref: '#/components/schemas/DisclosureCreateRequest' } }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 新建披露回显
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Disclosure' }
         '400': { $ref: '#/components/responses/BadRequest' }
 
   /disclosure/{id}/submit:
@@ -755,7 +764,16 @@ paths:
         content:
           application/json: { schema: { $ref: '#/components/schemas/NegotiationRequest' } }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 新建交易回显
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Deal' }
         '400': { $ref: '#/components/responses/BadRequest' }
 
   /deal/{id}:
@@ -765,7 +783,16 @@ paths:
       summary: 交易详情（进度条 + 各标签页）
       parameters: [ { $ref: '#/components/parameters/DealId' } ]
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 转化交易详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Deal' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -811,7 +838,16 @@ paths:
         content:
           application/json: { schema: { $ref: '#/components/schemas/EntPartner' } }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 登记合作企业回显
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/EntPartner' }
         '400': { $ref: '#/components/responses/BadRequest' }
     get:
       tags: [partner]
@@ -823,7 +859,23 @@ paths:
         - { name: industry, in: query, schema: { type: string } }
         - { name: check_abnormal, in: query, schema: { type: boolean } }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 分页合作企业列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/EntPartner' }
 
   /contract/draft:
     post:
@@ -836,7 +888,16 @@ paths:
         content:
           application/json: { schema: { $ref: '#/components/schemas/ContractDraftRequest' } }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 合同草拟回显
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Contract' }
         '400': { $ref: '#/components/responses/BadRequest' }
 
   /contract/{id}:
@@ -846,7 +907,16 @@ paths:
       summary: 合同详情（含多级意见/红线版/AI 风险）
       parameters: [ { $ref: '#/components/parameters/ContractId' } ]
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 转化合同详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Contract' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -893,7 +963,16 @@ paths:
       description: 返回脱敏对外摘要 summary_json + 异议提交通道；满足《促进科技成果转化法》第 27 条。
       parameters: [ { $ref: '#/components/parameters/PublicityDealId' } ]
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 公示详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Publicity' }
         '404': { $ref: '#/components/responses/NotFound' }
     post:
       tags: [publicity]
@@ -953,7 +1032,16 @@ paths:
         content:
           application/json: { schema: { $ref: '#/components/schemas/IncomeRegisterRequest' } }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 收入登记回显
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Income' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '409': { $ref: '#/components/responses/Conflict' }
 
@@ -981,7 +1069,16 @@ paths:
         content:
           application/json: { schema: { $ref: '#/components/schemas/DistributionRuleRequest' } }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 分配规则保存回显
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DistributionRule' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '409': { $ref: '#/components/responses/Conflict' }
 

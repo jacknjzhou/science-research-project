@@ -576,7 +576,23 @@ paths:
         - { name: project_id, in: query, schema: { type: integer, format: int64 } }
         - { name: applicant_user_id, in: query, schema: { type: integer, format: int64 } }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 分页伦理审查列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/EthicsCase' }
         '400': { $ref: '#/components/responses/BadRequest' }
     post:
       tags: [ethics]
@@ -591,7 +607,16 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/EthicsCaseCreateRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 新建伦理审查回显
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/EthicsCase' }
         '400': { $ref: '#/components/responses/BadRequest' }
 
   /ethics/{id}:
@@ -871,7 +896,23 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/CaseId' }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 分页年度报告列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/AnnualReview' }
 
   /integrity/pledge:
     post:
@@ -889,7 +930,16 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/PledgeSignRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 签署承诺书回显
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/IntegrityPledge' }
         '400': { $ref: '#/components/responses/BadRequest' }
     get:
       tags: [integrity]
@@ -899,7 +949,23 @@ paths:
         - { name: user_id, in: query, schema: { type: integer, format: int64 }, description: 缺省取当前用户 }
         - { name: pledge_type, in: query, schema: { type: string, enum: [ONBOARD, APPLY, AWARD, ANNUAL] } }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 分页诚信承诺书列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/IntegrityPledge' }
 
   /integrity/records:
     get:
@@ -914,7 +980,23 @@ paths:
         - { name: event_type_code, in: query, schema: { type: string, enum: [PLAGIARISM, DATA_FABRICATION, DUAL_SUBMISSION, EXPENSE_VIOLATION, COI_UNDISCLOSED, OTHER] } }
         - { name: investigation_status, in: query, schema: { type: string, enum: [INVESTIGATING, SUSTAINED, UNSUSTAINED, CLOSED] } }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 分页诚信记录列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/IntegrityRecord' }
         '403': { $ref: '#/components/responses/Forbidden' }
     post:
       tags: [integrity]
@@ -929,7 +1011,16 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/IntegrityRecordRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 新建诚信记录回显
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/IntegrityRecord' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
   /integrity/records/{id}:
@@ -1032,7 +1123,23 @@ paths:
         - { name: filing_type_code, in: query, schema: { type: string, enum: [COLLECT, PRESERVE, INTL_COOP, DEVELOP] } }
         - { name: approval_status, in: query, schema: { type: string, enum: [PENDING, APPROVED, REJECTED] } }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 分页高投入组备案列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/HgrFiling' }
     post:
       tags: [hgr]
       operationId: createHgrFiling
@@ -1048,7 +1155,16 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/HgrFilingRequest' }
       responses:
-        '200': { $ref: '#/components/responses/Ok' }
+        '200':
+          description: 新建高投入组备案回显
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HgrFiling' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
   /hgr/filing/{id}/sync:
