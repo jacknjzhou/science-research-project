@@ -1,9 +1,11 @@
 # 科研管理系统 · 架构与技术方案
 
-**版本**：v1.0 · **日期**：2026-10-13
+**版本**：v1.1 · **日期**：2026-10-13
 **上游文档**：`./PRODUCT_PLAN.md`（产品规划 v1.1）、`./PRD/README.md`（PRD 通用规约 v1.1）及 01–11 模块 PRD
 **读者对象**：架构师、后端/前端/AI 工程师、运维/SRE、安全合规、项目管理者
 **目标**：把产品规划的五层架构与 11 个业务模块，落地为可实现、可部署、可过等保三级与信创测评的技术方案；并逐条映射 PRD 通用规约（README 2.1–2.15）到具体技术组件。
+
+> **v1.1 变更**：后端语言/框架选型由原 `Java 17 + Spring Cloud Alibaba` 调整为 **`Go + Gin`**（对齐 `./PRODUCTION_GAP_ROADMAP.md`）。本文涉及后端实现的选型、服务实现层、规则/流程引擎的承载方式均据此重排；五层架构、数据模型、AI 中台、安全与信创等语言无关的约束保持不变。
 
 > 术语与约定一律以 `PRD/README.md` 为准：角色 `R-*`、表名前缀 `P_/E_/F_/R_/T_/C_/S_/D_/G_/A_/X_`、单号前缀见 2.11 注册表、状态用大写蛇形 token（2.6）、密级 `PUBLIC/INTERNAL/SECRET/TOP_SECRET`（2.13）。本文不重复定义，只引用与实现。
 
@@ -68,33 +70,33 @@ flowchart TB
 
 | 领域 | 主选 | 备选 | 理由 | 信创替代 |
 |------|------|------|------|----------|
-| 后端语言/框架 | Java 17 + Spring Cloud Alibaba | Go + Kratos | 生态成熟、流程/规则引擎与国产化适配案例多，团队可招聘 | 全栈可运行于麒麟 + 鲲鹏/海光 |
-| 微服务治理 | Nacos + Sentinel + OpenFeign | Consul | 注册/配置/熔断一体，阿里系与信创兼容 | 东方通中间件承载 |
-| 流程引擎 | Camunda 7（BPMN 2.0） | Flowable | 可视化编排、子流程、事件网关；对齐竞品"三引擎"卖点 | 无锁定，纯 Java |
-| 表单引擎 | Formily 2（JSON Schema） | 自研 | 字段级校验/联动/条件显隐；字段可带自然语言描述供 LLM 理解（AI 原生前提） | 同左 |
-| 事务数据库 | PostgreSQL 16 | 达梦 DM8 / 人大金仓 / OceanBase | JSONB、pgvector、强约束；兼容性优于 MySQL | 达梦/金仓为主投路径，SQL 方言经 MyBatis 层屏蔽 |
-| 分析数据库 | ClickHouse | Apache Doris | 大屏/画像/趋势高吞吐聚合 | Doris（国产）可选 |
-| 缓存/号段 | Redis 7 | 华为 DCS | 编号中心双写、会话、限流 | 兼容 |
-| 对象存储 | MinIO | 阿里云 OSS | 附件 ≤100MB、在线预览；S3 兼容可私有化 | MinIO 国产化部署 |
-| 消息/事件 | Apache Kafka | RocketMQ | 业务事件、数据回流、审计流总线 | RocketMQ（阿里/信创友好） |
-| 规则引擎 | Drools 8 | 自研 DSL | 制度包版本化、可解释、命中留痕 | 纯 Java 无锁定 |
+| 后端语言/框架 | Go 1.22 + Gin | Go + go-zero / Kratos | 静态二进制、高并发低内存、`arm64` 交叉编译天然适配鲲鹏；`oapi-codegen` 直接复用 OpenAPI 契约生成 handler/DTO | 编译为 `linux/arm64` 运行于麒麟 + 鲲鹏/海光，无需 JVM |
+| 微服务治理 | APISIX/Traefik（网关）+ etcd/Consul（注册配置）+ Viper（配置）| go-zero 内置治理 | Go 无一体化全家桶，用语言中立件按需组装；服务间 gRPC(grpc-go)，进程内熔断 gobreaker + `x/time/rate` 限流 | 网关/注册均可私有化部署，配置中心可对接 Nacos（有 Go SDK） |
+| 流程引擎 | Camunda 7（BPMN 2.0，独立部署，经 gRPC/REST 语言中立调用） | Go 原生状态机 / Temporal | 保留可视化编排/子流程/事件网关卖点；Go 业务服务只经 SDK 驱动流程，不被 JVM 绑定；轻量审批可用 Go 状态机 | 流程引擎作为旁路平台服务，可独立于信创应用层部署 |
+| 表单引擎 | Formily 2（JSON Schema） | 自研 | 字段级校验/联动/条件显隐；字段可带自然语言描述供 LLM 理解（AI 原生前提）；schema 由后端 `oapi-codegen` DTO 对齐 | 同左（语言无关） |
+| 事务数据库 | PostgreSQL 16 | 达梦 DM8 / 人大金仓 / OceanBase | JSONB、pgvector、强约束；兼容性优于 MySQL；数据访问经 **sqlc**（首选，类型安全）或 GORM + pgx 仓储层 | 达梦/金仓为主投路径，SQL 方言经 sqlc/GORM 仓储层 + 达梦 Go 驱动（`database/sql`/ODBC）屏蔽 |
+| 分析数据库 | ClickHouse | Apache Doris | 大屏/画像/趋势高吞吐聚合；Go 侧 clickhouse-go | Doris（国产）可选 |
+| 缓存/号段 | Redis 7（go-redis） | 华为 DCS | 编号中心双写、会话、限流、分布式幂等 | 兼容 |
+| 对象存储 | MinIO（minio-go） | 阿里云 OSS | 附件 ≤100MB、在线预览；S3 兼容可私有化 | MinIO 国产化部署 |
+| 消息/事件 | Apache Kafka（sarama / kafka-go） | RocketMQ | 业务事件、数据回流、审计流总线；Outbox 消费端幂等 | RocketMQ（阿里/信创友好） |
+| 规则引擎 | Go 原生（CEL-go / 自研 DSL，制度包版本化） | 独立部署 Drools 经服务调用 | 确定性合规可解释、命中留痕、落 `policy_pack_id`；Go 侧优先免 JVM，重规则场景可保留 Drools 旁路服务 | 纯 Go 无锁定 |
 | 向量检索 | pgvector（起步） | Milvus | 起步用 PostgreSQL 扩展降低运维，规模化再迁 Milvus | Milvus 可私有化 |
 | Embedding | BGE-M3 | m3e | 中英混合、长文档；可本地推理 | 本地部署 |
 | LLM | 本地 Qwen2.5-14B/ChatGLM | 通义/文心/DeepSeek 云 API | 信创/涉密严格本地；非涉密复杂任务经用户授权走云端 | 强制本地化 |
-| Agent 编排 | LangGraph | AutoGen | 多步任务（如"起草申报书"）图式编排 | 本地运行 |
+| Agent 编排 | LangGraph | AutoGen | 多步任务（如"起草申报书"）图式编排；svc-ai-gateway(Go) 经 gRPC 调度 | 本地运行 |
 | AI 评估 | LangSmith | 自研评估平台 | 每能力独立评估集、周回测 | 自研可离线 |
 | 前端 | React 18 + TypeScript + Vite | Vue 3 | 组件生态、复杂表单/大屏 | 同左 |
 | 图表 | ECharts 5 + vis.js | AntV | 大屏与关系网络（PI 合作图谱） | 同左 |
 | 富文本 | TipTap（结构化 schema） | — | 申报书撰写可被 LLM 解析 | 同左 |
 | 移动端 | Uni-app（一套多端） | 原生 | H5/小程序/App 复用，满足 PRD 2.14 移动审批 | 微信小程序 + 国产 ROM |
 | 容器编排 | Kubernetes + Helm | Docker Compose（灯塔试点） | 多环境、灰度、弹性 | 国产 K8s（如 Rancher/KubeSphere） |
-| 可观测 | OpenTelemetry + Prometheus + Grafana + Loki + SkyWalking | — | 统一 `traceId` 贯穿（PRD 2.5） | 同左 |
+| 可观测 | OpenTelemetry-Go + Prometheus + Grafana + Loki + zap | SkyWalking | 统一 `traceId` 贯穿（PRD 2.5）；Go 服务用 OTel-Go + zap 结构化日志 | 同左 |
 
 ---
 
 ## 三、服务拆分
 
-按"业务服务 + 平台服务"两类拆分，边界与 PRD 模块 1:1 对应，便于各模块 PRD 直接映射到服务与接口清单。所有对外 REST 遵循 PRD 2.5 路径 `/api/{version}/{module}/{resource}`、统一响应 `{ code, message, data, traceId, timestamp }`、JWT + Refresh、`Idempotency-Key` 幂等、限流（普通 100 req/min、AI 20 req/min）。
+按"业务服务 + 平台服务"两类拆分，边界与 PRD 模块 1:1 对应，便于各模块 PRD 直接映射到服务与接口清单。以下所有服务均以 **Go + Gin** 实现：HTTP 路由与请求/响应 DTO 由 `oapi-codegen` 从 `design/` OpenAPI 契约生成（`design/*.openapi.yaml` 为唯一真源），数据访问层由 `sqlc`（首选，类型安全）或 GORM + pgx 从 `design/*.sql` DDL 生成；服务间调用优先 gRPC。所有对外 REST 遵循 PRD 2.5 路径 `/api/{version}/{module}/{resource}`、统一响应 `{ code, message, data, traceId, timestamp }`、JWT + Refresh、`Idempotency-Key` 幂等、限流（普通 100 req/min、AI 20 req/min）。
 
 ### 3.1 业务微服务（11）
 
@@ -120,9 +122,9 @@ flowchart TB
 |------|-----------------|------|
 | svc-gateway | 2.5 | 路由、认证前置、限流、`traceId` 注入、安全域路由判定 |
 | svc-identity (IAM) | 2.1 / 2.12 / 2.13 | 统一登录 CAS/OAuth2、RBAC+ABAC（含 `legal_entity` 属性）、涉密网独立 IdP、三员账号隔离、MFA |
-| svc-workflow | 2.3 / 2.14 | Camunda 审批流：撤回/驳回/加签/转办/并行串行；移动端审批任务推送 |
+| svc-workflow | 2.3 / 2.14 | 审批流：撤回/驳回/加签/转办/并行串行（独立部署 Camunda 经 gRPC/REST 驱动，或 Go 原生状态机）；移动端审批任务推送 |
 | svc-form | 2.8 / L1 | Formily 动态表单 + `sys_dict` 数据字典驱动，字段带 NL 描述 |
-| svc-policy | 2.10 | Drools 规则引擎 + 制度包 `sys_policy_pack` 版本化，命中留痕 `policy_pack_id` |
+| svc-policy | 2.10 | Go 原生规则引擎（CEL-go/自研 DSL）+ 制度包 `sys_policy_pack` 版本化，命中留痕 `policy_pack_id` |
 | svc-numbering | 2.11 | 统一编号中心（前缀注册表 + Redis/DB 双写 + 法人短码分号段） |
 | svc-ai-gateway | 2.4 / 九 | LLM 双通道路由（本地/云）、Prompt/Token 治理、可解释输出、置信度阈值兜底 |
 | svc-rag | 九 | 政策/申报书/评审/成果语料向量化与检索（权限隔离过滤） |
@@ -329,13 +331,14 @@ SLI/SLO 基线：列表查询 P95 < 500ms、1 万条导出 < 30s、AI 首字节 
 
 ## 十四、架构决策记录（ADR 摘要）
 
-- **ADR-001 · 规则引擎与 LLM 分工**：确定性合规（金额/限额/越权/科目）走 Drools 规则引擎并落 `policy_pack_id`，LLM 仅承担理解/抽取/生成；理由是合规判断必须可解释、可复算、可审计（PRD 2.10）。
+- **ADR-001 · 规则引擎与 LLM 分工**：确定性合规（金额/限额/越权/科目）走 **Go 原生规则引擎（CEL-go / 自研 DSL，重规则场景可保留独立部署的 Drools 旁路服务）**并落 `policy_pack_id`，LLM 仅承担理解/抽取/生成；理由是合规判断必须可解释、可复算、可审计（PRD 2.10）。
 - **ADR-002 · 微服务而非单体**：按业务域拆 11 服务 + 平台能力下沉，换取独立演进与伸缩；代价是分布式事务复杂度，以 Saga + 事件补偿消化。
 - **ADR-003 · OLTP 与 OLAP 双引擎**：交易走达梦/PG，分析走 ClickHouse，经 CDC 同步；避免大屏/画像查询压垮生产库。
 - **ADR-004 · 统一编号中心**：所有业务编号集中由 svc-numbering 幂等取号，杜绝并发重号与模块各自命名漂移；表名前缀与单号前缀分属两套体系（PRD 2.11）。
 - **ADR-005 · 状态以大写蛇形 token 为准**：持久态权威值为 token，中文仅作 `TOKEN=中文` 映射，stateDiagram 节点取 token；统一 API/事件/状态机语义（PRD 2.6）。
 - **ADR-006 · LLM 本地默认 + 云端可选**：院内 7B–14B 本地模型为默认，复杂推理经用户批准才调用云端；涉密与信创环境强制本地且 RAG 按域过滤，兼顾能力与数据不出域。
 - **ADR-007 · 三网物理隔离 + 独立 IdP**：涉密网独立身份与存储，跨域走网闸+前置机+审批流，应用不感知网络边界；以最小信任与全链路留痕满足分级保护。
+- **ADR-008 · 后端语言选型 Go + Gin**：后端由 `Java 17 + Spring Cloud Alibaba` 切换为 **`Go + Gin`**。收益：编译为单静态二进制、内存与冷启动更省、`linux/arm64` 交叉编译天然适配鲲鹏信创；`oapi-codegen` 把 `design/` OpenAPI 契约直接生成 handler/DTO/校验，`sqlc` 从 DDL 生成类型安全数据访问层，契约即真源、减少漂移。代价：Go 无 Spring Cloud 一体化全家桶，需以 APISIX/etcd/Casbin/gobreaker 等语言中立件组装；达梦 Go 驱动成熟度不及 JDBC，须在早期做兼容路径与压测验证；Camunda/Drools 等 JVM 组件仅作为语言无关的旁路平台服务经 gRPC/REST 调用，不进入业务服务进程。落地节奏、差距与人力见 `./PRODUCTION_GAP_ROADMAP.md`。
 
 ---
 
