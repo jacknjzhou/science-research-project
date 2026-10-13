@@ -1,0 +1,36 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    # schema: "migrations/000001_init.up.sql"  # 完整迁移（~394KB）会令 sqlc v1.27.0 wazero 解析器 OOM 崩溃
+    schema: "db/schema/p_schema.sql"           # 裁剪至 P 仓储所需表（p_application + p_guideline + p_template），语句原样摘自迁移
+    queries: "db/query"
+    gen:
+      go:
+        package: "store"
+        out: "internal/modules/p/store"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_pointers_for_null_types: true
+        rename:
+          p_application: Application
+          "@limit_": Limit
+          "@offset_": Offset
+        overrides:
+          # pgx/v5 默认把 timestamptz→pgtype.Timestamptz、numeric→pgtype.Numeric，
+          # 且 db_type 级 override 会被 sql_package 内建映射覆盖；故改用列级 override 精确对齐契约/Task7：
+          #   timestamps → time.Time / *time.Time；total_budget → string（NUMERIC 经 SELECT ::text 已是 string，
+          #   这里把 model.Application.total_budget 也固定为 string 以满足字段类型要求）。
+          - column: "p_application.created_at"
+            go_type: "time.Time"
+          - column: "p_application.updated_at"
+            go_type: "time.Time"
+          - column: "p_application.submit_at"
+            go_type:
+              type: "time.Time"
+              pointer: true
+          - column: "p_application.withdraw_at"
+            go_type:
+              type: "time.Time"
+              pointer: true
+          - column: "p_application.total_budget"
+            go_type: "string"
