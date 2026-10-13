@@ -111,30 +111,29 @@ function genBoolean(schema: any): boolean {
   return faker.datatype.boolean()
 }
 
-export function generate(schema: any, ctx: GenCtx, keyHint = ''): unknown {
+export function generate(schema: any, ctx: GenCtx, keyHint = '', depth = 0): unknown {
   if (!schema) return null
-  ctx.depth = (ctx.depth || 0) + 1
-  if (ctx.depth > 12) return null
+  if (depth > 16) return null
 
   // $ref
   if (schema.$ref) {
     const target = resolveRef(ctx.doc, schema.$ref)
-    return generate(target, ctx, keyHint)
+    return generate(target, ctx, keyHint, depth + 1)
   }
   // allOf：合并各子 schema 的 properties
   if (Array.isArray(schema.allOf)) {
     const merged: any = { type: 'object', properties: {} }
     for (const sub of schema.allOf) {
-      const r = generate(sub, { ...ctx, depth: ctx.depth }, keyHint)
+      const r = generate(sub, ctx, keyHint, depth + 1)
       if (r && typeof r === 'object') Object.assign(merged.properties, r)
     }
     return merged.properties
   }
   if (Array.isArray(schema.oneOf) && schema.oneOf.length) {
-    return generate(faker.helpers.arrayElement(schema.oneOf), ctx, keyHint)
+    return generate(faker.helpers.arrayElement(schema.oneOf), ctx, keyHint, depth + 1)
   }
   if (Array.isArray(schema.anyOf) && schema.anyOf.length) {
-    return generate(schema.anyOf[0], ctx, keyHint)
+    return generate(schema.anyOf[0], ctx, keyHint, depth + 1)
   }
 
   let type = schema.type
@@ -153,7 +152,7 @@ export function generate(schema: any, ctx: GenCtx, keyHint = ''): unknown {
       if (keys.length === 0 && schema.additionalProperties && typeof schema.additionalProperties === 'object') {
         // 生成少量动态列（如 rows 的 additionalProperties）
         for (let i = 0; i < 3; i++) {
-          out[`col_${i}`] = generate(schema.additionalProperties, ctx, 'value')
+          out[`col_${i}`] = generate(schema.additionalProperties, ctx, 'value', depth + 1)
         }
         return out
       }
@@ -161,11 +160,11 @@ export function generate(schema: any, ctx: GenCtx, keyHint = ''): unknown {
         const sub = props[key]
         // nullable：小概率置 null，但 id/code/status/created_at 保留
         const isCore = ['id', 'code', 'status', 'created_at', 'updated_at', 'name', 'list', 'total', 'page', 'size'].includes(key)
-        if (sub?.nullable && !isCore && faker.datatype.boolean(0.15)) {
+        if (sub?.nullable && !isCore && faker.datatype.boolean({ probability: 0.12 })) {
           out[key] = null
           continue
         }
-        out[key] = generate(sub, ctx, key)
+        out[key] = generate(sub, ctx, key, depth + 1)
       }
       return out
     }
@@ -175,7 +174,7 @@ export function generate(schema: any, ctx: GenCtx, keyHint = ''): unknown {
         : faker.number.int({ min: 3, max: 8 })
       const arr: unknown[] = []
       for (let i = 0; i < n; i++) {
-        const item = generate(schema.items, ctx, keyHint)
+        const item = generate(schema.items, ctx, keyHint, depth + 1)
         // 数组元素若为 object，给稳定自增 id
         if (item && typeof item === 'object' && 'id' in (item as any)) {
           (item as any).id = nextSeq()
