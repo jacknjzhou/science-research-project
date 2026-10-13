@@ -10,6 +10,9 @@ import { loadAll, routeIndex, matchRoute, extractDataSchema, toFastifyPath, API_
 import { generate } from './generator.js'
 import { flows, READ_BACK } from './flows.js'
 import { table, idempotent, stats } from './store.js'
+import { dbEnabled, ping } from './db.js'
+import { buildRegistry, getBinding } from './registry.js'
+import { listRows, readRow, createRow, upsertRecord } from './adapters.js'
 
 loadAll()
 
@@ -86,6 +89,31 @@ async function dispatch(req, reply) {
   }
   const templateKey = `${method} ${op.path}`
 
+  // —— PostgreSQL 快路径（DB_MODE=pg 且该 op 绑定到业务表）——
+  if (dbEnabled()) {
+    const b = getBinding(templateKey)
+    if (b && b.kind !== 'passthrough' && b.kind !== 'action') {
+      try {
+        if (method === 'GET' && b.kind === 'list') {
+          return envelope(0, 'ok', await listRows(b, req.query))
+        }
+        if (method === 'GET' && b.kind === 'read') {
+          const params = extractParams(op.path, req.url) || {}
+          const row = await readRow(b, params)
+          if (!row) { reply.code(404); return envelope(40401, '记录不存在', null) }
+          return envelope(0, 'ok', row)
+        }
+        if (method === 'POST' && b.kind === 'create') {
+          const idemKey = req.headers['idempotency-key']
+          const out = await idempotent(idemKey, async () => ({ body: await createRow(b, req.body) }))
+          if (out.body) return envelope(0, 'ok', out.body)
+        }
+      } catch (e) {
+        console.warn(`[db] pg 路径失败，回退参考实现: ${templateKey} — ${e.message}`)
+      }
+    }
+  }
+
   // 写流程状态机
   if (method !== 'GET' && flows[templateKey]) {
     const params = extractParams(op.path, req.url) || {}
@@ -99,6 +127,14 @@ async function dispatch(req, reply) {
     const merged = (schemaData && typeof schemaData === 'object' && !Array.isArray(schemaData))
       ? { ...schemaData, ...(data && typeof data === 'object' ? data : {}) }
       : (data ?? schemaData)
+    // pg 模式：把状态机真正改动的字段（仅 data，避免用生成填充覆盖真实列）回写业务表
+    if (dbEnabled() && data && typeof data === 'object' && data.id != null) {
+      const b = getBinding(templateKey)
+      if (b && b.table) {
+        try { await upsertRecord(b, Number(data.id), data) }
+        catch (e) { console.warn(`[db] 动作回写失败: ${templateKey} — ${e.message}`) }
+      }
+    }
     return envelope(0, message, merged)
   }
 
@@ -117,7 +153,42 @@ export async function buildApp() {
   const app = Fastify({ logger: false, bodyLimit: 4 * 1024 * 1024 })
   await app.register(cors, { origin: true })
 
-  app.get('/healthz', async () => ({ ok: true, modules: specs.length, operations: routeIndex.size, ts: Date.now() }))
+  // —— PostgreSQL 初始化：连通则建登记表；失败自动降级回参考实现（零回归）——
+  let dbStatus = { enabled: false, connected: false, coverage: null, error: null }
+  if (dbEnabled()) {
+    try {
+      await ping()
+      const cov = await buildRegistry()
+      const bound = cov.tally.list + cov.tally.read + cov.tally.create + cov.tally.action
+      dbStatus = { enabled: true, connected: true, coverage: cov, error: null }
+      const msg = `[db] pg 已连接；路由绑定 ${bound}/${cov.total}（list=${cov.tally.list} read=${cov.tally.read} create=${cov.tally.create} action=${cov.tally.action} passthrough=${cov.tally.passthrough}）`
+      app.log.info(msg)
+      console.log(msg)
+    } catch (e) {
+      dbStatus = { enabled: true, connected: false, coverage: null, error: e.message }
+      const msg = `[db] pg 连接/内省失败 → 降级为进程内参考实现：${e.message}`
+      app.log.warn(msg)
+      console.error(msg)
+      process.env.DB_MODE = '' // 关闭 pg 快路径，dispatch 回退 generate/flows
+    }
+  }
+
+  app.get('/healthz', async () => ({ ok: true, modules: specs.length, operations: routeIndex.size, db: { mode: process.env.DB_MODE || 'memory', enabled: dbStatus.enabled, connected: dbStatus.connected }, ts: Date.now() }))
+  app.get(API_PREFIX + '/_db', async () => {
+    if (!dbStatus.enabled) return envelope(0, 'ok', { mode: 'memory', note: 'DB_MODE≠pg，运行于参考内存实现' })
+    if (!dbStatus.connected) return envelope(0, 'ok', { mode: 'pg', connected: false, error: dbStatus.error })
+    const cov = dbStatus.coverage
+    return envelope(0, 'ok', {
+      mode: 'pg',
+      connected: true,
+      total: cov.total,
+      tally: cov.tally,
+      boundCount: cov.bound.length,
+      skipCount: cov.skip.length,
+      bound: cov.bound,
+      skip: cov.skip,
+    })
+  })
   app.get('/api/v1/_stats', async () => envelope(0, 'ok', { operations: routeIndex.size, collections: stats() }))
   app.get(API_PREFIX + '/_openapi', async () => {
     const modules = specs.map((s) => ({ module: s.module, file: s.file, title: s.doc?.info?.title, version: s.doc?.info?.version, paths: Object.keys(s.doc?.paths || {}).length }))

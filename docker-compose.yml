@@ -1,7 +1,10 @@
 # 科研管理系统 · 全套服务一键编排（Docker Compose）
 # 用法：docker compose up -d --build     然后浏览器访问 http://localhost:8080
-# 说明：当前为可运行的“契约驱动参考栈”（Node 参考后端 + nginx 托管 SPA）。
-#       生产目标 Java17 + Spring Cloud Alibaba 落地后，用同名 service 替换 backend 即可，前端与 nginx 反代不变。
+# 说明：backend 现为“契约驱动 + PostgreSQL”后端。
+#   · postgres 首启时自动执行 design/*.sql 建表（initdb），空库无种子数据。
+#   · backend 依 DB_MODE=pg 走真实库；对已绑定业务表的路由读写 Postgres，其余(分析/AI/未建表)回退参考实现。
+#   · 若不想接库：DB_MODE 置空即可退回纯进程内参考栈（零依赖，前端契约 mock 不受影响）。
+# 首次建库后如需重新初始化，请 `docker compose down -v` 清空 pgdata 卷再 up。
 
 name: eplugger-ark
 
@@ -16,8 +19,14 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: "8787"
+      DB_MODE: pg                                # 开启 Postgres 快路径（否则退回内存参考实现）
+      DATABASE_URL: postgres://ark:ark@postgres:5432/ark
+      PGSSLMODE: disable
     ports:
-      - "8787:8787"              # 便于宿主机直接调 API/看 _stats；仅经 nginx 访问前端时可删
+      - "8787:8787"              # 便于宿主机直接调 API/看 _stats/_db；仅经 nginx 访问前端时可删
+    depends_on:
+      postgres:
+        condition: service_healthy   # 等库就绪(且 initdb 建表完成)再起后端，避免连到半成品库
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/healthz"]
       interval: 15s
@@ -39,12 +48,11 @@ services:
       - "8080:80"                # 对外统一入口：http://localhost:8080
     restart: unless-stopped
 
-  # 可选：为生产目标（Java/Spring + PostgreSQL）预留的数据库。
-  # 当前 Node 参考后端用进程内存储，默认不拉起；需要时：docker compose --profile db up -d
+  # PostgreSQL 15：首启用 design/ 下编号 SQL（00-common → 01..11 各模块 DDL）自动建表。
+  # initdb 仅对“空数据目录”执行一次；已初始化过的 pgdata 卷不会重跑，需 down -v 重来。
   postgres:
     image: postgres:15-alpine
     container_name: ark-postgres
-    profiles: ["db"]
     environment:
       POSTGRES_USER: ark
       POSTGRES_PASSWORD: ark
@@ -53,11 +61,15 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # 只读挂载建表脚本：initdb 按文件名顺序执行 *.sql（数字前缀已保证 common 先于各模块）
+      - ./design:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ark -d ark"]
+      # 不仅要求可连，还要求 public schema 里已有表 —— 确保 initdb 建表完成后 backend 才启动
+      test: ["CMD-SHELL", "pg_isready -U ark -d ark && [ \"$(psql -U ark -d ark -tAc \"SELECT count(*) FROM information_schema.tables WHERE table_schema='public'\")\" -gt 0 ]"]
       interval: 15s
-      timeout: 3s
-      retries: 5
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     restart: unless-stopped
 
 volumes:
