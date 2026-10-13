@@ -1,0 +1,27 @@
+/* SPA 侧补充：在 prototype.css 主题地基上做最小增量，不改原型视觉。 */
+
+/* router-view 内每个 SFC 根为 .view.on，保证可见（prototype.css: .view{display:none}） */
+.content > .view { display: block; }
+
+/* 视图淡入沿用 prototype 的 fadeUp */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* 骨架/加载态占位 */
+.sk {
+  background: linear-gradient(90deg, #eee 25%, #f6f6f6 37%, #eee 63%);
+  background-size: 400% 100%;
+  animation: skl 1.2s infinite ease;
+  border-radius: 6px;
+  color: transparent !important;
+}
+@keyframes skl { 0%{background-position:100% 0} 100%{background-position:-100% 0} }
+
+/* 数据层加载提示 */
+.mock-note {
+  font-size: 11px;
+  color: var(--ink-mute);
+  font-family: 'IBM Plex Mono', monospace;
+}

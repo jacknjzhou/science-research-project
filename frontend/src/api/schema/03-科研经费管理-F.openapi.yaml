@@ -1,0 +1,1670 @@
+openapi: 3.0.3
+info:
+  title: 科研经费管理 · 模块 F 接口契约
+  description: |
+    科研院所科研管理系统 M1 核心模块【03 科研经费管理（代号 F）】对外 REST 契约。
+    覆盖预算编制/调整、到账登记与银行流水匹配、报销（含发票 OCR 上传）、AI 发票审核、
+    多级审批、预算冻结与余额查询、凭证同步（财务系统回调）、间接费用计提、项目决算、
+    外拨经费（联动 G 合同）、全成本分摊查询、平行记账分录查询、经费监督大屏聚合。
+    术语 / 状态 token / 单号前缀（BUD/EXP/DISB）以 design/README.md、PRD/README.md 为准。
+    统一响应包裹 { code, message, data, traceId, timestamp }；分页 page(1-based)+size(默认20,上限200)；
+    认证 Bearer JWT；所有 POST/PUT 支持 Idempotency-Key 请求头（UUID，服务端去重）。
+    金额以 string(format:number) 承载 NUMERIC(18,2)；比例/置信度 number(0-1)。
+  version: "1.1.0"
+  contact:
+    name: 研发组
+servers:
+  - url: /api/v1
+    description: 经费服务 svc-funding 网关前缀（多租户经 JWT 解析注入）
+security:
+  - bearerAuth: []
+tags:
+  - name: Subject
+    description: F-01 经费科目字典（树形）
+  - name: Budget
+    description: F-02/F-03/F-04 预算编制（预算制/包干制）与调整批复
+  - name: Income
+    description: F-05/F-06 到账登记与银行流水自动匹配、认领
+  - name: Expense
+    description: F-07/F-09 报销创建、提交、多级审批；F-10 预算冻结与余额
+  - name: Invoice
+    description: F-08 发票 OCR 结构化与三重指纹查重
+  - name: AIReview
+    description: F-15/F-16 AI 发票审核与违规识别（仅建议，不自动决策）
+  - name: Voucher
+    description: F-11 凭证同步（下发 + 财务系统回调）
+  - name: IndirectFee
+    description: F-12 间接费用与绩效支出计提
+  - name: Settlement
+    description: F-13 项目决算与结转结余
+  - name: Disbursement
+    description: F-22 外拨经费（联动 G 合同金额上限拦截）
+  - name: CostPool
+    description: F-20 项目全成本核算与分摊查询
+  - name: AccountingEntry
+    description: F-21 政府会计制度平行记账双分录查询
+  - name: Anomaly
+    description: F-16 异常与违规预警处置
+  - name: Forecast
+    description: F-17 AI 执行率预测快照查询
+  - name: Dashboard
+    description: F-18 经费监督大屏数据聚合查询
+
+paths:
+  /subjects:
+    get:
+      tags: [Subject]
+      summary: 查询经费科目树（按项目类型过滤）
+      operationId: listSubjects
+      parameters:
+        - name: projectType
+          in: query
+          schema: { type: string }
+          description: 项目类型（对齐 sys_dict project_type），过滤 applies_to
+        - name: category
+          in: query
+          schema: { type: string, enum: [DIRECT, INDIRECT, PERFORMANCE] }
+      responses:
+        "200":
+          description: 科目树
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Subject' }
+
+  /budgets:
+    post:
+      tags: [Budget]
+      summary: 编制项目预算（预算制/包干制，F-02/F-03）
+      operationId: createBudget
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BudgetCreateRequest' }
+      responses:
+        "200":
+          description: 返回预算（status=DRAFT）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Budget' }
+        "422": { $ref: '#/components/responses/RuleRejected' }
+    get:
+      tags: [Budget]
+      summary: 分页查询预算列表
+      operationId: pageBudgets
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: projectId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/BudgetStatus' }
+      responses:
+        "200":
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/Budget' }
+
+  /budgets/{budgetId}:
+    get:
+      tags: [Budget]
+      summary: 查询预算详情（含明细行余额）
+      operationId: getBudget
+      parameters:
+        - $ref: '#/components/parameters/BudgetId'
+      responses:
+        "200":
+          description: 预算详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/BudgetDetail' }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /budgets/{budgetId}/submit:
+    post:
+      tags: [Budget]
+      summary: 提交预算批复（DRAFT→SUBMITTED→UNDER_REVIEW）
+      operationId: submitBudget
+      parameters:
+        - $ref: '#/components/parameters/BudgetId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        "200":
+          description: 提交结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        "422": { $ref: '#/components/responses/RuleRejected' }
+
+  /budgets/{budgetId}/approve:
+    post:
+      tags: [Budget]
+      summary: 批复预算（UNDER_REVIEW→APPROVED→EXECUTING）
+      operationId: approveBudget
+      parameters:
+        - $ref: '#/components/parameters/BudgetId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [APPROVE, REJECT] }
+                comment: { type: string }
+      responses:
+        "200":
+          description: 批复结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+
+  /budgets/{budgetId}/adjust:
+    post:
+      tags: [Budget]
+      summary: 预算调整（EXECUTING→ADJUSTING→RE_APPROVED，生成新版本，F-04）
+      operationId: adjustBudget
+      parameters:
+        - $ref: '#/components/parameters/BudgetId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BudgetAdjustRequest' }
+      responses:
+        "200":
+          description: 调整申请（新 version，status=ADJUSTING）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Budget' }
+        "422": { $ref: '#/components/responses/RuleRejected' }
+
+  /budgets/{budgetId}/lines:
+    get:
+      tags: [Budget]
+      summary: 查询预算明细行余额（冻结/已用/可支，F-10）
+      operationId: listBudgetLines
+      parameters:
+        - $ref: '#/components/parameters/BudgetId'
+      responses:
+        "200":
+          description: 明细行列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/BudgetLine' }
+
+  /budget-lines/{lineId}/balance:
+    get:
+      tags: [Expense]
+      summary: 预算行可支余额实时查询（供报销前端联动校验，F-07/F-10）
+      operationId: getBudgetLineBalance
+      parameters:
+        - name: lineId
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 余额与超支阈值判定
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/BudgetBalanceResult' }
+
+  /incomes:
+    post:
+      tags: [Income]
+      summary: 登记经费到账（F-05）
+      operationId: createIncome
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IncomeRegisterRequest' }
+      responses:
+        "200":
+          description: 到账记录（claim_status=UNCLAIMED 或 AUTO_MATCHED）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Income' }
+    get:
+      tags: [Income]
+      summary: 分页查询到账记录（可按认领状态过滤，形成挂账列表）
+      operationId: pageIncomes
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: claimStatus
+          in: query
+          schema: { $ref: '#/components/schemas/ClaimStatus' }
+        - name: projectId
+          in: query
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/Income' }
+
+  /incomes/import-bank-flow:
+    post:
+      tags: [Income]
+      summary: 批量导入银行流水（银企直连/CSV，F-06）
+      operationId: importBankFlow
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [flows]
+              properties:
+                flows:
+                  type: array
+                  items: { $ref: '#/components/schemas/BankFlowItem' }
+      responses:
+        "200":
+          description: 导入统计（总数/自动匹配/存疑/未认领）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/BankFlowImportResult' }
+
+  /incomes/{incomeId}/claim:
+    post:
+      tags: [Income]
+      summary: 到账人工认领 / 确认自动匹配（触发 income.claimed → 更新可支余额）
+      operationId: claimIncome
+      parameters:
+        - name: incomeId
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectId]
+              properties:
+                projectId: { type: integer, format: int64 }
+                action: { type: string, enum: [CONFIRM, MANUAL, DOUBTFUL] }
+      responses:
+        "200":
+          description: 认领结果（claim_status=CLAIMED/AUTO_MATCHED/DOUBTFUL）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Income' }
+
+  /invoices/ocr:
+    post:
+      tags: [Invoice]
+      summary: 上传发票图像执行 OCR 结构化（F-08，移动端拍照）
+      operationId: invoiceOcr
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fileUrl]
+              properties:
+                fileUrl: { type: string, description: 对象存储发票图 URL }
+                expenseContext:
+                  type: object
+                  description: 报销上下文（项目/科目/事由）供 AI 合理性判定
+      responses:
+        "200":
+          description: OCR 结构化结果（含置信度）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Invoice' }
+
+  /expenses:
+    post:
+      tags: [Expense]
+      summary: 创建报销单（含发票，触发三重指纹查重 + 余额校验，F-07/F-10）
+      operationId: createExpense
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpenseCreateRequest' }
+      responses:
+        "200":
+          description: 报销草稿（status=DRAFT）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Expense' }
+        "409": { $ref: '#/components/responses/DuplicateInvoice' }
+        "422": { $ref: '#/components/responses/RuleRejected' }
+    get:
+      tags: [Expense]
+      summary: 分页查询报销单
+      operationId: pageExpenses
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: projectId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/ExpenseStatus' }
+        - name: applicantUserId
+          in: query
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/Expense' }
+
+  /expenses/{expenseId}:
+    get:
+      tags: [Expense]
+      summary: 查询报销详情（含审批链、发票、AI 建议）
+      operationId: getExpense
+      parameters:
+        - name: expenseId
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 报销详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ExpenseDetail' }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /expenses/{expenseId}/submit:
+    post:
+      tags: [Expense]
+      summary: 提交报销（DRAFT→SUBMITTED→AI_REVIEW，触发预算冻结 + expense.submitted，F-10）
+      operationId: submitExpense
+      parameters:
+        - name: expenseId
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        "200":
+          description: 提交结果（冻结成功则 status=AI_REVIEW）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Expense' }
+        "422": { $ref: '#/components/responses/RuleRejected' }
+
+  /expense/ai-invoice-review:
+    post:
+      tags: [AIReview]
+      summary: AI 发票审核（F-15，进入人工审批前的合规初审）
+      description: 调用 svc-ai-gateway + svc-integration/tax 税总查验；输出 verdict+confidence+issues，低置信回落人工。AI 不作为唯一决策依据（PRD 2.4/2.10）。限流 20 req/min。
+      operationId: aiInvoiceReview
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiReviewRequest' }
+      responses:
+        "200":
+          description: AI 审核建议
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AiReviewResult' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+
+  /expenses/{expenseId}/approval:
+    post:
+      tags: [Expense]
+      summary: 审批动作（APPROVE/REJECT/RETURN/DELEGATE，驱动状态机与冻结解冻，F-09）
+      operationId: approvalAction
+      parameters:
+        - name: expenseId
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApprovalActionRequest' }
+      responses:
+        "200":
+          description: 审批后状态与流水
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Expense' }
+
+  /vouchers/sync:
+    post:
+      tags: [Voucher]
+      summary: 主动下发/重推凭证至财务系统（F-11，重试≤3）
+      operationId: pushVoucher
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expenseId]
+              properties:
+                expenseId: { type: integer, format: int64 }
+                financeSystem: { type: string, enum: [YONYOU, KINGDEE, INSPIRE] }
+      responses:
+        "200":
+          description: 同步任务受理
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/VoucherSync' }
+
+  /vouchers/sync-callback:
+    post:
+      tags: [Voucher]
+      summary: 财务系统凭证同步回调（回填 voucher_no / 状态，成功→报销 VOUCHER_SYNCED）
+      description: 系统间回调，携带服务令牌；按 expenseId 幂等更新 F_VOUCHER_SYNC 与报销状态。
+      operationId: voucherCallback
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VoucherCallbackRequest' }
+      responses:
+        "200":
+          description: 回执已处理
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+
+  /indirect-fees/calculate:
+    post:
+      tags: [IndirectFee]
+      summary: 间接费用与绩效支出计提（按到账比例计提并限额，F-12）
+      operationId: calculateIndirectFee
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IndirectFeeCalcRequest' }
+      responses:
+        "200":
+          description: 计提结果（含阶梯明细可复算）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/IndirectFee' }
+        "422": { $ref: '#/components/responses/RuleRejected' }
+    get:
+      tags: [IndirectFee]
+      summary: 分页查询计提记录
+      operationId: pageIndirectFees
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: projectId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: period
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/IndirectFee' }
+
+  /settlements:
+    post:
+      tags: [Settlement]
+      summary: 发起项目决算并一键生成审计包（F-13）
+      operationId: createSettlement
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectId, closingDate]
+              properties:
+                projectId: { type: integer, format: int64 }
+                closingDate: { type: string, format: date }
+      responses:
+        "200":
+          description: 决算草稿（含到账/支出/结余汇总）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Settlement' }
+
+  /settlements/{projectId}:
+    get:
+      tags: [Settlement]
+      summary: 查询项目决算与结转结余
+      operationId: getSettlement
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 决算详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Settlement' }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /settlements/{settlementId}/approve:
+    post:
+      tags: [Settlement]
+      summary: 决算审批（审计员复核 / 打回，AUDITING→APPROVED/REJECTED）
+      operationId: approveSettlement
+      parameters:
+        - name: settlementId
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [APPROVE, REJECT] }
+                treatment: { type: string, enum: ['结转', '收回', '留用'] }
+                comment: { type: string }
+      responses:
+        "200":
+          description: 审批结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+
+  /disbursements:
+    post:
+      tags: [Disbursement]
+      summary: 创建外拨经费（联动 G 合同金额上限拦截，F-22）
+      description: 提交前经 svc-policy 校验 contract_id 剩余可拨额；amount > remain_contract_amount 则硬拦截（422）。跨模块一致性经事件与 Saga 编排（F-22↔G-09↔E-16）。
+      operationId: createDisbursement
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DisbursementCreateRequest' }
+      responses:
+        "200":
+          description: 外拨草稿（code=DISB-年-序）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Disbursement' }
+        "422": { $ref: '#/components/responses/RuleRejected' }
+    get:
+      tags: [Disbursement]
+      summary: 分页查询外拨经费
+      operationId: pageDisbursements
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: contractId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: projectId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/DisbursementStatus' }
+      responses:
+        "200":
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/Disbursement' }
+
+  /disbursements/check-contract:
+    post:
+      tags: [Disbursement]
+      summary: 外拨合同剩余可拨额与合规预检（创建前调用，F-22）
+      operationId: checkDisbursementContract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contractId, amount]
+              properties:
+                contractId: { type: integer, format: int64 }
+                amount: { type: string, format: number }
+      responses:
+        "200":
+          description: 校验结果（剩余额、命中合规规则、可否外拨）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DisbursementCheckResult' }
+
+  /cost-pools:
+    get:
+      tags: [CostPool]
+      summary: 全成本分摊查询（F-20，联动 A-12 折旧分摊）
+      operationId: pageCostPools
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: projectId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: period
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/CostPool' }
+
+  /cost-pools/{projectId}:
+    get:
+      tags: [CostPool]
+      summary: 单项目全成本明细（直接费用 + Σ间接分摊，可复算）
+      operationId: getCostPool
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+        - name: period
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: 全成本明细
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CostPool' }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /accounting-entries:
+    get:
+      tags: [AccountingEntry]
+      summary: 平行记账双分录查询（财务会计 + 预算会计，F-21）
+      operationId: pageAccountingEntries
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: projectId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: sourceTxnType
+          in: query
+          schema: { type: string, enum: [EXPENSE, INCOME, DISBURSEMENT, DEPRECIATION, INDIRECT] }
+        - name: reconcileStatus
+          in: query
+          schema: { type: string, enum: [BALANCED, UNRECONCILED, SUSPENSE] }
+      responses:
+        "200":
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/AccountingEntry' }
+
+  /accounting-entries/{id}:
+    get:
+      tags: [AccountingEntry]
+      summary: 查询单条平行记账分录（双分录 JSON + 勾稽状态）
+      operationId: getAccountingEntry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 分录详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AccountingEntry' }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /anomalies:
+    get:
+      tags: [Anomaly]
+      summary: 分页查询异常与违规预警（F-16）
+      operationId: pageAnomalies
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: severity
+          in: query
+          schema: { $ref: '#/components/schemas/Severity' }
+        - name: status
+          in: query
+          schema: { type: string, enum: [OPEN, PROCESSING, RESOLVED, FALSE_POSITIVE, CLOSED] }
+        - name: projectId
+          in: query
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/Anomaly' }
+
+  /anomalies/{anomalyId}/resolve:
+    post:
+      tags: [Anomaly]
+      summary: 处置异常（确认/误判回流训练集，F-16/PRD 11）
+      operationId: resolveAnomaly
+      parameters:
+        - name: anomalyId
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [resolution]
+              properties:
+                resolution: { type: string }
+                falsePositive: { type: boolean, description: 标记 AI 误判，数据回流训练集 }
+      responses:
+        "200":
+          description: 处置结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Anomaly' }
+
+  /budget-forecasts:
+    get:
+      tags: [Forecast]
+      summary: 查询 AI 执行率预测快照（F-17）
+      operationId: pageBudgetForecasts
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: projectId
+          in: query
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/BudgetForecast' }
+
+  /dashboard/funding:
+    get:
+      tags: [Dashboard]
+      summary: 经费监督大屏数据聚合（一图一舱三预警，F-18，刷新<5s）
+      operationId: fundingDashboard
+      parameters:
+        - name: legalEntityId
+          in: query
+          schema: { type: integer, format: int64 }
+          description: 法人过滤（总院可空看合并视图，PRD 2.12）
+        - name: fiscalYear
+          in: query
+          schema: { type: integer }
+      responses:
+        "200":
+          description: 大屏聚合数据（来自 OLAP/ClickHouse 只读投影）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/FundingDashboard' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: 幂等键（UUID），服务端缓存去重；同一次重试返回同一结果
+      schema: { type: string, format: uuid }
+    Page:
+      name: page
+      in: query
+      description: 页码（1-based）
+      schema: { type: integer, default: 1, minimum: 1 }
+    Size:
+      name: size
+      in: query
+      description: 每页条数（默认 20，上限 200）
+      schema: { type: integer, default: 20, minimum: 1, maximum: 200 }
+    BudgetId:
+      name: budgetId
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+
+  responses:
+    RuleRejected:
+      description: 规则引擎判定拒绝（比例超限 / 超预算硬拦截 / 越权），回传命中规则号与依据条款
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ApiResponse'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/RuleVerdict' }
+    DuplicateInvoice:
+      description: 发票三重指纹查重命中（发票号+金额+开票日期），直接拒绝
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    NotFound:
+      description: 资源不存在或越权（跨租户/跨法人过滤后不可见）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    RateLimited:
+      description: AI 接口限流（20 req/min）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+
+  schemas:
+    ApiResponse:
+      type: object
+      description: 统一响应包裹
+      properties:
+        code: { type: integer, description: '业务码，0=成功，非 0=业务错误' }
+        message: { type: string }
+        data: { type: object, nullable: true }
+        traceId: { type: string }
+        timestamp: { type: integer, format: int64 }
+
+    PageResult:
+      type: object
+      properties:
+        total: { type: integer, format: int64 }
+        page: { type: integer }
+        size: { type: integer }
+
+    Money:
+      type: string
+      format: number
+      description: 金额（NUMERIC(18,2)，单位元）
+      example: "125000.00"
+
+    BudgetStatus:
+      type: string
+      enum: [DRAFT, SUBMITTED, UNDER_REVIEW, APPROVED, EXECUTING, ADJUSTING, RE_APPROVED, CLOSED]
+    ExpenseStatus:
+      type: string
+      enum: [DRAFT, SUBMITTED, AI_REVIEW, HUMAN_REVIEW, APPROVED, REJECTED, RETURNED, PAID, VOUCHER_SYNCED]
+    ClaimStatus:
+      type: string
+      description: 到账认领状态
+      enum: [UNCLAIMED, AUTO_MATCHED, CLAIMED, DOUBTFUL]
+    Severity:
+      type: string
+      enum: [HIGH, MED, LOW]
+    BudgetMode:
+      type: string
+      description: 经费管理模式（字典可配，PRD 2.8）
+      enum: ['预算制', '包干制']
+    DisbursementStatus:
+      type: string
+      enum: [DRAFT, SUBMITTED, APPROVED, PAID, VOUCHER_SYNCED, REJECTED, RETURNED]
+    SecurityLevel:
+      type: string
+      enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET]
+
+    Subject:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        name: { type: string }
+        parentId: { type: integer, format: int64, nullable: true }
+        level: { type: integer }
+        category: { type: string, enum: [DIRECT, INDIRECT, PERFORMANCE] }
+        isLeaf: { type: boolean }
+        ratioLimit: { type: number, format: double, nullable: true }
+        appliesTo: { type: array, items: { type: string } }
+        status: { type: string }
+        children:
+          type: array
+          items: { $ref: '#/components/schemas/Subject' }
+
+    Budget:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string, description: 'BUD-年-序' }
+        projectId: { type: integer, format: int64 }
+        legalEntityId: { type: integer, format: int64 }
+        mode: { $ref: '#/components/schemas/BudgetMode' }
+        totalApproved: { $ref: '#/components/schemas/Money' }
+        totalAdjusted: { $ref: '#/components/schemas/Money' }
+        version: { type: integer }
+        status: { $ref: '#/components/schemas/BudgetStatus' }
+        approvedAt: { type: string, format: date-time, nullable: true }
+        approvedBy: { type: integer, format: int64, nullable: true }
+        policyPackId: { type: integer, format: int64, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    BudgetLine:
+      type: object
+      description: 预算行；remaining = planned + adjusted - frozen - used - released
+      properties:
+        id: { type: integer, format: int64 }
+        budgetId: { type: integer, format: int64 }
+        subjectId: { type: integer, format: int64 }
+        subjectName: { type: string }
+        amountPlanned: { $ref: '#/components/schemas/Money' }
+        amountAdjusted: { $ref: '#/components/schemas/Money' }
+        amountFrozen: { $ref: '#/components/schemas/Money' }
+        amountUsed: { $ref: '#/components/schemas/Money' }
+        amountReleased: { $ref: '#/components/schemas/Money' }
+        remaining: { $ref: '#/components/schemas/Money' }
+        policyPackId: { type: integer, format: int64, nullable: true }
+
+    BudgetDetail:
+      allOf:
+        - $ref: '#/components/schemas/Budget'
+        - type: object
+          properties:
+            lines:
+              type: array
+              items: { $ref: '#/components/schemas/BudgetLine' }
+
+    BudgetCreateRequest:
+      type: object
+      required: [projectId, mode, totalApproved]
+      properties:
+        projectId: { type: integer, format: int64 }
+        legalEntityId: { type: integer, format: int64 }
+        mode: { $ref: '#/components/schemas/BudgetMode' }
+        totalApproved: { $ref: '#/components/schemas/Money' }
+        policyPackId: { type: integer, format: int64, nullable: true }
+        lines:
+          type: array
+          description: 预算制必填按科目拆分；包干制可为空
+          items:
+            type: object
+            required: [subjectId, amountPlanned]
+            properties:
+              subjectId: { type: integer, format: int64 }
+              amountPlanned: { $ref: '#/components/schemas/Money' }
+
+    BudgetAdjustRequest:
+      type: object
+      required: [adjustLines]
+      properties:
+        reason: { type: string }
+        adjustLines:
+          type: array
+          items:
+            type: object
+            required: [subjectId, amountAdjustedDelta]
+            properties:
+              subjectId: { type: integer, format: int64 }
+              amountAdjustedDelta: { $ref: '#/components/schemas/Money', description: '调整增减额，可为负' }
+
+    BudgetBalanceResult:
+      type: object
+      properties:
+        lineId: { type: integer, format: int64 }
+        remaining: { $ref: '#/components/schemas/Money' }
+        overThreshold: { type: string, enum: [NONE, SOFT_WARN, HARD_BLOCK], description: '0-5% 软警告；>5% 硬拦截' }
+        overRatio: { type: number, format: double }
+
+    Income:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        projectId: { type: integer, format: int64, nullable: true }
+        receiptNo: { type: string }
+        receiptDate: { type: string, format: date }
+        amount: { $ref: '#/components/schemas/Money' }
+        payerName: { type: string }
+        payerBank: { type: string }
+        purposeText: { type: string }
+        bankFlowNo: { type: string }
+        claimStatus: { $ref: '#/components/schemas/ClaimStatus' }
+        matchConfidence: { type: number, format: double }
+        claimedBy: { type: integer, format: int64, nullable: true }
+        claimedAt: { type: string, format: date-time, nullable: true }
+
+    IncomeRegisterRequest:
+      type: object
+      required: [amount, receiptDate]
+      properties:
+        projectId: { type: integer, format: int64, nullable: true }
+        receiptNo: { type: string }
+        receiptDate: { type: string, format: date }
+        amount: { $ref: '#/components/schemas/Money' }
+        payerName: { type: string }
+        payerBank: { type: string }
+        purposeText: { type: string }
+        bankFlowNo: { type: string }
+
+    BankFlowItem:
+      type: object
+      required: [bankFlowNo, amount]
+      properties:
+        bankFlowNo: { type: string }
+        receiptDate: { type: string, format: date }
+        amount: { $ref: '#/components/schemas/Money' }
+        payerName: { type: string }
+        payerBank: { type: string }
+        purposeText: { type: string }
+
+    BankFlowImportResult:
+      type: object
+      properties:
+        total: { type: integer }
+        autoMatched: { type: integer }
+        doubtful: { type: integer }
+        unclaimed: { type: integer }
+        elapsedMs: { type: integer, description: '匹配耗时（目标 1 万条<60s）' }
+
+    Invoice:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        number: { type: string }
+        invoiceCode: { type: string }
+        invoiceType: { type: string, enum: [GENERAL, SPECIAL, ELECTRONIC, ITINERARY] }
+        sellerName: { type: string }
+        sellerTaxId: { type: string }
+        buyerName: { type: string }
+        buyerTaxId: { type: string }
+        amountExclTax: { $ref: '#/components/schemas/Money' }
+        taxAmount: { $ref: '#/components/schemas/Money' }
+        totalAmount: { $ref: '#/components/schemas/Money' }
+        issueDate: { type: string, format: date }
+        ocrConfidence: { type: number, format: double }
+        checkResult: { type: string, enum: [PASS, FAIL, PENDING] }
+        isDuplicated: { type: boolean }
+
+    Expense:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string, description: 'EXP-年-序' }
+        projectId: { type: integer, format: int64 }
+        budgetLineId: { type: integer, format: int64, nullable: true }
+        applicantUserId: { type: integer, format: int64 }
+        amount: { $ref: '#/components/schemas/Money' }
+        expenseType: { type: string, enum: [EQUIPMENT, MATERIAL, TRAVEL, MEETING, LABOR, EXPERT, OTHER] }
+        submitMode: { $ref: '#/components/schemas/BudgetMode' }
+        invoiceIds: { type: array, items: { type: integer, format: int64 } }
+        status: { $ref: '#/components/schemas/ExpenseStatus' }
+        aiVerdict: { type: string, enum: [PASS, REVIEW, REJECT], nullable: true }
+        aiConfidence: { type: number, format: double, nullable: true }
+        invoiceCheckStatus: { type: string, enum: [PENDING, PASSED, FAILED, MANUAL] }
+        submittedAt: { type: string, format: date-time, nullable: true }
+        policyPackId: { type: integer, format: int64, nullable: true }
+
+    ExpenseDetail:
+      allOf:
+        - $ref: '#/components/schemas/Expense'
+        - type: object
+          properties:
+            description: { type: string }
+            invoices:
+              type: array
+              items: { $ref: '#/components/schemas/Invoice' }
+            approvals:
+              type: array
+              items: { $ref: '#/components/schemas/ExpenseApproval' }
+            anomalies:
+              type: array
+              items: { $ref: '#/components/schemas/Anomaly' }
+
+    ExpenseApproval:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        expenseId: { type: integer, format: int64 }
+        stepOrder: { type: integer }
+        approverUserId: { type: integer, format: int64, nullable: true }
+        role: { type: string }
+        action: { type: string, enum: [APPROVE, REJECT, RETURN, DELEGATE] }
+        comment: { type: string }
+        actedAt: { type: string, format: date-time, nullable: true }
+
+    ExpenseCreateRequest:
+      type: object
+      required: [projectId, amount, expenseType]
+      properties:
+        projectId: { type: integer, format: int64 }
+        budgetLineId: { type: integer, format: int64, nullable: true }
+        amount: { $ref: '#/components/schemas/Money' }
+        expenseType: { type: string, enum: [EQUIPMENT, MATERIAL, TRAVEL, MEETING, LABOR, EXPERT, OTHER] }
+        submitMode: { $ref: '#/components/schemas/BudgetMode' }
+        description: { type: string }
+        invoiceIds: { type: array, items: { type: integer, format: int64 } }
+        attachmentIds: { type: array, items: { type: integer, format: int64 } }
+
+    ApprovalActionRequest:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string, enum: [APPROVE, REJECT, RETURN, DELEGATE] }
+        comment: { type: string }
+        delegateToUserId: { type: integer, format: int64, nullable: true, description: 'DELEGATE 时指定接手人（审批人离职自动流转）' }
+
+    AiReviewRequest:
+      type: object
+      required: [expenseId]
+      properties:
+        expenseId: { type: integer, format: int64 }
+        invoiceIds: { type: array, items: { type: integer, format: int64 } }
+
+    AiReviewResult:
+      type: object
+      description: AI 仅产出建议，需人工确认；低置信回落人工（PRD 2.4/2.10）
+      properties:
+        verdict: { type: string, enum: [PASS, REVIEW, REJECT] }
+        confidence: { type: number, format: double }
+        issues:
+          type: array
+          items:
+            type: object
+            properties:
+              rule: { type: string }
+              reason: { type: string }
+              evidence: { type: object }
+              clauseRef: { type: string, description: 制度依据条款出处 }
+
+    VoucherSync:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        expenseId: { type: integer, format: int64 }
+        financeSystem: { type: string, enum: [YONYOU, KINGDEE, INSPIRE] }
+        voucherNo: { type: string, nullable: true }
+        syncStatus: { type: string, enum: [PENDING, SUCCESS, FAILED] }
+        retryCount: { type: integer }
+        errorMsg: { type: string, nullable: true }
+        syncAt: { type: string, format: date-time, nullable: true }
+
+    VoucherCallbackRequest:
+      type: object
+      required: [expenseId, result]
+      properties:
+        expenseId: { type: integer, format: int64 }
+        result: { type: string, enum: [SUCCESS, FAILED] }
+        voucherNo: { type: string }
+        financeSystem: { type: string, enum: [YONYOU, KINGDEE, INSPIRE] }
+        detail: { type: object }
+
+    IndirectFee:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        projectId: { type: integer, format: int64 }
+        period: { type: string, description: 'YYYYMM' }
+        totalBudget: { $ref: '#/components/schemas/Money' }
+        actualIncome: { $ref: '#/components/schemas/Money' }
+        actualExpense: { $ref: '#/components/schemas/Money' }
+        indirectRate: { type: number, format: double }
+        indirectAmount: { $ref: '#/components/schemas/Money' }
+        performanceRate: { type: number, format: double }
+        performanceAmount: { $ref: '#/components/schemas/Money' }
+        status: { type: string, enum: [DRAFT, CALCULATED, POSTED, REVERSED] }
+        policyPackId: { type: integer, format: int64, nullable: true }
+
+    IndirectFeeCalcRequest:
+      type: object
+      required: [projectId, period]
+      properties:
+        projectId: { type: integer, format: int64 }
+        period: { type: string, description: 'YYYYMM' }
+        policyPackId: { type: integer, format: int64, nullable: true }
+
+    Settlement:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        projectId: { type: integer, format: int64 }
+        closingDate: { type: string, format: date }
+        incomeTotal: { $ref: '#/components/schemas/Money' }
+        expenseTotal: { $ref: '#/components/schemas/Money' }
+        remaining: { $ref: '#/components/schemas/Money' }
+        treatment: { type: string, enum: ['结转', '收回', '留用'] }
+        auditReportUrl: { type: string, nullable: true }
+        status: { type: string, enum: [DRAFT, SUBMITTED, AUDITING, APPROVED, REJECTED] }
+
+    Disbursement:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string, description: 'DISB-年-序' }
+        contractId: { type: integer, format: int64 }
+        outsourceUnitId: { type: integer, format: int64 }
+        projectId: { type: integer, format: int64 }
+        securityLevel: { $ref: '#/components/schemas/SecurityLevel' }
+        amount: { $ref: '#/components/schemas/Money' }
+        phase: { type: string, enum: ['预付', '进度', '尾款'] }
+        voucherStatus: { type: string, enum: [PENDING, SUCCESS, FAILED, MANUAL] }
+        contractAmount: { $ref: '#/components/schemas/Money' }
+        remainContractAmount: { $ref: '#/components/schemas/Money' }
+        complianceFlags: { type: array, items: { type: string } }
+        status: { $ref: '#/components/schemas/DisbursementStatus' }
+        policyPackId: { type: integer, format: int64, nullable: true }
+
+    DisbursementCreateRequest:
+      type: object
+      required: [contractId, outsourceUnitId, projectId, amount, phase]
+      properties:
+        contractId: { type: integer, format: int64, description: '逻辑引用 G_CONTRACT(id)' }
+        outsourceUnitId: { type: integer, format: int64, description: '逻辑引用 G_SUPPLIER(id)' }
+        projectId: { type: integer, format: int64 }
+        securityLevel: { $ref: '#/components/schemas/SecurityLevel' }
+        amount: { $ref: '#/components/schemas/Money' }
+        phase: { type: string, enum: ['预付', '进度', '尾款'] }
+        invoiceUrl: { type: string }
+
+    DisbursementCheckResult:
+      type: object
+      properties:
+        contractId: { type: integer, format: int64 }
+        contractAmount: { $ref: '#/components/schemas/Money' }
+        disbursedBefore: { $ref: '#/components/schemas/Money' }
+        remainContractAmount: { $ref: '#/components/schemas/Money' }
+        canDisburse: { type: boolean }
+        complianceFlags: { type: array, items: { type: string } }
+        ruleHits:
+          type: array
+          items: { $ref: '#/components/schemas/RuleVerdict' }
+
+    CostPool:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        projectId: { type: integer, format: int64 }
+        period: { type: string }
+        directCost: { $ref: '#/components/schemas/Money' }
+        indirectAlloc:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string, description: '管理费/房屋/水电气/设备折旧/共用平台' }
+              basis: { type: string, description: 分摊依据（可复算） }
+              amount: { $ref: '#/components/schemas/Money' }
+        fullCost: { $ref: '#/components/schemas/Money' }
+        basisRuleId: { type: integer, format: int64, nullable: true }
+        policyPackId: { type: integer, format: int64, nullable: true }
+
+    AccountingEntry:
+      type: object
+      description: 平行记账双分录（《政府会计制度》，F-21）
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        sourceTxnId: { type: integer, format: int64 }
+        sourceTxnType: { type: string, enum: [EXPENSE, INCOME, DISBURSEMENT, DEPRECIATION, INDIRECT] }
+        projectId: { type: integer, format: int64 }
+        period: { type: string }
+        finEntry:
+          type: object
+          description: 财务会计分录（权责发生制，借贷明细）
+        budEntry:
+          type: object
+          description: 预算会计分录（收付实现制，预算支出/资金结存）
+        postedFinance: { type: boolean }
+        postedBudget: { type: boolean }
+        reconcileStatus: { type: string, enum: [BALANCED, UNRECONCILED, SUSPENSE] }
+        voucherSyncId: { type: integer, format: int64, nullable: true }
+        policyPackId: { type: integer, format: int64, nullable: true }
+
+    Anomaly:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        expenseId: { type: integer, format: int64, nullable: true }
+        projectId: { type: integer, format: int64, nullable: true }
+        anomalyType: { type: string, enum: [SPLIT, RUSH_SPEND, ABNORMAL_SUBJECT, CIRCULAR, SENSITIVE_CATEGORY, BUDGET_OVER, OTHER] }
+        ruleCode: { type: string }
+        severity: { $ref: '#/components/schemas/Severity' }
+        reasonText: { type: string }
+        evidence: { type: object }
+        aiConfidence: { type: number, format: double }
+        falsePositive: { type: boolean }
+        status: { type: string, enum: [OPEN, PROCESSING, RESOLVED, FALSE_POSITIVE, CLOSED] }
+
+    BudgetForecast:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        projectId: { type: integer, format: int64 }
+        snapshotDate: { type: string, format: date }
+        currentExecutionRate: { type: number, format: double }
+        expectedExecutionRate: { type: number, format: double }
+        deviation: { type: number, format: double }
+        deviationAlert: { type: boolean }
+        suggestion: { type: string }
+        modelVersion: { type: string }
+
+    FundingDashboard:
+      type: object
+      description: 经费监督大屏聚合（一图一舱三预警，只读 OLAP 投影，刷新<5s）
+      properties:
+        totalBudget: { $ref: '#/components/schemas/Money' }
+        yearIncome: { $ref: '#/components/schemas/Money' }
+        executionRate: { type: number, format: double }
+        violationCount: { type: integer }
+        deptHeatmap:
+          type: array
+          items:
+            type: object
+            properties:
+              departmentId: { type: integer, format: int64 }
+              executionRate: { type: number, format: double }
+              amount: { $ref: '#/components/schemas/Money' }
+        trend12Months:
+          type: array
+          items:
+            type: object
+            properties:
+              month: { type: string }
+              executionRate: { type: number, format: double }
+        alerts:
+          type: object
+          properties:
+            pre: { type: array, items: { type: object } }
+            during: { type: array, items: { type: object } }
+            post: { type: array, items: { type: object } }
+
+    RuleVerdict:
+      type: object
+      description: svc-policy 规则引擎命中结果（可解释、可复算，PRD 2.10）
+      properties:
+        ruleCode: { type: string }
+        clauseRef: { type: string, description: 制度出处条款 }
+        verdict: { type: string, enum: [PASS, REJECT, WARN] }
+        policyPackId: { type: integer, format: int64, nullable: true }
+        detail: { type: object }

@@ -1,0 +1,671 @@
+openapi: 3.0.3
+info:
+  title: 科研成果管理（R）API
+  version: "1.0"
+  description: >-
+    04 科研成果管理模块对外 REST 契约（自包含 OpenAPI 3.0.3，可独立导入 Swagger/Postman）。
+    覆盖成果列表/我的成果/待认领、认领/拒绝/标记非本人（批量）、手动录入、AI 智能录入辅助、
+    成果关联项目、专利年费与法律状态、指标快照与引用更新、查重与诚信核验、成果报送导出。
+    字段与 ../README.md §2 通用列及 04-科研成果管理-R.ddl.sql 对齐；状态 enum 取 §4 R 状态 token。
+    上游 PRD：../PRD/04-科研成果管理.md（R-01..R-21）。
+servers:
+  - url: /api/v1
+    description: 科研管理系统网关（v1）
+
+tags:
+  - name: output
+    description: 成果主档与检索
+  - name: claim
+    description: 学者认领工作流（R-05）
+  - name: ai
+    description: AI 智能录入辅助与查重（R-15/R-19/R-04）
+  - name: patent
+    description: 专利年费与法律状态（R-06）
+  - name: metric
+    description: 指标快照与引用更新（R-12/R-17）
+  - name: relation
+    description: 成果关联项目（R-10）
+  - name: export
+    description: 成果报送导出（R-18）
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      description: 页码，1-based
+      schema: { type: integer, minimum: 1, default: 1 }
+    SizeParam:
+      name: size
+      in: query
+      description: 每页条数，默认 20，上限 200
+      schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: 幂等键（UUID），POST/PUT 服务端缓存去重（§3）
+      schema: { type: string, format: uuid }
+    OutputId:
+      name: id
+      in: path
+      required: true
+      description: 成果主键 R_OUTPUT.id
+      schema: { type: integer, format: int64 }
+
+  schemas:
+    ApiResponse:
+      type: object
+      description: 统一响应包裹（§3）
+      properties:
+        code:    { type: integer, description: 0 为成功，非 0 为业务错误码 }
+        message: { type: string }
+        data:    { type: object, nullable: true }
+        traceId: { type: string }
+        timestamp: { type: integer, format: int64 }
+
+    PageResult:
+      type: object
+      properties:
+        list:
+          type: array
+          items: { $ref: '#/components/schemas/Output' }
+        total: { type: integer, format: int64 }
+        page:  { type: integer }
+        size:  { type: integer }
+
+    AuthorItem:
+      type: object
+      description: authors JSONB 元素：作者顺序/共同通讯多值/份额
+      properties:
+        user_id:         { type: integer, format: int64, nullable: true }
+        name:            { type: string }
+        orcid:           { type: string, nullable: true }
+        order:           { type: integer }
+        is_corresponding: { type: boolean }
+        share_pct:       { type: number, format: double, description: 份额百分比 }
+
+    AffiliationItem:
+      type: object
+      properties:
+        user_id:   { type: integer, format: int64 }
+        inst_id:   { type: integer, format: int64 }
+        is_primary: { type: boolean }
+
+    Output:
+      type: object
+      description: 成果主档视图（字段对齐 R_OUTPUT DDL）
+      properties:
+        id:               { type: integer, format: int64 }
+        code:             { type: string, nullable: true, description: 业务编号；前缀待 2.11 登记 }
+        tenant_id:        { type: integer, format: int64 }
+        status:
+          type: string
+          enum: [AUTO_FETCHED, PENDING_CLAIM, CLAIMED, ASSIGNED_TO_PROJECT,
+                 COUNTED_FOR_PERFORMANCE, MANUAL_DRAFT, PENDING_REVIEW, REJECTED]
+        output_type:
+          type: string
+          enum: [PAPER, PATENT, SOFTWARE, STANDARD, AWARD, BOOK, DATASET, CONFERENCE,
+                 NEW_VARIETY, LAYOUT, APPRAISAL, HONOR]
+        title:            { type: string }
+        title_en:         { type: string, nullable: true }
+        abstract:         { type: string, nullable: true }
+        publish_date:     { type: string, format: date, nullable: true }
+        authors:          { type: array, items: { $ref: '#/components/schemas/AuthorItem' } }
+        affiliations:     { type: array, items: { $ref: '#/components/schemas/AffiliationItem' } }
+        project_ids:      { type: array, items: { type: integer, format: int64 }, description: 规范化主存见关联表 }
+        language:         { type: string, nullable: true }
+        source:
+          type: string
+          enum: [CNKI, WOS, SCOPUS, WANFANG, CNIPA, CROSSREF, ALTMETRIC, MANUAL, FETCH]
+        is_claimed:       { type: boolean }
+        claim_status:
+          type: string
+          enum: [UNCLAIMED, PENDING, CLAIMED, REJECTED, NOT_MINE, DOUBTFUL]
+        match_confidence: { type: number, format: double, nullable: true }
+        department_id:    { type: integer, format: int64, nullable: true }
+        legal_entity_id:  { type: integer, format: int64 }
+        security_level:   { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET] }
+        created_at:       { type: string, format: date-time }
+        updated_at:       { type: string, format: date-time }
+        remark:           { type: string, nullable: true }
+
+    PaperExt:
+      type: object
+      description: 论文扩展（R_PAPER_EXT）
+      properties:
+        output_id:     { type: integer, format: int64 }
+        journal_name:  { type: string }
+        journal_issn:  { type: string }
+        volume:        { type: string }
+        issue:         { type: string }
+        page_range:    { type: string }
+        doi:           { type: string }
+        keywords:      { type: array, items: { type: string } }
+        category:      { type: string, enum: [SCI, EI, PKU_CORE, CSCD, GENERAL] }
+        jcr_partition: { type: string, description: JCR Q1..Q4 }
+        cas_partition: { type: string }
+        impact_factor: { type: number, format: double }
+        cited_times:   { type: integer }
+        is_highly_cited: { type: boolean }
+        esi_top1:      { type: boolean }
+
+    PatentExt:
+      type: object
+      description: 专利扩展（R_PATENT_EXT）
+      properties:
+        output_id:        { type: integer, format: int64 }
+        patent_type:      { type: string, enum: [INVENTION, UTILITY, DESIGN] }
+        application_no:   { type: string }
+        application_date: { type: string, format: date }
+        grant_no:         { type: string, nullable: true }
+        grant_date:       { type: string, format: date, nullable: true }
+        expiry_date:      { type: string, format: date, nullable: true }
+        legal_status:
+          type: string
+          enum: [PENDING, EXAMINING, SUBSTANTIVE, GRANTED, ANNUTY_DUE, INVALID, ABANDONED]
+        agency_name:      { type: string }
+        annuity_due_date: { type: string, format: date }
+        annuity_paid_year: { type: integer }
+        maintain_years:   { type: integer }
+        license_status:   { type: string, enum: [UNLICENSED, NON_EXCLUSIVE, EXCLUSIVE, TRANSFERRED] }
+        is_transferable:  { type: boolean }
+
+    MetricSnapshot:
+      type: object
+      description: 指标快照（R_METRIC_SNAPSHOT，日切）
+      properties:
+        output_id:     { type: integer, format: int64 }
+        snapshot_date: { type: string, format: date }
+        cited_times:   { type: integer }
+        altmetric:     { type: integer }
+        downloads:     { type: integer }
+        impact_factor: { type: number, format: double }
+
+    OutputCreateRequest:
+      type: object
+      description: 手动录入请求（R-02）
+      required: [output_type, title, source]
+      properties:
+        output_type:
+          type: string
+          enum: [PAPER, PATENT, SOFTWARE, STANDARD, AWARD, BOOK, DATASET, CONFERENCE,
+                 NEW_VARIETY, LAYOUT, APPRAISAL, HONOR]
+        title:        { type: string }
+        title_en:     { type: string }
+        abstract:     { type: string }
+        publish_date: { type: string, format: date }
+        language:     { type: string, default: zh }
+        source:       { type: string, enum: [MANUAL, FETCH], default: MANUAL }
+        authors:      { type: array, items: { $ref: '#/components/schemas/AuthorItem' } }
+        affiliations: { type: array, items: { $ref: '#/components/schemas/AffiliationItem' } }
+        security_level: { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET], default: INTERNAL }
+        remark:       { type: string }
+        ext:
+          description: 按 output_type 携带对应扩展体（PaperExt/PatentExt/...）
+          oneOf:
+            - { $ref: '#/components/schemas/PaperExt' }
+            - { $ref: '#/components/schemas/PatentExt' }
+            - { type: object, additionalProperties: true }
+
+    ClaimRequest:
+      type: object
+      description: 认领/拒绝/标记非本人（支持批量，R-05）
+      required: [action, items]
+      properties:
+        action: { type: string, enum: [CLAIM, REJECT, MARK_NOT_MINE], description: 动作；MARK_NOT_MINE=标记非本人 }
+        reason: { type: string, description: 拒绝/挂名理由（入诚信记录） }
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          description: 单次批量上限 100 条（性能：批量认领 100 条 < 3s）
+          items:
+            type: object
+            required: [output_id]
+            properties:
+              output_id: { type: integer, format: int64 }
+              edited_fields:
+                type: object
+                additionalProperties: true
+                description: 认领时字段订正 {field:{from,to}}
+
+    ClaimResultItem:
+      type: object
+      properties:
+        output_id: { type: integer, format: int64 }
+        success:   { type: boolean }
+        new_status: { type: string, enum: [CLAIMED, REJECTED] }
+        message:   { type: string }
+
+    AiFillRequest:
+      type: object
+      description: AI 智能录入辅助（R-15）：传标题或 DOI 或专利号
+      properties:
+        title:     { type: string }
+        doi:       { type: string }
+        patent_no: { type: string }
+      x-note: 至少提供 title 或 doi 或 patent_no 之一
+
+    AiFillResult:
+      type: object
+      description: 结构化元数据 + 数据源出处 + 置信度
+      properties:
+        output_type:    { type: string, enum: [PAPER, PATENT, SOFTWARE, STANDARD, AWARD, BOOK, DATASET, CONFERENCE] }
+        title:          { type: string }
+        title_en:       { type: string }
+        authors:        { type: array, items: { $ref: '#/components/schemas/AuthorItem' } }
+        journal_name:   { type: string }
+        doi:            { type: string }
+        impact_factor:  { type: number, format: double }
+        jcr_partition:  { type: string }
+        publish_date:   { type: string, format: date }
+        confidence:     { type: number, format: double }
+        source_refs:
+          type: array
+          items:
+            type: object
+            properties:
+              source: { type: string, enum: [CROSSREF, CNIPA, WOS, SCOPUS, CNKI, WANFANG, ALTMETRIC] }
+              url:    { type: string }
+
+    DedupRequest:
+      type: object
+      description: 查重与诚信核验（R-19）
+      required: [title]
+      properties:
+        title:        { type: string }
+        abstract:     { type: string }
+        full_text_url: { type: string, description: 论文全文对象存储地址（供 CNKI 查重/图片 pHash） }
+        doi:          { type: string }
+
+    DedupResult:
+      type: object
+      properties:
+        is_duplicate:     { type: boolean }
+        similarity:       { type: number, format: double, description: 语义相似度 }
+        simhash_distance: { type: integer }
+        duplicate_of:     { type: integer, format: int64, nullable: true, description: 疑似重复的主记录 id }
+        integrity_flags:
+          type: array
+          items:
+            type: object
+            properties:
+              type:   { type: string, enum: [IMAGE_REUSE, TABLE_ANOMALY, PLAGIARISM, NAME_MISMATCH] }
+              detail: { type: string }
+              confidence: { type: number, format: double }
+        visible_to:       { type: string, enum: [ETHICS, ADMIN], description: 核查结果仅纪检/管理员可见 }
+
+    ProjectLinkRequest:
+      type: object
+      description: 成果关联项目（R-10，可多项目）
+      required: [project_ids]
+      properties:
+        project_ids:
+          type: array
+          minItems: 1
+          items: { type: integer, format: int64 }
+        relation_type: { type: string, enum: [PRIMARY, CONTRIBUTION, CITED], default: CONTRIBUTION }
+        contribution_pct: { type: number, format: double }
+
+    ExportRequest:
+      type: object
+      description: 成果报送导出（R-18，教育部/科技部年报）
+      properties:
+        year:         { type: integer }
+        output_types: { type: array, items: { type: string, enum: [PAPER, PATENT, SOFTWARE, STANDARD, AWARD, BOOK, DATASET, CONFERENCE] } }
+        department_id: { type: integer, format: int64 }
+        format:       { type: string, enum: [XLSX, PDF, DOCX], default: XLSX }
+        template_code: { type: string, description: 套打模板编码（sys_print_template） }
+
+    Error:
+      type: object
+      description: 业务错误（HTTP 表达传输层，code 非 0 表达业务错误）
+      properties:
+        code:    { type: integer }
+        message: { type: string }
+        traceId: { type: string }
+
+  responses:
+    Ok:
+      description: 成功
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    BadRequest:
+      description: 参数校验失败
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    Forbidden:
+      description: 越权（可见性/密级/权限隔离，见 detail §7）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    TooManyRequests:
+      description: 限流（普通 100/min，AI 20/min）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /output:
+    get:
+      tags: [output]
+      operationId: listOutputs
+      summary: 成果列表（按类型/年度/项目筛选）
+      description: 支持 output_type、year、project_id、source、claim_status、keyword 组合过滤；分页 page/size。
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+        - { name: output_type, in: query, schema: { type: string, enum: [PAPER, PATENT, SOFTWARE, STANDARD, AWARD, BOOK, DATASET, CONFERENCE, NEW_VARIETY, LAYOUT, APPRAISAL, HONOR] } }
+        - { name: year, in: query, schema: { type: integer } }
+        - { name: project_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: source, in: query, schema: { type: string, enum: [CNKI, WOS, SCOPUS, WANFANG, CNIPA, CROSSREF, ALTMETRIC, MANUAL, FETCH] } }
+        - { name: claim_status, in: query, schema: { type: string, enum: [UNCLAIMED, PENDING, CLAIMED, REJECTED, NOT_MINE, DOUBTFUL] } }
+        - { name: keyword, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: 分页成果列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PageResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    post:
+      tags: [output]
+      operationId: createOutput
+      summary: 手动录入成果（R-02）
+      description: 落 MANUAL_DRAFT/PENDING_REVIEW，经审核后进入 CLAIMED；需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OutputCreateRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /output/mine:
+    get:
+      tags: [output]
+      operationId: listMyOutputs
+      summary: 我的成果（R-STAFF/PI 视角）
+      description: 按当前用户 authors.user_id 过滤；返回年度成果数、被引总数、待认领数汇总。
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+        - { name: output_type, in: query, schema: { type: string, enum: [PAPER, PATENT, SOFTWARE, STANDARD, AWARD, BOOK, DATASET, CONFERENCE] } }
+        - { name: year, in: query, schema: { type: integer } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+
+  /output/pending-claim:
+    get:
+      tags: [claim]
+      operationId: listPendingClaim
+      summary: 待认领列表（首次登录强引导）
+      description: 返回推送给当前用户的高置信/可疑成果卡片（title/期刊/作者顺序/年份/置信度）。
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+        - { name: min_confidence, in: query, schema: { type: number, format: double, default: 0.7 } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+
+  /output/claim:
+    post:
+      tags: [claim]
+      operationId: claimOutputs
+      summary: 认领成果（支持批量，最多 100 条）
+      description: action=CLAIM，状态迁移 PENDING_CLAIM→CLAIMED，触发 output.claimed→关联项目推荐；需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ClaimRequest' }
+      responses:
+        '200':
+          description: 批量认领结果（逐条）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          batch_id: { type: string }
+                          results:
+                            type: array
+                            items: { $ref: '#/components/schemas/ClaimResultItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /output/reject:
+    post:
+      tags: [claim]
+      operationId: rejectOutputs
+      summary: 拒绝成果（支持批量）
+      description: action=REJECT，状态迁移至 REJECTED；挂名拒绝说明入诚信记录；需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ClaimRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /output/mark-not-mine:
+    post:
+      tags: [claim]
+      operationId: markNotMine
+      summary: 标记非本人（支持批量，反馈训练匹配模型）
+      description: action=MARK_NOT_MINE，claim_status=NOT_MINE，作为 R-04 误召反馈样本回流训练。
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ClaimRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+
+  /output/ai-fill:
+    post:
+      tags: [ai]
+      operationId: aiFill
+      summary: AI 智能录入辅助（R-15，传标题/DOI/专利号）
+      description: LLM + Crossref/专利局组合查询，返回结构化元数据 + 数据源出处 + 置信度；限流 20/min。
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiFillRequest' }
+      responses:
+        '200':
+          description: 结构化补全结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AiFillResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /output/ai-dedup:
+    post:
+      tags: [ai]
+      operationId: aiDedup
+      summary: 查重与诚信核验（R-19）
+      description: SimHash+语义相似度查重 + CNKI 查重/图片 pHash/表格异常识别；结果仅纪检与管理员可见；限流 20/min。
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DedupRequest' }
+      responses:
+        '200':
+          description: 查重与诚信核验报告
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DedupResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /output/{id}/projects:
+    put:
+      tags: [relation]
+      operationId: linkProjects
+      summary: 成果关联项目（R-10，规范化写入 R_OUTPUT_PROJECT）
+      description: 全量设置该成果关联的项目集合；状态迁移 CLAIMED→ASSIGNED_TO_PROJECT；需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/OutputId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProjectLinkRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /output/patents:
+    get:
+      tags: [patent]
+      operationId: listPatents
+      summary: 专利年费/法律状态查询（R-06）
+      description: 按 legal_status、annuity_due_date 区间、application_no 过滤，供维持年限/下次缴费/代理人视图。
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+        - { name: legal_status, in: query, schema: { type: string, enum: [PENDING, EXAMINING, SUBSTANTIVE, GRANTED, ANNUTY_DUE, INVALID, ABANDONED] } }
+        - { name: annuity_due_before, in: query, schema: { type: string, format: date } }
+        - { name: application_no, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: 专利扩展分页列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list: { type: array, items: { $ref: '#/components/schemas/PatentExt' } }
+                          total: { type: integer, format: int64 }
+                          page: { type: integer }
+                          size: { type: integer }
+
+  /output/{id}/metrics:
+    get:
+      tags: [metric]
+      operationId: listMetricSnapshots
+      summary: 成果指标快照（引用/关注度/下载趋势）
+      parameters:
+        - { $ref: '#/components/parameters/OutputId' }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: 快照序列
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/MetricSnapshot' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [metric]
+      operationId: refreshCited
+      summary: 手动/管道触发引用更新（paper.cited.updated）
+      description: 重新拉取外部被引数据，写入当日快照并同步 R_PAPER_EXT.cited_times；需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/OutputId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+
+  /output/export:
+    post:
+      tags: [export]
+      operationId: exportOutputs
+      summary: 成果报送导出（R-18，教育部/科技部年报）
+      description: 按年度/类型/部门导出 XLSX/PDF/DOCX；导出动作写审计 sys_audit_log；需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExportRequest' }
+      responses:
+        '200':
+          description: 导出任务受理（异步返回下载链接）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /output/{id}:
+    get:
+      tags: [output]
+      operationId: getOutput
+      summary: 成果详情（含类型扩展体）
+      description: 按 output_type 返回对应 *_EXT；专利申请中仅发明人+管理员可见（detail §7）。
+      parameters:
+        - { $ref: '#/components/parameters/OutputId' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }

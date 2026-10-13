@@ -1,0 +1,819 @@
+openapi: 3.0.3
+info:
+  title: 科研管理系统 · 02 项目过程管理（E）接口契约
+  version: v1.0
+  description: >-
+    执行域项目过程管理模块 E（Execution）对外 REST 契约，自包含、可独立导入 Swagger/Postman。
+    字段名与 02-项目过程管理-E.ddl.sql 对齐；状态/枚举取值以 design/README.md §4 状态 token 登记表为准。
+    约定：统一响应包裹 ApiResponse；分页 page(1-based)+size(默认20/上限200)；
+    认证 Bearer JWT；所有 POST/PUT/DELETE 支持 Idempotency-Key 请求头（UUID 去重）；
+    限流 普通 100 req/min、AI 接口 20 req/min（429）。code 非 0 为业务错误。
+servers:
+  - url: /api/v1
+    description: 统一版本前缀 v1，模块路径 /project
+tags:
+  - name: Project
+    description: 项目台账与详情（E-01）
+  - name: Task
+    description: WBS 任务分解与更新（E-02/E-03）
+  - name: Progress
+    description: 进度填报与阶段材料（E-04）
+  - name: MidCheck
+    description: 中检计划与执行（E-06）
+  - name: Change
+    description: 变更管理与影响分析（E-07）
+  - name: FinalAccept
+    description: 结题申请与验收（E-08）
+  - name: Health
+    description: 健康度评分与历史（E-10）
+  - name: Risk
+    description: AI 风险预警（E-11）
+  - name: Archive
+    description: 归档清单校验（E-15）
+  - name: Trace
+    description: 全程双向追溯链（E-17，引用 e_trace_node）
+
+security:
+  - bearerAuth: []
+
+paths:
+  /project/mine:
+    get:
+      tags: [Project]
+      summary: 我的项目列表（PI/成员视角）
+      description: 返回当前用户负责或参与的项目；可按类型/部门/时间窗/状态过滤。PI 视角含经费余额、任务到期、健康分。
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - { in: query, name: project_type, schema: { type: string }, description: 项目类型（sys_dict project_type） }
+        - { in: query, name: department_id, schema: { type: integer, format: int64 } }
+        - { in: query, name: status, schema: { $ref: '#/components/schemas/ProjectStatus' } }
+        - { in: query, name: role, schema: { type: string, enum: [PI, MEMBER, ALL], default: ALL }, description: PI=我负责 / MEMBER=我参与 / ALL }
+        - { in: query, name: start_from, schema: { type: string, format: date } }
+        - { in: query, name: start_to, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: 分页项目列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/EProject' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /project/{id}:
+    get:
+      tags: [Project]
+      summary: 项目详情
+      description: 概览 + KPI（经费执行率/里程碑完成率/成果数）+ 时间线关键节点 + AI 项目状态摘要。经费/成果视图内嵌引用 03/04，不重存。
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdPath'
+      responses:
+        '200':
+          description: 项目详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/EProjectDetail' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /project/{id}/tasks/{taskId}:
+    put:
+      tags: [Task]
+      summary: 更新任务（完成度/起止/负责人/依赖）
+      description: PI 可改全部任务，成员仅可改自己负责的任务。改期或调整进度触发健康度实时刷新与里程碑重算。
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdPath'
+        - { in: path, name: taskId, required: true, schema: { type: integer, format: int64 } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ETaskUpdate' }
+      responses:
+        '200':
+          description: 更新后的任务
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ETask' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /project/{id}/progress-report:
+    post:
+      tags: [Progress]
+      summary: 提交进度填报
+      description: PI 提交季度/半年/年度进度（自报/中检/年度）。附件引用 E_PROJECT_DOC.id。触发 project.status.changed 与 health 刷新。
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdPath'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EProgressReportCreate' }
+      responses:
+        '200':
+          description: 生成的进度报告
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/EProgressReport' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /project/{id}/mid-check:
+    post:
+      tags: [MidCheck]
+      summary: 发起 / 提交中检
+      description: >-
+        管理员发起中检（action=INITIATE）建立计划与指派专家；专家在线打分并提交结论（action=SUBMIT，
+        conclusion=CONTINUE/CORRECT/TERMINATE）。结论=整改时写 correct_deadline 并置项目 CORRECTING、冻结支出。
+        支持 AI 起草中检报告草稿（E-13，见 ai_draft）。
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdPath'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EMidCheckSubmit' }
+      responses:
+        '200':
+          description: 中检记录
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/EMidCheck' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /project/{id}/change-request:
+    post:
+      tags: [Change]
+      summary: 变更申请（延期/预算/成员/题目/范围）
+      description: >-
+        提交后系统自动做影响分析（返回 impact_analysis：经费调整前后对比、里程碑影响、需重签任务书提示）。
+        逐级审批通过后相关预算/时间/成员自动同步（E-USR-09）。预算变更与实支出冲突时 conflict_flag=1，阻止生效并回退。
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdPath'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EChangeRequestCreate' }
+      responses:
+        '200':
+          description: 变更单（含影响分析结果）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/EChangeRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /project/{id}/change-request/{changeId}/approve:
+    post:
+      tags: [Change]
+      summary: 变更审批 / 生效
+      description: 管理员逐级审批；APPROVED 后触发生效回写 E_PROJECT 与预算，写历史快照，通知相关方。
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdPath'
+        - { in: path, name: changeId, required: true, schema: { type: integer, format: int64 } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [APPROVED, REJECTED, RETURNED] }
+                comment: { type: string }
+      responses:
+        '200':
+          description: 审批结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /project/{id}/final-accept:
+    post:
+      tags: [FinalAccept]
+      summary: 结题申请与验收提交
+      description: >-
+        PI 发起结题申请（apply_at）；技术验收与财务验收并行（expert_ids + finance_report_id 引用 03 决算）。
+        提交前强制调用归档清单校验（E-15），必交项缺失返回 409 拦截。结论 PASS/PASS_WITH_CONDITIONS/FAIL。
+        通过后项目转 CLOSED 并发 project.completed 事件触发 03 决算。支持 AI 起草结题报告（E-14）。
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdPath'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EFinalAcceptSubmit' }
+      responses:
+        '200':
+          description: 结题验收单
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/EFinalAccept' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /project/{id}/health-score:
+    get:
+      tags: [Health]
+      summary: 健康度历史查询（日切快照）
+      description: 按 from/to 区间返回每日/事件快照序列，含分量、扣分与 AI 归因，可回溯任意日期状态。
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdPath'
+        - { in: query, name: from, schema: { type: string, format: date } }
+        - { in: query, name: to,   schema: { type: string, format: date } }
+        - { in: query, name: trigger_source, schema: { type: string, enum: [ETL, EVENT] } }
+      responses:
+        '200':
+          description: 健康度历史序列
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/EHealthHistory' }
+
+  /project/{id}/risk-warnings:
+    get:
+      tags: [Risk]
+      summary: 风险预警查询
+      description: 返回确定性规则 + XGBoost 预测 + LLM 归因混合生成的预警列表；每条须被 PI/管理员确认或标记误报（闭环反馈训练）。
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdPath'
+        - { in: query, name: level, schema: { $ref: '#/components/schemas/RiskLevel' } }
+        - { in: query, name: acknowledged, schema: { type: boolean } }
+      responses:
+        '200':
+          description: 风险预警列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/ERiskWarning' }
+
+  /project/{id}/risk-warnings/{warningId}/ack:
+    post:
+      tags: [Risk]
+      summary: 预警处置（确认 / 误报）
+      description: PI 或管理员对预警处置；ACK=确认整改，FALSE_POSITIVE=标记误报（回流训练）。
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdPath'
+        - { in: path, name: warningId, required: true, schema: { type: integer, format: int64 } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [disposition]
+              properties:
+                disposition: { type: string, enum: [ACK, FALSE_POSITIVE] }
+                comment: { type: string }
+      responses:
+        '200':
+          description: 处置结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+
+  /project/{id}/archive-checklist:
+    get:
+      tags: [Archive]
+      summary: 归档清单查询
+      description: 返回按 project_type + stage 套用的清单模板实例化结果，含各清单项上传状态与完成度。
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdPath'
+        - { in: query, name: stage, schema: { $ref: '#/components/schemas/ArchiveStage' } }
+      responses:
+        '200':
+          description: 归档清单实例
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/EArchiveChecklist' }
+
+  /project/{id}/archive-checklist/validate:
+    post:
+      tags: [Archive]
+      summary: 归档清单校验（缺项拦截）
+      description: 逐项比对已上传文档（mime 校验）与必交清单，返回缺项 blocked_items；未齐则 status=BLOCKED，结题/验收被拦截。
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdPath'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stage]
+              properties:
+                stage: { $ref: '#/components/schemas/ArchiveStage' }
+      responses:
+        '200':
+          description: 校验结果（PASSED / BLOCKED）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/EArchiveChecklist' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /project/{id}/trace:
+    get:
+      tags: [Trace]
+      summary: 全程双向追溯链查询（引用 e_trace_node）
+      description: >-
+        按 trace_id 组织端到端有向链（申报→合同→采购→经费→成果→资产→归档），支持正向/反向回溯。
+        数据源为 common e_trace_node，本模块不重复建表，仅聚合。审计角色全量只读。
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdPath'
+        - { in: query, name: direction, schema: { type: string, enum: [FORWARD, BACKWARD], default: FORWARD } }
+        - { in: query, name: object_type, schema: { type: string }, description: 按节点对象类型过滤 APPLICATION/CONTRACT/ORDER/EXPENSE/ASSET/... }
+      responses:
+        '200':
+          description: 追溯节点链
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/TraceNode' }
+
+  /project/{id}/tasks:
+    get:
+      tags: [Task]
+      summary: 项目任务与里程碑（列表/甘特数据源）
+      description: 返回 WBS 树 + 里程碑；甘特视图 500 任务渲染 < 1s（NFR）。
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdPath'
+        - { in: query, name: view, schema: { type: string, enum: [LIST, GANTT, BOARD], default: LIST } }
+      responses:
+        '200':
+          description: 任务树与里程碑
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          tasks:
+                            type: array
+                            items: { $ref: '#/components/schemas/ETask' }
+                          milestones:
+                            type: array
+                            items: { $ref: '#/components/schemas/EMilestone' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    Size:
+      name: size
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+    ProjectIdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+      description: 项目 id（E_PROJECT.id）
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string, format: uuid }
+      description: 幂等键，服务端缓存去重（POST/PUT/DELETE）
+
+  responses:
+    Unauthorized:
+      description: 未认证 / Token 失效
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    Forbidden:
+      description: 越权访问（数据可见性矩阵拦截）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    Conflict:
+      description: 业务冲突（变更回退/归档缺项拦截/状态非法迁移），code 非 0
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    ValidationFailed:
+      description: 参数校验失败
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+
+  schemas:
+    ApiResponse:
+      type: object
+      description: 统一响应包裹
+      required: [code, message]
+      properties:
+        code: { type: integer, description: '0=成功，非 0=业务错误' }
+        message: { type: string }
+        data: { type: object, nullable: true }
+        traceId: { type: string }
+        timestamp: { type: integer, format: int64 }
+
+    PageResult:
+      type: object
+      required: [list, total, page, size]
+      properties:
+        list: { type: array, items: { type: object } }
+        total: { type: integer, format: int64 }
+        page: { type: integer }
+        size: { type: integer }
+
+    ProjectStatus:
+      type: string
+      description: 项目生命周期状态（README §4 E-项目）
+      enum: [EXECUTING, MID_CHECK, CHANGING, CORRECTING, DELAYED, COMPLETING, CLOSED, TERMINATED]
+    RiskLevel:
+      type: string
+      enum: [HIGH, MED, LOW]
+    MidCheckConclusion:
+      type: string
+      enum: [CONTINUE, CORRECT, TERMINATE]
+    FinalConclusion:
+      type: string
+      enum: [PASS, PASS_WITH_CONDITIONS, FAIL]
+    ChangeType:
+      type: string
+      enum: [DELAY, BUDGET, MEMBER, TITLE, SCOPE]
+    ArchiveStage:
+      type: string
+      enum: [APPLICATION, MID_CHECK, FINAL]
+
+    EProject:
+      type: object
+      description: 执行态项目（对应 E_PROJECT）
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string, description: 'PRJ-年-序' }
+        tenantId: { type: integer, format: int64 }
+        legalEntityId: { type: integer, format: int64 }
+        status: { $ref: '#/components/schemas/ProjectStatus' }
+        applicationId: { type: integer, format: int64, description: 逻辑外键 01 P_APPLICATION }
+        title: { type: string }
+        projectType: { type: string }
+        piUserId: { type: integer, format: int64 }
+        memberIds: { type: array, items: { type: integer, format: int64 } }
+        departmentId: { type: integer, format: int64 }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+        actualEndDate: { type: string, format: date }
+        totalBudget: { type: string, description: 'NUMERIC(18,2)' }
+        receivedAmount: { type: string, description: 'NUMERIC(18,2)' }
+        spentAmount: { type: string, description: 'NUMERIC(18,2)' }
+        healthScore: { type: integer, minimum: 0, maximum: 100 }
+        riskLevel: { $ref: '#/components/schemas/RiskLevel' }
+        ethicsCaseId: { type: integer, format: int64, nullable: true }
+        securityLevel: { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    EProjectDetail:
+      allOf:
+        - $ref: '#/components/schemas/EProject'
+        - type: object
+          properties:
+            kpi:
+              type: object
+              properties:
+                budgetExecRate: { type: string, description: 经费执行率=spent/received }
+                milestoneCompletionRate: { type: string }
+                outputCount: { type: integer, description: 成果数（只读引用 04 R） }
+            timeline:
+              type: array
+              description: 立项起关键节点（评审通过/任务书签/中检/变更/里程碑/结题）
+              items:
+                type: object
+                properties:
+                  node: { type: string }
+                  occurredAt: { type: string, format: date-time }
+                  actor: { type: integer, format: int64 }
+            aiSummary: { type: string, description: AI 项目状态摘要（自然语言） }
+            tasks:
+              type: array
+              items: { $ref: '#/components/schemas/ETask' }
+            milestones:
+              type: array
+              items: { $ref: '#/components/schemas/EMilestone' }
+
+    ETask:
+      type: object
+      description: WBS 任务（对应 E_TASK）
+      properties:
+        id: { type: integer, format: int64 }
+        projectId: { type: integer, format: int64 }
+        parentTaskId: { type: integer, format: int64, nullable: true }
+        name: { type: string }
+        description: { type: string }
+        ownerUserId: { type: integer, format: int64 }
+        memberIds: { type: array, items: { type: integer, format: int64 } }
+        depTaskIds: { type: array, items: { type: integer, format: int64 } }
+        plannedStart: { type: string, format: date }
+        plannedEnd: { type: string, format: date }
+        actualStart: { type: string, format: date }
+        actualEnd: { type: string, format: date }
+        progressPercent: { type: integer, minimum: 0, maximum: 100 }
+        weight: { type: string, description: 'NUMERIC(6,4) 0-1' }
+        status: { type: string, enum: [PENDING, IN_PROGRESS, COMPLETED, OVERDUE, CANCELLED] }
+
+    ETaskUpdate:
+      type: object
+      properties:
+        progressPercent: { type: integer, minimum: 0, maximum: 100 }
+        actualStart: { type: string, format: date }
+        actualEnd: { type: string, format: date }
+        ownerUserId: { type: integer, format: int64 }
+        plannedStart: { type: string, format: date }
+        plannedEnd: { type: string, format: date }
+        status: { type: string, enum: [PENDING, IN_PROGRESS, COMPLETED, OVERDUE, CANCELLED] }
+
+    EMilestone:
+      type: object
+      description: 里程碑（对应 E_MILESTONE）
+      properties:
+        id: { type: integer, format: int64 }
+        projectId: { type: integer, format: int64 }
+        name: { type: string }
+        dueDate: { type: string, format: date }
+        actualDate: { type: string, format: date }
+        evidenceDocs: { type: array, items: { type: integer, format: int64 } }
+        ownerUserId: { type: integer, format: int64 }
+        deliverableType: { type: string }
+        weight: { type: string, description: 'NUMERIC(6,4)' }
+        status: { type: string, enum: [PENDING, ACHIEVED, OVERDUE, SKIPPED] }
+
+    EProgressReportCreate:
+      type: object
+      required: [period, reportType, progressPercent]
+      properties:
+        period: { type: string, enum: [QUARTER, HALF_YEAR, YEAR] }
+        reportType: { type: string, enum: [SELF, MID_CHECK, ANNUAL] }
+        contentRich: { type: string }
+        progressPercent: { type: integer, minimum: 0, maximum: 100 }
+        issuesText: { type: string }
+        nextPlan: { type: string }
+        attachmentIds: { type: array, items: { type: integer, format: int64 } }
+
+    EProgressReport:
+      allOf:
+        - $ref: '#/components/schemas/EProgressReportCreate'
+        - type: object
+          properties:
+            id: { type: integer, format: int64 }
+            projectId: { type: integer, format: int64 }
+            status: { type: string, enum: [DRAFT, SUBMITTED, REVIEWED, RETURNED] }
+            submittedAt: { type: string, format: date-time }
+
+    EMidCheckSubmit:
+      type: object
+      required: [action]
+      description: action=INITIATE 由管理员发起；action=SUBMIT 由专家提交打分与结论
+      properties:
+        action: { type: string, enum: [INITIATE, SUBMIT] }
+        checkRound: { type: integer }
+        checkDate: { type: string, format: date }
+        planId: { type: integer, format: int64 }
+        templateId: { type: integer, format: int64 }
+        expertIds: { type: array, items: { type: integer, format: int64 } }
+        conclusion: { $ref: '#/components/schemas/MidCheckConclusion' }
+        scoreDetail: { type: object, description: 多维度评分明细 JSON }
+        reportId: { type: integer, format: int64 }
+        correctDeadline: { type: string, format: date }
+        aiDraft: { type: boolean, description: E-13 一键 AI 起草中检报告草稿（限流 20/min） }
+
+    EMidCheck:
+      type: object
+      description: 中检记录（对应 E_MID_CHECK）
+      properties:
+        id: { type: integer, format: int64 }
+        projectId: { type: integer, format: int64 }
+        checkRound: { type: integer }
+        checkDate: { type: string, format: date }
+        planId: { type: integer, format: int64 }
+        expertIds: { type: array, items: { type: integer, format: int64 } }
+        conclusion: { $ref: '#/components/schemas/MidCheckConclusion' }
+        scoreDetail: { type: object }
+        reportId: { type: integer, format: int64 }
+        correctDeadline: { type: string, format: date }
+        status: { type: string, enum: [PLANNED, IN_REVIEW, SCORED, CONCLUDED, CORRECTING] }
+
+    EChangeRequestCreate:
+      type: object
+      required: [changeType, newValue, reason]
+      properties:
+        changeType: { $ref: '#/components/schemas/ChangeType' }
+        oldValue: { type: object, description: 变更前值（可留空由系统抓取） }
+        newValue: { type: object, description: 变更后值 }
+        reason: { type: string }
+        effectiveFrom: { type: string, format: date }
+
+    EChangeRequest:
+      type: object
+      description: 变更单（对应 E_CHANGE_REQUEST）
+      properties:
+        id: { type: integer, format: int64 }
+        projectId: { type: integer, format: int64 }
+        changeType: { $ref: '#/components/schemas/ChangeType' }
+        oldValue: { type: object }
+        newValue: { type: object }
+        reason: { type: string }
+        effectiveFrom: { type: string, format: date }
+        approvalStatus: { type: string, enum: [PENDING, APPROVING, APPROVED, REJECTED] }
+        approvedAt: { type: string, format: date-time }
+        impactAnalysis:
+          type: object
+          description: 影响分析结果
+          properties:
+            budgetDiff: { type: array, items: { type: object }, description: 经费调整前后对比表 }
+            milestoneImpact: { type: array, items: { type: object } }
+            resignTaskBook: { type: boolean, description: 是否需重新签订任务书 }
+        conflictFlag: { type: integer, description: '1=预算变更与实支出冲突，阻止生效并回退' }
+        status: { type: string, enum: [DRAFT, SUBMITTED, APPROVING, APPROVED, REJECTED, RETURNED, ROLLED_BACK, EFFECTIVE] }
+
+    EFinalAcceptSubmit:
+      type: object
+      required: [applyAt]
+      properties:
+        applyAt: { type: string, format: date-time }
+        expertIds: { type: array, items: { type: integer, format: int64 } }
+        financeReportId: { type: integer, format: int64, description: 逻辑外键 03 F 决算报告 }
+        attachmentIds: { type: array, items: { type: integer, format: int64 } }
+        conclusion: { $ref: '#/components/schemas/FinalConclusion' }
+        aiDraft: { type: boolean, description: E-14 一键 AI 起草结题报告草稿 }
+
+    EFinalAccept:
+      type: object
+      description: 结题验收单（对应 E_FINAL_ACCEPT）
+      properties:
+        id: { type: integer, format: int64 }
+        projectId: { type: integer, format: int64 }
+        applyAt: { type: string, format: date-time }
+        acceptAt: { type: string, format: date-time }
+        outputSummary: { type: object, description: 成果清单汇总（只读引用 04 R） }
+        financeReportId: { type: integer, format: int64 }
+        expertIds: { type: array, items: { type: integer, format: int64 } }
+        conclusion: { $ref: '#/components/schemas/FinalConclusion' }
+        attachmentIds: { type: array, items: { type: integer, format: int64 } }
+        archiveChecklistId: { type: integer, format: int64 }
+        status: { type: string, enum: [APPLIED, TECH_REVIEW, FIN_REVIEW, APPROVED, REJECTED, NEED_SUPPLEMENT] }
+
+    EHealthHistory:
+      type: object
+      description: 健康度快照（对应 E_HEALTH_HISTORY）
+      properties:
+        id: { type: integer, format: int64 }
+        projectId: { type: integer, format: int64 }
+        snapshotDate: { type: string, format: date }
+        progressScore: { type: string, description: 'NUMERIC(6,4) 0-1' }
+        budgetScore: { type: string, description: 'NUMERIC(6,4) 0-1' }
+        outputScore: { type: string, description: 'NUMERIC(6,4) 0-1' }
+        riskScore: { type: string, description: 'NUMERIC(6,4) 0-1' }
+        riskPenalty: { type: string, description: 扣分合计 }
+        totalScore: { type: integer, minimum: 0, maximum: 100 }
+        breakdown: { type: object, description: 权重/分量/扣分来源明细 }
+        aiReason: { type: string, description: AI 一句话归因（分数下降时） }
+        triggerSource: { type: string, enum: [ETL, EVENT] }
+
+    ERiskWarning:
+      type: object
+      description: AI 风险预警（E-11）
+      properties:
+        warningId: { type: integer, format: int64 }
+        projectId: { type: integer, format: int64 }
+        level: { $ref: '#/components/schemas/RiskLevel' }
+        source: { type: string, enum: [RULE, XGBOOST, LLM], description: 确定性规则/预测模型/大模型归因 }
+        ruleCode: { type: string, description: 命中规则号（可解释） }
+        title: { type: string }
+        suggestion: { type: string, description: LLM 生成的建议动作（自然语言） }
+        detectedAt: { type: string, format: date-time }
+        disposition: { type: string, enum: [PENDING, ACK, FALSE_POSITIVE] }
+
+    EArchiveChecklist:
+      type: object
+      description: 归档清单实例（对应 E_ARCHIVE_CHECKLIST）
+      properties:
+        id: { type: integer, format: int64 }
+        projectId: { type: integer, format: int64 }
+        projectType: { type: string }
+        stage: { $ref: '#/components/schemas/ArchiveStage' }
+        checklistJson:
+          type: array
+          items:
+            type: object
+            properties:
+              item: { type: string }
+              required: { type: boolean }
+              mime: { type: string }
+              docId: { type: integer, format: int64 }
+              uploaded: { type: boolean }
+        requiredCount: { type: integer }
+        completedCount: { type: integer }
+        completeness: { type: string, description: 'NUMERIC(6,4) 完成度' }
+        blockedItems: { type: array, items: { type: string }, description: 缺项清单（拦截依据） }
+        status: { type: string, enum: [TEMPLATE, IN_PROGRESS, PASSED, BLOCKED] }
+
+    TraceNode:
+      type: object
+      description: 追溯节点（引用 common e_trace_node，本模块不重复建表）
+      properties:
+        traceId: { type: string }
+        nodeSeq: { type: integer }
+        prevNodeId: { type: integer, format: int64, nullable: true }
+        objectType: { type: string, description: APPLICATION/CONTRACT/ORDER/EXPENSE/ASSET/... }
+        objectId: { type: integer, format: int64 }
+        bizCode: { type: string }
+        actorId: { type: integer, format: int64 }
+        action: { type: string }
+        occurredAt: { type: string, format: date-time }

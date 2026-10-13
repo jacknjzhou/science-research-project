@@ -1,0 +1,30 @@
+{
+  "name": "eplugger-ark-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "科研管理系统 · 契约驱动前端（Vite + Vue3 + TS + 契约mock）",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@faker-js/faker": "^8.4.1",
+    "js-yaml": "^4.1.0",
+    "vue": "^3.4.27",
+    "vue-router": "^4.3.2"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^16.18.97",
+    "@vitejs/plugin-vue": "^4.6.2",
+    "openapi-typescript": "^6.7.6",
+    "typescript": "^5.3.3",
+    "vite": "^4.5.3",
+    "vue-tsc": "^1.8.27"
+  },
+  "engines": {
+    "node": ">=16.14"
+  }
+}

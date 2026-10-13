@@ -1,0 +1,972 @@
+openapi: 3.0.3
+info:
+  title: 科研管理系统 · 09 采购与合同管理 API（模块 G）
+  version: "1.0.0"
+  description: >-
+    M1 核心模块 G（Procurement & Contract）对外 REST 契约。自包含 OpenAPI 3.0.3，可直接导入 Swagger Editor / Postman。
+    覆盖 P2P 端到端：创建采购申请（含预算冻结）→ 采购方式判定 → 发标/定标 → 合同起草/评审/签署 →
+    AI 合同解析/风险审查 → 付款计划与付款执行回调（→F）→ 到货转资产（→10）。
+    统一响应包裹 ApiResponse{code,message,data,traceId,timestamp}；分页 PageResult{list,total,page,size}；
+    认证 Bearer JWT；所有 POST/PUT 支持 Idempotency-Key 幂等头。普通接口限流 100 req/min，
+    AI 接口（/contract/*/ai-*）限流 20 req/min（超限返回 429）。
+    实体 schema 字段名与 DDL 列名一致（snake_case），枚举取 design/README.md §4 状态 token。
+    涉密单据（security_level≥SECRET）仅涉密网可见；非涉密域访问一律 403 + 审计告警（PRD 2.13）。
+    金额 NUMERIC(18,2) 以字符串承载精度（单位元）。业务错误码见 components.responses 与 detail.md §8。
+servers:
+  - url: https://{host}/api/v1
+    variables:
+      host:
+        default: api.institute.example.com
+        description: 院所科研管理系统网关域名
+tags:
+  - name: requisition
+    description: 采购申请创建/预算冻结/方式判定/台账（G-01/G-02/G-03）
+  - name: bid
+    description: 招标/比价/询价·发标·定标（G-05）
+  - name: contract
+    description: 合同全生命周期·评审·签署·追溯（G-07/G-10/G-11/G-12）
+  - name: ai
+    description: AI 合同解析/风险审查（G-13/G-14，只回吐建议）
+  - name: payment
+    description: 付款计划与执行回调（G-08/G-09，联动 F）
+  - name: asset
+    description: 到货验收转资产/耗材（G-17，联动 10）
+  - name: supplier
+    description: 供应商/外协单位库查询（G-04/G-09）
+
+security:
+  - bearerAuth: []
+
+paths:
+  /procurement/requisitions:
+    post:
+      tags: [requisition]
+      summary: 创建采购申请（含预算冻结，G-01/G-02）
+      description: >-
+        提交即在对应经费科目冻结 est_amount（联动 F-10）：冻结失败（超预算/负余额）返回 409（业务码 40910）拦截。
+        金额输入即时触发 G-03 采购方式判定，落 purchase_way + way_basis_rule_id + policy_pack_id，人不越权。
+        幂等：Idempotency-Key 去重，避免重复冻结。code 前缀 REQ。涉密申请 security_level 受可见域控制。
+      operationId: createRequisition
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RequisitionRequest' }
+      responses:
+        '200':
+          description: 创建后的采购申请（含判定结果与冻结额）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Requisition' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [requisition]
+      description: 采购申请台账（多维筛选：项目/类别/方式/状态/法人；分页）。
+      summary: 采购申请列表（G-12）
+      operationId: listRequisitions
+      parameters:
+        - name: project_id
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: category
+          in: query
+          schema: { type: string, enum: ['设备','材料','试剂耗材','服务','软件','外协'] }
+        - name: purchase_way
+          in: query
+          schema: { $ref: '#/components/schemas/PurchaseWay' }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/RequisitionStatus' }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 分页采购申请列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/Requisition' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /procurement/requisitions/{id}/way:
+    get:
+      tags: [requisition]
+      summary: 采购方式判定（G-03）
+      description: >-
+        按金额 + 经费性质 + 命中制度包，返回应采用的采购方式、命中规则号 way_basis_rule_id、制度依据条款（clause_ref）与判定明细。
+        确定性、可解释、可复算；R-AUDITOR 可读+复算（PRD §9）。
+      operationId: getPurchaseWay
+      parameters: [ { $ref: '#/components/parameters/PathId' } ]
+      responses:
+        '200':
+          description: 采购方式判定结果与依据
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/WayVerdict' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /procurement/bids:
+    post:
+      tags: [bid]
+      summary: 发标/组织比价（G-05）
+      description: >-
+        由 WAY_DECIDED 的申请发起招标/比价/询价，置申请 status=BIDDING，新建 G_BID(status=PUBLICIZING)。
+        bids_json 记录各家报价与评分；发标前校验供应商入库且非黑名单。code 沿用 REQ 关联。
+      operationId: publishBid
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BidRequest' }
+      responses:
+        '200':
+          description: 创建的招标/比价记录
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Bid' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /procurement/bids/{id}/award:
+    post:
+      tags: [bid]
+      summary: 定标（G-05）
+      description: >-
+        公示通过后置 publicity_status=AWARDED，回填 winner_supplier_id/saving_amount/winner_reason，落 e_trace_node。
+        中标弃标/废标回退：申请释放冻结预算、合同 TO_SIGN→REVIEW，评标记录保留并标注原因（业务码 40912，PRD 11）。
+      operationId: awardBid
+      parameters:
+        - { $ref: '#/components/parameters/PathId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [winner_supplier_id]
+              properties:
+                winner_supplier_id: { type: integer, format: int64, description: '中标供应商（须 IN_LIBRARY 且非黑名单）' }
+                winner_reason:      { type: string }
+                saving_amount:      { type: string, description: '节资金额=预算-中标价' }
+                voided:             { type: boolean, description: 'true=废标/弃标，触发回退并释放冻结' }
+                void_reason:        { type: string }
+      responses:
+        '200':
+          description: 定标后的招标记录
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Bid' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /contract:
+    post:
+      tags: [contract]
+      summary: 合同创建（G-07/G-10）
+      description: >-
+        起草合同（采购/外协分包/横向委托/技术服务/其他）。相对方 supplier_id 必须 IN_LIBRARY 且非黑名单、资质未过期（业务码 40913 拦截）。
+        contract_type=外协分包 派生 G_OUTSOURCE 台账。外协范围≈项目全部任务触发整体转包红线（40914，升级审批）。code 前缀 CON/OSC。
+      operationId: createContract
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ContractRequest' }
+      responses:
+        '200':
+          description: 创建后的合同
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Contract' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /contract/{id}/review:
+    put:
+      tags: [contract]
+      summary: 合同评审（技术/法务/财务/密级，G-07/G-08）
+      description: >-
+        四方意见在线汇总留痕；驳回 DRAFT↔REVIEW；评审通过 REVIEW→TO_SIGN。高风险 AI 风险项必须法务人工签署意见方可通过（AI 不得单独放行，PRD 2.4/2.10）。
+      operationId: reviewContract
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision:  { type: string, enum: [APPROVE, REJECT, RETURN], description: 'APPROVE→TO_SIGN/REJECT→TERMINATED/RETURN→DRAFT' }
+                tech_opinion:     { type: string }
+                legal_opinion:    { type: string }
+                finance_opinion:  { type: string }
+                secrecy_opinion:  { type: string, description: '密级审查意见' }
+                legal_signed_by:  { type: integer, format: int64, description: '高风险强制法务签署 user_id' }
+      responses:
+        '200':
+          description: 评审后的合同
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Contract' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /contract/{id}/sign:
+    post:
+      tags: [contract]
+      summary: 合同签署（电子签章/用印，G-11）
+      description: >-
+        经 svc-integration-seal 调第三方 CA 电子签章，TO_SIGN→ACTIVE（联动 P-12）。CA 不可用可降级 sign_method=纸质并补传扫描件（PRD 11）。
+        签署完成后落 e_trace_node 并触发付款计划生成钩子。
+      operationId: signContract
+      parameters:
+        - { $ref: '#/components/parameters/PathId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sign_method]
+              properties:
+                sign_method: { type: string, enum: ['电子签','异地','纸质'] }
+                signed_at:   { type: string, format: date }
+                seal_record: { type: object, description: 'CA 签章回执/证书序列号' }
+                scan_url:    { type: string, description: '纸质降级补传扫描件地址' }
+      responses:
+        '200':
+          description: 签署后的合同（ACTIVE）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Contract' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /contract/{id}/ai-parse:
+    post:
+      tags: [ai]
+      summary: AI 合同智能解析（G-13）
+      description: >-
+        读取合同 PDF/Word，抽取 {party_a,party_b,amount,currency,pay_terms,deliverables,period,penalty} 写入 ai_parse_json，
+        逐字段标注来源（页码/原文）与置信度。限流 20 req/min；首结果 < 8s。金额/付款等关键项须人工确认后方可进入付款计划（不覆盖已确认数据）。
+      operationId: aiParseContract
+      parameters:
+        - { $ref: '#/components/parameters/PathId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [file_url]
+              properties:
+                file_url: { type: string, description: '合同原件对象存储地址' }
+                context:  { type: object, description: '项目上下文/主数据（供应商、科目）' }
+      responses:
+        '200':
+          description: AI 解析结果（建议，待人工确认）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AiParseResult' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/AiUnavailable' }
+
+  /contract/{id}/ai-risk:
+    post:
+      tags: [ai]
+      summary: AI 合同风险审查（G-14）
+      description: >-
+        规则红线（金额/账期/违约金比例）走 svc-policy；语义风险（知产归属模糊/保密义务缺失）走 LLM+RAG。
+        输出风险卡片列表写入 ai_risk_json，附等级/建议/命中规则号。限流 20 req/min；<5s。风险等级"高"必须法务人工签署意见，AI 不得单独放行。
+      operationId: aiRiskContract
+      parameters:
+        - { $ref: '#/components/parameters/PathId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200':
+          description: 风险审查结果（建议）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AiRiskResult' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/AiUnavailable' }
+
+  /contract/{id}/trace:
+    get:
+      tags: [contract]
+      summary: 合同追溯链（G-12，联动 E-17）
+      description: >-
+        从任一合同/付款正反向追溯至采购申请、方式判定、评标、合同、验收、付款、凭证、资产全链（读 e_trace_node）。
+        R-AUDITOR 全部只读；涉密合同在非涉密域访问返回 403 + 审计告警。
+      operationId: getContractTrace
+      parameters:
+        - { $ref: '#/components/parameters/PathId' }
+        - name: direction
+          in: query
+          description: 追溯方向
+          schema: { type: string, enum: [FORWARD, BACKWARD, BOTH], default: BOTH }
+      responses:
+        '200':
+          description: 端到端追溯链节点列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/TraceChain' }
+        '403': { $ref: '#/components/responses/SecDomainForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /contract/{id}/payment-plan:
+    post:
+      tags: [payment]
+      summary: 付款计划创建（G-08）
+      description: >-
+        按合同 pay_terms_json 生成各阶段付款计划（预付/到货/验收/质保/进度/尾款）。
+        计划累计金额不得超过 G_CONTRACT.amount（含变更），超出返回 409（业务码 40911）。外协付款置 outsource_flag=1 联动 F-22。
+      operationId: createPaymentPlan
+      parameters:
+        - { $ref: '#/components/parameters/PathId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phases]
+              properties:
+                phases:
+                  type: array
+                  items: { $ref: '#/components/schemas/PaymentPlanItem' }
+      responses:
+        '200':
+          description: 生成的付款计划列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/ContractPayment' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /finance/expense:
+    post:
+      tags: [payment]
+      summary: 付款执行回调（→F，G-08）
+      description: >-
+        F 模块付款/凭证回调，回填 paid_amount/pay_date/expense_id/voucher_status；凭证经 F-11 同步（PENDING→SUCCESS）。
+        累计实付不得超过合同额；幂等以 expense_id 去重。落 e_trace_node(EXPENSE)。
+      operationId: paymentCallback
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payment_id, expense_id, paid_amount]
+              properties:
+                payment_id:   { type: integer, format: int64, description: 'G_CONTRACT_PAYMENT.id' }
+                expense_id:   { type: integer, format: int64, description: 'F_EXPENSE.id（逻辑引用→F）' }
+                paid_amount:  { type: string, description: '实付金额 NUMERIC(18,2)' }
+                pay_date:     { type: string, format: date }
+                voucher_status: { type: string, enum: [PENDING, SUCCESS, FAILED, MANUAL] }
+                invoice_url:  { type: string }
+      responses:
+        '200':
+          description: 回调受理，更新付款计划状态
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /asset/from-receipt:
+    post:
+      tags: [asset]
+      summary: 到货验收转资产/耗材（→10，G-17）
+      description: >-
+        采购订单 delivery_status=ACCEPTED 后一键推送生成模块 10 的 A_ASSET（设备）/A_CONSUMABLE（试剂耗材）登记单；
+        成功后置 converted_asset=1，防止重复录入。落 e_trace_node(ASSET)。幂等以 order id 去重。
+      operationId: convertReceiptToAsset
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [order_id]
+              properties:
+                order_id:     { type: integer, format: int64, description: 'G_ORDER.id（delivery_status 须 ACCEPTED）' }
+                target:       { type: string, enum: [ASSET, CONSUMABLE], description: '目标登记类型' }
+                serial_nos:   { type: array, items: { type: string }, description: '序列号清单（资产）' }
+                batch_info:   { type: object, description: '批次/效期（耗材）' }
+      responses:
+        '200':
+          description: 生成的资产/耗材登记单引用
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AssetConvertResult' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /supplier:
+    get:
+      tags: [supplier]
+      summary: 供应商/外协单位库查询（G-04/G-09）
+      description: >-
+        按 type（供应商/外协单位/服务商）、review_status、grade、blacklist 筛选。涉密供应商资质密级受 security_level 可见域控制。
+      operationId: listSuppliers
+      parameters:
+        - name: type
+          in: query
+          schema: { type: string, enum: ['供应商','外协单位','服务商'] }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/SupplierStatus' }
+        - name: grade
+          in: query
+          schema: { type: string, enum: [A, B, C, D] }
+        - name: blacklist
+          in: query
+          schema: { type: integer, enum: [0, 1] }
+        - name: keyword
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 分页供应商/外协单位列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/Supplier' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "Authorization: Bearer <JWT>；刷新走 Refresh Token。"
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: 幂等键（UUID）；服务端缓存去重，重试返回同一结果（防重复冻结/重复签约/重复转资产）。
+      schema: { type: string }
+    Page:
+      name: page
+      in: query
+      required: false
+      description: 页码，1-based。
+      schema: { type: integer, minimum: 1, default: 1 }
+    Size:
+      name: size
+      in: query
+      required: false
+      description: 每页条数，默认 20，上限 200。
+      schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+    PathId:
+      name: id
+      in: path
+      required: true
+      description: 资源主键 id（BIGINT）。
+      schema: { type: integer, format: int64 }
+
+  responses:
+    BadRequest:
+      description: 参数校验失败（业务码 40001）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+          example: { code: 40001, message: "参数校验失败", data: null, traceId: "t-123", timestamp: 1700000000000 }
+    Unauthorized:
+      description: 未认证（业务码 40101）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+          example: { code: 40101, message: "未认证或令牌失效", data: null, traceId: "t-123", timestamp: 1700000000000 }
+    Forbidden:
+      description: >-
+        越权访问（业务码 40301）。含：跨租户越权、非主责法人写、参与法人越权编辑、
+        R-ADMIN 三员模型下无权查看涉密（2.13）、外协/黑名单供应商拦截。
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+          example: { code: 40301, message: "越权访问被拒绝", data: null, traceId: "t-123", timestamp: 1700000000000 }
+    SecDomainForbidden:
+      description: >-
+        涉密单据在非涉密域访问被拒（业务码 40302），并写入 sys_audit_log 审计告警（PRD 2.13）。
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+          example: { code: 40302, message: "涉密单据禁止在非涉密域访问，已记录审计告警", data: null, traceId: "t-123", timestamp: 1700000000000 }
+    NotFound:
+      description: 资源不存在（业务码 40401）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+          example: { code: 40401, message: "资源不存在", data: null, traceId: "t-123", timestamp: 1700000000000 }
+    Conflict:
+      description: >-
+        业务冲突。模块业务码：40910 预算冻结失败（超预算/不允许负余额）；40911 付款累计超合同额（含变更）；
+        40912 中标弃标/废标回退并释放冻结；40913 供应商未入库/黑名单/资质过期禁止新合同；
+        40914 外协整体转包红线；40915 外拨超合同剩余额（F-22）；40916 到货转资产重复录入；40917 拆单化整为零转人工。
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+          example: { code: 40910, message: "预算科目剩余额度不足，冻结失败", data: null, traceId: "t-123", timestamp: 1700000000000 }
+    TooManyRequests:
+      description: 频率超限（业务码 42901；AI 接口 20 req/min）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+          example: { code: 42901, message: "请求过于频繁", data: null, traceId: "t-123", timestamp: 1700000000000 }
+    AiUnavailable:
+      description: AI 服务暂时不可用（业务码 50301；按钮置灰，不阻塞业务，人工填报兜底）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+          example: { code: 50301, message: "AI 服务暂时不可用", data: null, traceId: "t-123", timestamp: 1700000000000 }
+
+  schemas:
+    ApiResponse:
+      type: object
+      description: 统一响应包裹；code=0 表示成功，非 0 为业务错误，HTTP 状态表达传输层。
+      required: [code, message, traceId, timestamp]
+      properties:
+        code:      { type: integer, description: "业务码，0=ok" }
+        message:   { type: string,  description: "提示信息" }
+        data:      { description: "业务数据载荷", nullable: true }
+        traceId:   { type: string,  description: "全链路追踪 ID" }
+        timestamp: { type: integer, format: int64, description: "服务端毫秒时间戳" }
+
+    PageResult:
+      type: object
+      description: 分页数据体（ApiResponse.data）。
+      properties:
+        list:  { type: array, items: { type: object } }
+        total: { type: integer, format: int64 }
+        page:  { type: integer }
+        size:  { type: integer }
+
+    SecurityLevel:
+      type: string
+      description: 涉密等级（design/README.md §2.1 治理列；PRD 2.13）。
+      enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET]
+
+    RequisitionStatus:
+      type: string
+      description: 采购申请状态机 token（design/README.md §4 G 采购申请）。
+      enum: [DRAFT, SUBMITTED, WAY_DECIDED, BIDDING, ORDERED, CANCELLED]
+
+    PurchaseWay:
+      type: string
+      description: G-03 采购方式判定结果。
+      enum: ['公开招标', '邀请招标', '竞争性谈判', '单一来源', '询价', '自行采购']
+
+    SupplierStatus:
+      type: string
+      description: 供应商/外协单位入库状态（design/README.md §4 G 供应商）。
+      enum: [PENDING, IN_LIBRARY, REJECTED, EXPIRED]
+
+    BidStatus:
+      type: string
+      description: 招标/公示状态（design/README.md §4 G 招标）。
+      enum: [PUBLICIZING, AWARDED, CHALLENGE]
+
+    ContractStatus:
+      type: string
+      description: 合同状态机 token（design/README.md §4 G 合同）。
+      enum: [DRAFT, REVIEW, TO_SIGN, ACTIVE, AMENDING, SETTLING, ARCHIVED, TERMINATED]
+
+    OrderStatus:
+      type: string
+      description: 采购订单状态（design/README.md §4 G 订单）。
+      enum: [DRAFT, CONFIRMED, EXECUTING, COMPLETED, CANCELLED]
+
+    DeliveryStatus:
+      type: string
+      description: 到货/验收状态（design/README.md §4 G 到货）。
+      enum: [PENDING, SHIPPED, ARRIVED, ACCEPTED, REJECTED]
+
+    Requisition:
+      type: object
+      description: 采购申请（DDL G_REQUISITION）。
+      properties:
+        id:               { type: integer, format: int64 }
+        code:             { type: string, description: "REQ-年-序" }
+        tenant_id:        { type: integer, format: int64 }
+        legal_entity_id:  { type: integer, format: int64 }
+        security_level:   { $ref: '#/components/schemas/SecurityLevel' }
+        policy_pack_id:   { type: integer, format: int64, nullable: true }
+        status:           { $ref: '#/components/schemas/RequisitionStatus' }
+        creator_id:       { type: integer, format: int64 }
+        modifier_id:      { type: integer, format: int64, nullable: true }
+        created_at:       { type: string, format: date-time }
+        updated_at:       { type: string, format: date-time }
+        remark:           { type: string, nullable: true }
+        project_id:       { type: integer, format: int64 }
+        applicant_id:     { type: integer, format: int64 }
+        category:         { type: string, enum: ['设备','材料','试剂耗材','服务','软件','外协'] }
+        item_name:        { type: string }
+        spec:             { type: string, nullable: true }
+        est_amount:       { type: string, description: "预算金额 NUMERIC(18,2)" }
+        budget_subject_code: { type: string, nullable: true, description: "占用科目（逻辑引用 F_SUBJECT）" }
+        frozen_amount:    { type: string, description: "冻结金额（联动 F-10）" }
+        purchase_way:     { $ref: '#/components/schemas/PurchaseWay' }
+        way_basis_rule_id: { type: integer, format: int64, nullable: true, description: "命中制度规则号" }
+
+    RequisitionRequest:
+      type: object
+      required: [project_id, category, item_name, est_amount, budget_subject_code]
+      properties:
+        project_id:       { type: integer, format: int64 }
+        legal_entity_id:  { type: integer, format: int64 }
+        security_level:   { $ref: '#/components/schemas/SecurityLevel' }
+        applicant_id:     { type: integer, format: int64 }
+        category:         { type: string, enum: ['设备','材料','试剂耗材','服务','软件','外协'] }
+        item_name:        { type: string }
+        spec:             { type: string }
+        est_amount:       { type: string }
+        budget_subject_code: { type: string }
+        remark:           { type: string }
+
+    WayVerdict:
+      type: object
+      description: 采购方式判定结果与依据（G-03，可复算）。
+      properties:
+        requisition_id:   { type: integer, format: int64 }
+        est_amount:       { type: string }
+        fund_nature:      { type: string, description: "经费性质（纵向/横向/自筹等）" }
+        purchase_way:     { $ref: '#/components/schemas/PurchaseWay' }
+        way_basis_rule_id: { type: integer, format: int64, description: "命中规则号（sys_rule_hit.rule_code）" }
+        clause_ref:       { type: string, description: "制度依据条款出处" }
+        policy_pack_id:   { type: integer, format: int64, description: "判定所用制度包快照" }
+        verdict:          { type: string, enum: [PASS, REJECT, WARN] }
+        detail:           { type: object, description: "判定明细（限额阈值/经费性质映射）" }
+
+    Bid:
+      type: object
+      description: 招标/比价记录（DDL G_BID）。
+      properties:
+        id:               { type: integer, format: int64 }
+        code:             { type: string }
+        tenant_id:        { type: integer, format: int64 }
+        legal_entity_id:  { type: integer, format: int64 }
+        security_level:   { $ref: '#/components/schemas/SecurityLevel' }
+        policy_pack_id:   { type: integer, format: int64, nullable: true }
+        status:           { $ref: '#/components/schemas/BidStatus' }
+        created_at:       { type: string, format: date-time }
+        updated_at:       { type: string, format: date-time }
+        requisition_id:   { type: integer, format: int64 }
+        method:           { type: string, enum: ['公开招标','邀请招标','竞争性谈判','单一来源','询价'] }
+        publish_at:       { type: string, format: date-time, nullable: true }
+        bid_open_at:      { type: string, format: date-time, nullable: true }
+        award_at:         { type: string, format: date-time, nullable: true }
+        bids_json:
+          type: array
+          description: "报价/评标明细"
+          items:
+            type: object
+            properties:
+              supplier_id:     { type: integer, format: int64 }
+              price:           { type: string }
+              score:           { type: string }
+              tech_eval:       { type: string }
+              commercial_eval: { type: string }
+        winner_supplier_id: { type: integer, format: int64, nullable: true }
+        saving_amount:      { type: string }
+        winner_reason:      { type: string, nullable: true }
+        publicity_status:   { $ref: '#/components/schemas/BidStatus' }
+
+    BidRequest:
+      type: object
+      required: [requisition_id, method]
+      properties:
+        requisition_id: { type: integer, format: int64 }
+        method:         { type: string, enum: ['公开招标','邀请招标','竞争性谈判','单一来源','询价'] }
+        publish_at:     { type: string, format: date-time }
+        bid_open_at:    { type: string, format: date-time }
+        invited_supplier_ids: { type: array, items: { type: integer, format: int64 }, description: '邀请招标受邀供应商' }
+        bids_json:
+          type: array
+          items: { type: object }
+
+    Contract:
+      type: object
+      description: 合同（DDL G_CONTRACT）。
+      properties:
+        id:               { type: integer, format: int64 }
+        code:             { type: string, description: "CON=采购/技术服务/横向；OSC=外协分包" }
+        tenant_id:        { type: integer, format: int64 }
+        legal_entity_id:  { type: integer, format: int64 }
+        security_level:   { $ref: '#/components/schemas/SecurityLevel' }
+        policy_pack_id:   { type: integer, format: int64, nullable: true }
+        status:           { $ref: '#/components/schemas/ContractStatus' }
+        created_at:       { type: string, format: date-time }
+        updated_at:       { type: string, format: date-time }
+        remark:           { type: string, nullable: true }
+        requisition_id:   { type: integer, format: int64, nullable: true }
+        contract_type:    { type: string, enum: ['采购','外协分包','横向委托','技术服务','其他'] }
+        project_id:       { type: integer, format: int64, nullable: true }
+        supplier_id:      { type: integer, format: int64, nullable: true }
+        party_a:          { type: string, nullable: true }
+        party_b:          { type: string, nullable: true }
+        amount:           { type: string, description: "合同金额 NUMERIC(18,2)=付款累计上限" }
+        currency:         { type: string }
+        pay_terms_json:
+          type: array
+          description: "付款条款"
+          items:
+            type: object
+            properties:
+              phase:   { type: string }
+              ratio:   { type: string }
+              trigger: { type: string }
+        deliverables_json: { type: array, items: { type: object } }
+        sign_date:        { type: string, format: date, nullable: true }
+        start_date:       { type: string, format: date, nullable: true }
+        end_date:         { type: string, format: date, nullable: true }
+        sign_method:      { type: string, enum: ['电子签','异地','纸质'], nullable: true }
+        archive_checklist_id: { type: integer, format: int64, nullable: true, description: "逻辑引用 E_ARCHIVE_CHECKLIST" }
+        ai_parse_json:    { type: object, nullable: true, description: "G-13 解析结果（建议）" }
+        ai_risk_json:     { type: object, nullable: true, description: "G-14 风险提示（建议）" }
+
+    ContractRequest:
+      type: object
+      required: [contract_type, party_b, amount]
+      properties:
+        requisition_id:   { type: integer, format: int64, description: "采购/技术服务合同关联申请；横向可空" }
+        legal_entity_id:  { type: integer, format: int64 }
+        security_level:   { $ref: '#/components/schemas/SecurityLevel' }
+        contract_type:    { type: string, enum: ['采购','外协分包','横向委托','技术服务','其他'] }
+        project_id:       { type: integer, format: int64 }
+        supplier_id:      { type: integer, format: int64, description: "相对方，须 IN_LIBRARY 且非黑名单" }
+        party_a:          { type: string }
+        party_b:          { type: string }
+        amount:           { type: string }
+        currency:         { type: string, default: CNY }
+        pay_terms_json:   { type: array, items: { type: object } }
+        deliverables_json: { type: array, items: { type: object } }
+        start_date:       { type: string, format: date }
+        end_date:         { type: string, format: date }
+        outsource:
+          type: object
+          description: "contract_type=外协分包 时的外协台账信息"
+          properties:
+            outsource_unit_id: { type: integer, format: int64 }
+            scope:             { type: string }
+            outsource_amount:  { type: string }
+            compliance_note:   { type: string }
+        remark:           { type: string }
+
+    ContractPayment:
+      type: object
+      description: 付款计划/执行（DDL G_CONTRACT_PAYMENT）。
+      properties:
+        id:               { type: integer, format: int64 }
+        code:             { type: string }
+        tenant_id:        { type: integer, format: int64 }
+        legal_entity_id:  { type: integer, format: int64 }
+        security_level:   { $ref: '#/components/schemas/SecurityLevel' }
+        status:           { type: string, enum: [PLANNED, DUE, PAID, VOUCHER_SYNCED, CANCELLED] }
+        contract_id:      { type: integer, format: int64 }
+        phase:            { type: string, enum: ['预付','到货','验收','质保','进度','尾款'] }
+        plan_amount:      { type: string }
+        plan_date:        { type: string, format: date, nullable: true }
+        paid_amount:      { type: string }
+        pay_date:         { type: string, format: date, nullable: true }
+        expense_id:       { type: integer, format: int64, nullable: true, description: "逻辑引用 F_EXPENSE" }
+        voucher_status:   { type: string, enum: [PENDING, SUCCESS, FAILED, MANUAL] }
+        invoice_url:      { type: string, nullable: true }
+        outsource_flag:   { type: integer, enum: [0, 1], description: "是否外拨→F-22" }
+
+    PaymentPlanItem:
+      type: object
+      required: [phase, plan_amount]
+      properties:
+        phase:      { type: string, enum: ['预付','到货','验收','质保','进度','尾款'] }
+        plan_amount: { type: string }
+        plan_date:   { type: string, format: date }
+        outsource_flag: { type: integer, enum: [0, 1] }
+
+    Supplier:
+      type: object
+      description: 供应商/外协单位（DDL G_SUPPLIER）。
+      properties:
+        id:               { type: integer, format: int64 }
+        code:             { type: string, description: "SUP=供应商/SOSC=外协单位" }
+        tenant_id:        { type: integer, format: int64 }
+        legal_entity_id:  { type: integer, format: int64 }
+        security_level:   { $ref: '#/components/schemas/SecurityLevel' }
+        policy_pack_id:   { type: integer, format: int64, nullable: true }
+        status:           { $ref: '#/components/schemas/SupplierStatus' }
+        created_at:       { type: string, format: date-time }
+        updated_at:       { type: string, format: date-time }
+        name:             { type: string }
+        credit_code:      { type: string, nullable: true }
+        type:             { type: string, enum: ['供应商','外协单位','服务商'] }
+        qualification_json: { type: array, items: { type: object } }
+        grade:            { type: string, enum: [A, B, C, D] }
+        blacklist:        { type: integer, enum: [0, 1], description: "1=黑名单硬拦截" }
+        review_status:    { $ref: '#/components/schemas/SupplierStatus' }
+        expire_date:      { type: string, format: date, nullable: true, description: "资质到期日" }
+
+    AiParseResult:
+      type: object
+      description: AI 合同解析结果（G-13，建议，附字段级来源与置信度）。
+      properties:
+        contract_id:   { type: integer, format: int64 }
+        party_a:       { type: object, description: "{value, source_page, confidence}" }
+        party_b:       { type: object }
+        amount:        { type: object, description: "关键项，confidence<0.85 标黄强制人工确认" }
+        currency:      { type: object }
+        pay_terms:     { type: array, items: { type: object } }
+        deliverables:  { type: array, items: { type: object } }
+        period:        { type: object }
+        penalty:       { type: object }
+        model_version: { type: string }
+
+    AiRiskResult:
+      type: object
+      description: AI 合同风险审查结果（G-14，建议，高风险须法务人工签署）。
+      properties:
+        contract_id: { type: integer, format: int64 }
+        risks:
+          type: array
+          items:
+            type: object
+            properties:
+              clause:      { type: string }
+              risk_type:   { type: string, enum: ['付款','知产','违约','保密','期限'] }
+              level:       { type: string, enum: [HIGH, MED, LOW] }
+              suggestion:  { type: string }
+              rule_code:   { type: string, description: "命中规则号（红线走规则引擎，语义走 LLM）" }
+              source:      { type: string, enum: [RULE, LLM] }
+              confidence:  { type: string, description: "NUMERIC(6,4)" }
+
+    AssetConvertResult:
+      type: object
+      description: 到货转资产/耗材回执（G-17，→模块10）。
+      properties:
+        order_id:     { type: integer, format: int64 }
+        target:       { type: string, enum: [ASSET, CONSUMABLE] }
+        asset_ids:    { type: array, items: { type: integer, format: int64 }, description: "生成 A_ASSET id（逻辑引用→A）" }
+        consumable_ids: { type: array, items: { type: integer, format: int64 }, description: "生成 A_CONSUMABLE id" }
+        converted_asset: { type: integer, enum: [0, 1], description: "回写 G_ORDER.converted_asset=1 防重复" }
+
+    TraceChain:
+      type: object
+      description: 端到端追溯链（读 e_trace_node，G-12/E-17）。
+      properties:
+        trace_id: { type: string }
+        nodes:
+          type: array
+          items:
+            type: object
+            properties:
+              node_seq:   { type: integer }
+              object_type: { type: string, enum: [REQUISITION, BID, CONTRACT, ORDER, EXPENSE, ASSET, CONSUMABLE] }
+              object_id:  { type: integer, format: int64 }
+              biz_code:   { type: string }
+              action:     { type: string }
+              actor_id:   { type: integer, format: int64 }
+              occurred_at: { type: string, format: date-time }

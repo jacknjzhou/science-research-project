@@ -1,0 +1,975 @@
+openapi: 3.0.3
+info:
+  title: 人员与团队（S）API
+  version: "1.0"
+  description: >-
+    07 人员与团队模块对外 REST 契约（自包含 OpenAPI 3.0.3，可独立导入 Swagger/Postman）。
+    覆盖人员列表/我的档案/科研专属字段编辑、团队列表详情与成员增删、客座学者申请与审批、
+    学生登记、人员异动与离职交接发起、PI 画像查询、合作关系网络查询（时间切片）、
+    AI 研究方向标签生成、AI 简历生成。
+    字段与 ../README.md §2 通用列及 07-人员与团队-S.ddl.sql 对齐；状态 enum 取 §4 S 状态 token
+    与 DDL CHECK。敏感字段（身份证/银行卡哈希）在响应中默认脱敏或不可见（PRD §9）。
+    上游 PRD：../PRD/07-人员与团队.md（S-01..S-16）。
+servers:
+  - url: /api/v1
+    description: 科研管理系统网关（v1）
+
+tags:
+  - name: staff
+    description: 人员档案（S-01..S-05、S-10、S-16）
+  - name: team
+    description: 团队与成员（S-06/S-07）
+  - name: visitor
+    description: 客座与访问学者（S-08/S-11）
+  - name: student
+    description: 学生参与科研（S-09）
+  - name: portrait
+    description: PI 画像（S-13）
+  - name: collab
+    description: 合作关系网络（S-14）
+  - name: ai
+    description: AI 能力（S-05 方向标签 / S-13 画像摘要 / AI 简历）
+  - name: talent
+    description: 人才计划与梯队（S-12/S-15）
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      description: 页码，1-based
+      schema: { type: integer, minimum: 1, default: 1 }
+    SizeParam:
+      name: size
+      in: query
+      description: 每页条数，默认 20，上限 200
+      schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: 幂等键（UUID），POST/PUT 服务端缓存去重（§3）
+      schema: { type: string, format: uuid }
+    StaffId:
+      name: id
+      in: path
+      required: true
+      description: 人员主键 S_STAFF.id
+      schema: { type: integer, format: int64 }
+    TeamId:
+      name: id
+      in: path
+      required: true
+      description: 团队主键 S_TEAM.id
+      schema: { type: integer, format: int64 }
+    VisitorId:
+      name: id
+      in: path
+      required: true
+      description: 客座/访问学者申请主键 S_VISITOR.id
+      schema: { type: integer, format: int64 }
+
+  schemas:
+    ApiResponse:
+      type: object
+      description: 统一响应包裹（§3）
+      properties:
+        code:    { type: integer, description: 0 为成功，非 0 为业务错误码 }
+        message: { type: string }
+        data:    { type: object, nullable: true }
+        traceId: { type: string }
+        timestamp: { type: integer, format: int64 }
+
+    PageResult:
+      type: object
+      description: 分页结果（data 载荷，§3）
+      properties:
+        list:
+          type: array
+          items: { $ref: '#/components/schemas/Staff' }
+        total: { type: integer, format: int64 }
+        page:  { type: integer }
+        size:  { type: integer }
+
+    ExpertiseTag:
+      type: object
+      description: 研究方向标签（research_expertise JSONB 元素，S-05）
+      properties:
+        tag:     { type: string }
+        weight:  { type: number, format: double, description: 标签权重 0~1 }
+        source:  { type: string, enum: [AI, MANUAL], description: AI 生成 / 学者自建 }
+        updated_at: { type: string, format: date-time, nullable: true }
+
+    ExternalAppointment:
+      type: object
+      description: 学术任职（external_appointments JSONB 元素，S-16）
+      properties:
+        org:       { type: string }
+        role:      { type: string }
+        from_year: { type: integer }
+        to_year:   { type: integer, nullable: true }
+
+    Staff:
+      type: object
+      description: >-
+        人员档案视图（字段对齐 S_STAFF DDL）。
+        敏感列 id_card_hash/bank_card_hash 默认不返回（masked）；仅 HR/R-ADMIN 且经审计可见密文引用，
+        身份证号在管理员视图以脱敏串返回（如 1101**********1234）。
+      properties:
+        id:                 { type: integer, format: int64 }
+        code:               { type: string, nullable: true, description: 档案编号；前缀待 2.11 登记 }
+        tenant_id:          { type: integer, format: int64 }
+        status:             { type: string, enum: [ACTIVE, INACTIVE], description: 档案生命周期（非雇佣状态） }
+        user_id:            { type: integer, format: int64, description: 关联 sys_user.id（1:1） }
+        hr_code:            { type: string, description: 工号（HR 同步；同名去重双主键之一） }
+        name:               { type: string }
+        name_en:            { type: string, nullable: true }
+        gender:             { type: string, enum: [MALE, FEMALE, OTHER, UNKNOWN], nullable: true }
+        birth_year:         { type: integer, nullable: true }
+        id_card_masked:     { type: string, nullable: true, description: 身份证脱敏串（非管理员不可见，管理员返回掩码；明文/哈希列不对外） }
+        email:              { type: string, nullable: true }
+        phone:              { type: string, nullable: true, description: 联系方式，同院所内可读（PRD §9） }
+        department_id:      { type: integer, format: int64 }
+        secondary_dept_ids:
+          type: array
+          description: 双聘次部门 [{org_id,effort_pct}]，主部门唯一
+          items: { type: object, additionalProperties: true }
+        staff_type:
+          type: string
+          enum: [FORMAL, POSTDOC, VISITING_SCHOLAR, GUEST, TEMPORARY, STUDENT]
+        position:
+          type: string
+          nullable: true
+          enum: [RESEARCHER, ASSOCIATE_RESEARCHER, ASSISTANT_RESEARCHER, POSTDOC, GUEST, STUDENT, SUPPORT, OTHER]
+        title:              { type: string, nullable: true, description: 职称（走字典） }
+        education:          { type: string, nullable: true, description: 学历（走字典） }
+        hire_date:          { type: string, format: date, nullable: true }
+        leave_date:         { type: string, format: date, nullable: true }
+        employment_status:
+          type: string
+          enum: [ONBOARD, RESIGNED, RETIRED, VISITING, GUEST, REHIRE]
+          description: 雇佣状态（§4）
+        photo_url:          { type: string, nullable: true }
+        orcid:              { type: string, nullable: true, description: ORCID iD（去重双主键之二） }
+        wos_researcher_id:  { type: string, nullable: true }
+        scopus_id:          { type: string, nullable: true }
+        cnki_author_id:     { type: string, nullable: true }
+        bio:                { type: string, nullable: true }
+        research_expertise: { type: array, items: { $ref: '#/components/schemas/ExpertiseTag' } }
+        external_appointments: { type: array, items: { $ref: '#/components/schemas/ExternalAppointment' } }
+        is_pi:              { type: boolean }
+        legal_entity_id:    { type: integer, format: int64 }
+        security_level:     { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET] }
+        created_at:         { type: string, format: date-time }
+        updated_at:         { type: string, format: date-time }
+        remark:             { type: string, nullable: true }
+
+    ResearchProfileUpdate:
+      type: object
+      description: 科研专属字段编辑请求（S-02/S-05/S-16；本人可编辑，HR 只读 R）
+      properties:
+        research_expertise: { type: array, items: { $ref: '#/components/schemas/ExpertiseTag' } }
+        external_appointments: { type: array, items: { $ref: '#/components/schemas/ExternalAppointment' } }
+        bio:                { type: string }
+        orcid:              { type: string }
+        wos_researcher_id:  { type: string }
+        scopus_id:          { type: string }
+        cnki_author_id:     { type: string }
+        title:              { type: string }
+
+    Team:
+      type: object
+      description: 团队/课题组视图（字段对齐 S_TEAM DDL）
+      properties:
+        id:               { type: integer, format: int64 }
+        code:             { type: string, nullable: true }
+        tenant_id:        { type: integer, format: int64 }
+        status:
+          type: string
+          enum: [FORMING, ACTIVE, EVALUATING, CHANGING, RENEWAL, DISSOLVED]
+        name:             { type: string }
+        team_type:
+          type: string
+          enum: [INNOVATION, PI_GROUP, RESEARCH_GROUP, KEY_LAB, PLATFORM]
+        pi_staff_id:      { type: integer, format: int64, nullable: true }
+        pi_user_id:       { type: integer, format: int64, nullable: true }
+        department_id:    { type: integer, format: int64, nullable: true }
+        formed_date:      { type: string, format: date, nullable: true }
+        evaluation_cycle: { type: string, nullable: true }
+        member_count:     { type: integer, description: 在册成员数（派生自 S_MEMBERSHIP） }
+        legal_entity_id:  { type: integer, format: int64 }
+        security_level:   { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET] }
+        created_at:       { type: string, format: date-time }
+        updated_at:       { type: string, format: date-time }
+        remark:           { type: string, nullable: true }
+
+    Membership:
+      type: object
+      description: 团队成员关系（字段对齐 S_MEMBERSHIP DDL）
+      properties:
+        id:                   { type: integer, format: int64 }
+        team_id:              { type: integer, format: int64 }
+        staff_id:             { type: integer, format: int64 }
+        user_id:              { type: integer, format: int64, nullable: true }
+        role:
+          type: string
+          enum: [LEADER, CORE, MEMBER, STUDENT, VISITOR]
+        joined_at:            { type: string, format: date-time }
+        left_at:              { type: string, format: date-time, nullable: true }
+        contribution_summary: { type: string, nullable: true }
+        status:               { type: string, enum: [ACTIVE, LEFT] }
+
+    MemberAddRequest:
+      type: object
+      description: 团队新增成员请求（S-06）
+      required: [staff_id, role]
+      properties:
+        staff_id:             { type: integer, format: int64 }
+        role:                 { type: string, enum: [LEADER, CORE, MEMBER, STUDENT, VISITOR] }
+        joined_at:            { type: string, format: date-time, nullable: true }
+        contribution_summary: { type: string }
+
+    MemberRemoveRequest:
+      type: object
+      description: 团队移除成员请求（记录 left_at，S-06）
+      required: [staff_id]
+      properties:
+        staff_id: { type: integer, format: int64 }
+        reason:   { type: string }
+
+    Visitor:
+      type: object
+      description: 客座/访问学者视图（字段对齐 S_VISITOR DDL）
+      properties:
+        id:               { type: integer, format: int64 }
+        code:             { type: string, nullable: true }
+        tenant_id:        { type: integer, format: int64 }
+        status:
+          type: string
+          enum: [APPLIED, APPROVED, REJECTED, ACTIVE, EXPIRED, TERMINATED]
+        staff_id:         { type: integer, format: int64 }
+        host_pi_staff_id: { type: integer, format: int64, nullable: true }
+        host_team_id:     { type: integer, format: int64, nullable: true }
+        home_institution: { type: string, nullable: true }
+        visit_type:
+          type: string
+          enum: [SHORT_TERM, LONG_TERM, JOINT_RESEARCH]
+        start_date:       { type: string, format: date }
+        end_date:         { type: string, format: date, description: 到期日；到期自动失效，联动 sys_user_role.expires_at }
+        funding_source:   { type: string, nullable: true }
+        project_id:       { type: integer, format: int64, nullable: true }
+        permissions_scope: { type: object, additionalProperties: true, description: "授权范围 project_ids/team_ids/modules/role_codes，限本项目/本团队" }
+        reminder_stage:   { type: string, enum: [NONE, DUE_30, DUE_7] }
+
+    VisitorApplyRequest:
+      type: object
+      description: 客座/访问学者入驻申请（S-08）
+      required: [name, hr_code_placeholder, host_pi_staff_id, visit_type, start_date, end_date, permissions_scope]
+      properties:
+        name:               { type: string }
+        name_en:            { type: string }
+        home_institution:   { type: string, description: 外部机构（跨机构学者走 EXPERT，不入本院主档） }
+        hr_code_placeholder: { type: string, description: 临时身份标识（HR 无工号时占位，审批后建 S_STAFF user_id） }
+        host_pi_staff_id:   { type: integer, format: int64 }
+        host_team_id:       { type: integer, format: int64, nullable: true }
+        visit_type:         { type: string, enum: [SHORT_TERM, LONG_TERM, JOINT_RESEARCH] }
+        start_date:         { type: string, format: date }
+        end_date:           { type: string, format: date }
+        funding_source:     { type: string }
+        project_id:         { type: integer, format: int64, nullable: true }
+        permissions_scope:
+          type: object
+          additionalProperties: true
+          description: 限本项目/本团队授权范围
+        attachments:
+          type: array
+          items: { type: string }
+          description: 上传材料对象存储地址
+
+    VisitorApproveRequest:
+      type: object
+      description: 入驻审批（通过后开通账号 + 授权，S-08/S-11）
+      required: [decision]
+      properties:
+        decision:   { type: string, enum: [APPROVE, REJECT] }
+        role_codes: { type: array, items: { type: string }, description: 授予角色编码（sys_role），写入 sys_user_role 携 expires_at=end_date }
+        expires_at: { type: string, format: date-time, description: 权限到期时刻（默认对齐 end_date） }
+        comment:    { type: string }
+
+    Student:
+      type: object
+      description: 学生登记视图（字段对齐 S_STUDENT DDL）
+      properties:
+        id:                    { type: integer, format: int64 }
+        code:                  { type: string, nullable: true }
+        staff_id:              { type: integer, format: int64 }
+        student_type:
+          type: string
+          enum: [PHD, MASTER, UNDERGRAD_THESIS, JOINT_TRAINING]
+        supervisor_staff_id:   { type: integer, format: int64, nullable: true }
+        supervisor_user_id:    { type: integer, format: int64, nullable: true }
+        enroll_year:           { type: integer, nullable: true }
+        graduate_year:         { type: integer, nullable: true }
+        thesis_topic:          { type: string, nullable: true }
+        associated_project_ids: { type: array, items: { type: integer, format: int64 } }
+        status:                { type: string, enum: [ENROLLED, GRADUATED, WITHDRAWN, SUSPENDED] }
+
+    StudentRegisterRequest:
+      type: object
+      description: 学生参与科研登记（S-09，同步建 S_STAFF staff_type=STUDENT）
+      required: [name, student_type, supervisor_staff_id]
+      properties:
+        name:                 { type: string }
+        hr_code:              { type: string, nullable: true }
+        student_type:         { type: string, enum: [PHD, MASTER, UNDERGRAD_THESIS, JOINT_TRAINING] }
+        supervisor_staff_id:  { type: integer, format: int64 }
+        enroll_year:          { type: integer }
+        thesis_topic:         { type: string }
+        associated_project_ids: { type: array, items: { type: integer, format: int64 } }
+
+    TransferRequest:
+      type: object
+      description: 人员异动发起请求（S-10；离职/退休/调岗/返聘；PI 触发交接与经费冻结联动）
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [RESIGN, RETIRE, TRANSFER_DEPT, REHIRE, LEAVE]
+          description: RESIGN=离职/RETIRE=退休/TRANSFER_DEPT=调岗/REHIRE=返聘/LEAVE=离岗
+        effective_date: { type: string, format: date }
+        target_department_id: { type: integer, format: int64, nullable: true, description: 调岗目标部门 }
+        handover_pi_staff_id: { type: integer, format: int64, nullable: true, description: PI 交接接手人；离职必填触发项目交接+经费冻结（触发 E/F） }
+        reason: { type: string }
+      x-note: action=RESIGN/RETIRE 且本人 is_pi=true 时必须提供 handover_pi_staff_id，否则进入经费冻结态并阻断离职归档
+
+    Portrait:
+      type: object
+      description: PI/学者画像快照（字段对齐 S_PORTRAIT DDL，S-13）
+      properties:
+        staff_id:            { type: integer, format: int64 }
+        snapshot_date:       { type: string, format: date }
+        project_count_total: { type: integer }
+        project_count_active: { type: integer }
+        funding_total:       { type: number, format: double, description: NUMERIC(18,2) 元 }
+        funding_yearly:      { type: number, format: double }
+        output_count_papers: { type: integer }
+        output_count_patents: { type: integer }
+        h_index:             { type: integer }
+        total_citations:     { type: integer }
+        top_journals:
+          type: array
+          items: { type: object, additionalProperties: true }
+        expertise_tags:      { type: array, items: { $ref: '#/components/schemas/ExpertiseTag' } }
+        collaboration_score: { type: number, format: double }
+        mentoring_count:     { type: integer }
+        career_stage:        { type: string, enum: [RISING, STABLE, MATURE], description: 上升/稳定/成熟 }
+        ai_summary:          { type: string, nullable: true, description: LLM 生成画像摘要 }
+        integrity_flag:      { type: boolean, description: 诚信风险标记，仅纪检/管理员可见 }
+
+    RadarDimension:
+      type: object
+      description: 画像雷达图六维（项目/经费/成果/影响/合作/培养）
+      properties:
+        dimension: { type: string, enum: [PROJECT, FUNDING, OUTPUT, IMPACT, COLLAB, MENTORING] }
+        value:     { type: number, format: double }
+        normalized: { type: number, format: double, description: 归一化 0~1 供雷达渲染 }
+
+    PortraitDetail:
+      type: object
+      description: 画像页聚合视图：雷达六维 + 最新快照 + 时间轴 + Top 成果
+      properties:
+        latest:      { $ref: '#/components/schemas/Portrait' }
+        radar:       { type: array, items: { $ref: '#/components/schemas/RadarDimension' } }
+        timeline:
+          type: array
+          description: 历年项目/成果/称号时间轴
+          items:
+            type: object
+            properties:
+              year:  { type: integer }
+              type:  { type: string, enum: [PROJECT, OUTPUT, TALENT] }
+              title: { type: string }
+        top_outputs:
+          type: array
+          maxItems: 10
+          items: { type: object, additionalProperties: true }
+
+    CollabNode:
+      type: object
+      description: 合作网络节点（学者）
+      properties:
+        staff_id:   { type: integer, format: int64 }
+        name:       { type: string }
+        institution: { type: string, nullable: true }
+        node_size:  { type: integer, description: 节点大小=累计合作次数 }
+        community_id: { type: integer, nullable: true }
+        centrality: { type: number, format: double, nullable: true }
+
+    CollabEdge:
+      type: object
+      description: 合作网络边（字段对齐 S_COLLAB_GRAPH）
+      properties:
+        staff_a_id:    { type: integer, format: int64 }
+        staff_b_id:    { type: integer, format: int64 }
+        weight:        { type: integer }
+        first_year:    { type: integer, nullable: true }
+        last_year:     { type: integer, nullable: true }
+        shared_projects: { type: array, items: { type: integer, format: int64 } }
+        shared_papers:   { type: array, items: { type: integer, format: int64 } }
+
+    CollabGraph:
+      type: object
+      description: 合作关系网络（力导向渲染，节点上限 2000）
+      properties:
+        snapshot_date: { type: string, format: date }
+        center_staff_id: { type: integer, format: int64 }
+        nodes:         { type: array, items: { $ref: '#/components/schemas/CollabNode' } }
+        edges:         { type: array, items: { $ref: '#/components/schemas/CollabEdge' } }
+
+    AiExpertiseRequest:
+      type: object
+      description: AI 研究方向标签生成请求（S-05）
+      properties:
+        incremental: { type: boolean, default: false, description: true=新成果增量；false=季度全量刷新 }
+        max_tags:    { type: integer, default: 10, minimum: 5, maximum: 10 }
+        taxonomy:    { type: string, enum: [ARXIV, CLC], default: ARXIV, description: 学科体系对齐（arXiv 分类/中图分类） }
+      x-note: 输入取自学者历史论文标题+摘要+专利文本，无需显式传文本；服务端从成果库拉取
+
+    AiExpertiseResult:
+      type: object
+      properties:
+        staff_id: { type: integer, format: int64 }
+        tags:     { type: array, items: { $ref: '#/components/schemas/ExpertiseTag' } }
+        model:    { type: string, description: 生成模型标识（可解释留痕） }
+        confidence: { type: number, format: double, nullable: true }
+
+    AiResumeRequest:
+      type: object
+      description: AI 学术简历生成请求（从画像导出 PDF）
+      properties:
+        sections:
+          type: array
+          items: { type: string, enum: [BASIC, PROJECT, OUTPUT, HONOR, APPOINTMENT, PORTRAIT_SUMMARY] }
+        format:  { type: string, enum: [PDF, DOCX], default: PDF }
+        language: { type: string, enum: [zh, en], default: zh }
+
+    TalentPlan:
+      type: object
+      description: 人才计划与称号（字段对齐 S_TALENT_PLAN DDL）
+      properties:
+        staff_id:     { type: integer, format: int64 }
+        plan_name:    { type: string }
+        level:        { type: string, enum: [NATIONAL, MINISTRY, PROVINCE, INSTITUTE] }
+        awarded_year: { type: integer }
+        duration_years: { type: integer }
+        end_year:     { type: integer, nullable: true }
+        status:       { type: string, enum: [CANDIDATE, ACTIVE, COMPLETED, EXPIRED, REVOKED] }
+
+    Error:
+      type: object
+      description: 业务错误（HTTP 表达传输层，code 非 0 表达业务错误）
+      properties:
+        code:    { type: integer }
+        message: { type: string }
+        traceId: { type: string }
+
+  responses:
+    Ok:
+      description: 成功
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    BadRequest:
+      description: 参数校验失败
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    Forbidden:
+      description: 越权（编辑他人档案/失信档案/敏感字段，见 detail §7）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    TooManyRequests:
+      description: 限流（普通 100/min，AI 20/min）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /staff:
+    get:
+      tags: [staff]
+      operationId: listStaff
+      summary: 人员列表（部门/类型/方向/关键词筛选）
+      description: >-
+        支持 department_id、staff_type、employment_status、expertise_tag、is_pi、keyword（姓名/工号/ORCID）组合过滤；
+        分页 page/size。列表 5000 人 < 500ms（detail §9）。敏感字段在列表视图中不返回。
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+        - { name: department_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: staff_type, in: query, schema: { type: string, enum: [FORMAL, POSTDOC, VISITING_SCHOLAR, GUEST, TEMPORARY, STUDENT] } }
+        - { name: employment_status, in: query, schema: { type: string, enum: [ONBOARD, RESIGNED, RETIRED, VISITING, GUEST, REHIRE] } }
+        - { name: expertise_tag, in: query, description: 研究方向标签过滤（GIN 检索 research_expertise）, schema: { type: string } }
+        - { name: is_pi, in: query, schema: { type: boolean } }
+        - { name: keyword, in: query, description: 姓名/工号/ORCID 关键词, schema: { type: string } }
+      responses:
+        '200':
+          description: 分页人员列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PageResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /staff/me:
+    get:
+      tags: [staff]
+      operationId: getMyProfile
+      summary: 我的档案（S-USR-01，标签页数据源）
+      description: 返回当前用户完整档案（基本/科研/外部标识/权限概览）；身份证号仅脱敏返回，银行卡不可见。
+      responses:
+        '200':
+          description: 当前用户档案
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Staff' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /staff/me/research:
+    put:
+      tags: [staff]
+      operationId: updateMyResearchProfile
+      summary: 编辑科研专属字段（S-02/S-05/S-16）
+      description: >-
+        本人可编辑科研内容（方向标签/外部标识/学术任职/简介/职称）；HR 同步列（姓名/工号/部门）只读。
+        HR 角色对科研专属字段为 R（部分可编）。需 Idempotency-Key，字段级 diff 写 sys_audit_log。
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResearchProfileUpdate' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /staff/{id}:
+    get:
+      tags: [staff]
+      operationId: getStaff
+      summary: 人员档案详情（管理员/本人/同院所可读）
+      description: >-
+        返回人员档案。敏感字段（id_card/bank）非 HR/管理员不可见；失信档案（诚信标记）仅纪检与管理员可见（PRD §9）。
+      parameters:
+        - { $ref: '#/components/parameters/StaffId' }
+      responses:
+        '200':
+          description: 人员档案
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Staff' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /staff/{id}/transfer:
+    post:
+      tags: [staff]
+      operationId: initiateTransfer
+      summary: 人员异动/离职交接发起（S-10）
+      description: >-
+        发起离职/退休/调岗/返聘。若 is_pi=true 且 action=RESIGN/RETIRE，必须提供 handover_pi_staff_id：
+        触发 staff.pi_left → E 项目交接 + F 经费冻结/移交；未交接前项目经费冻结。权限降级为"离职可见本人"。
+        需 Idempotency-Key；操作写 sys_audit_log（仅管理员/HR，PRD §9）。
+      parameters:
+        - { $ref: '#/components/parameters/StaffId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransferRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /staff/{id}/portrait:
+    get:
+      tags: [portrait]
+      operationId: getPortrait
+      summary: PI 画像查询（S-13）
+      description: >-
+        返回指定学者最新画像快照（雷达六维 + 时间轴 + Top10 代表作 + AI 摘要）。
+        snapshot_date 参数支持取历史切片。integrity_flag 仅纪检/管理员可见。
+      parameters:
+        - { $ref: '#/components/parameters/StaffId' }
+        - { name: snapshot_date, in: query, description: 取指定快照日；缺省取最新, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: 画像聚合视图
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PortraitDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [portrait]
+      operationId: refreshPortrait
+      summary: 画像刷新（事件即时 / 手动触发）
+      description: 关键事件（新成果/新项目/新称号）或管理员手动触发即时重算该学者画像快照，产出 staff.portrait.updated（→ D 大屏）。需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/StaffId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+
+  /staff/{id}/collab-graph:
+    get:
+      tags: [collab]
+      operationId: getCollabGraph
+      summary: 合作关系网络查询（S-14，支持时间切片）
+      description: >-
+        以该学者为中心返回合作网络（论文/项目/专利共现聚合的边表）。
+        snapshot_date/from_year/to_year 支持时间切片；节点上限 2000 可流畅渲染；含中心度/社团簇号。
+      parameters:
+        - { $ref: '#/components/parameters/StaffId' }
+        - { name: snapshot_date, in: query, description: 切片快照日；缺省取最新, schema: { type: string, format: date } }
+        - { name: from_year, in: query, schema: { type: integer } }
+        - { name: to_year, in: query, schema: { type: integer } }
+        - { name: min_weight, in: query, description: 最小合作次数边过滤，降噪, schema: { type: integer, default: 1 } }
+      responses:
+        '200':
+          description: 合作网络（节点 + 边）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CollabGraph' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /staff/{id}/ai-expertise:
+    post:
+      tags: [ai]
+      operationId: generateExpertise
+      summary: AI 研究方向标签生成（S-05）
+      description: >-
+        从学者历史论文标题+摘要+专利文本，LLM 抽取主题关键词并对齐学科体系（arXiv/中图分类），
+        输出 5-10 个带权重标签。增量（新成果入库）或全量（季度刷新）。限流 20/min，需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/StaffId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiExpertiseRequest' }
+      responses:
+        '200':
+          description: 生成的方向标签
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AiExpertiseResult' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /staff/{id}/ai-resume:
+    post:
+      tags: [ai]
+      operationId: generateResume
+      summary: AI 学术简历生成（从画像导出 PDF/DOCX）
+      description: >-
+        基于画像快照与档案生成自然语言学术简历（含 LLM 摘要段），异步返回下载链接。限流 20/min，需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/StaffId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiResumeRequest' }
+      responses:
+        '200':
+          description: 简历生成任务受理（异步下载链接）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /teams:
+    get:
+      tags: [team]
+      operationId: listTeams
+      summary: 团队列表
+      description: 支持 team_type、department_id、pi_staff_id、status 过滤；分页 page/size。
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+        - { name: team_type, in: query, schema: { type: string, enum: [INNOVATION, PI_GROUP, RESEARCH_GROUP, KEY_LAB, PLATFORM] } }
+        - { name: department_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: pi_staff_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: status, in: query, schema: { type: string, enum: [FORMING, ACTIVE, EVALUATING, CHANGING, RENEWAL, DISSOLVED] } }
+      responses:
+        '200':
+          description: 分页团队列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list: { type: array, items: { $ref: '#/components/schemas/Team' } }
+                          total: { type: integer, format: int64 }
+                          page: { type: integer }
+                          size: { type: integer }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    post:
+      tags: [team]
+      operationId: createTeam
+      summary: 新建团队/课题组（S-07）
+      description: 落 FORMING；需 Idempotency-Key；团队负责人写入 S_MEMBERSHIP role=LEADER。
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Team' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /teams/{id}:
+    get:
+      tags: [team]
+      operationId: getTeam
+      summary: 团队详情（含成员时间轴）
+      parameters:
+        - { $ref: '#/components/parameters/TeamId' }
+      responses:
+        '200':
+          description: 团队详情 + 成员关系
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          team:     { $ref: '#/components/schemas/Team' }
+                          members:  { type: array, items: { $ref: '#/components/schemas/Membership' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /teams/{id}/members:
+    get:
+      tags: [team]
+      operationId: listTeamMembers
+      summary: 团队成员列表（S-06）
+      parameters:
+        - { $ref: '#/components/parameters/TeamId' }
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+    post:
+      tags: [team]
+      operationId: addTeamMember
+      summary: 团队新增成员（S-06）
+      description: 写 S_MEMBERSHIP（role），同步刷新 S_TEAM.member_ids 快照；团队负责人/管理员可操作（PRD §9）；需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/TeamId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemberAddRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /teams/{id}/members/remove:
+    post:
+      tags: [team]
+      operationId: removeTeamMember
+      summary: 团队移除成员（记录 left_at，S-06）
+      description: 软置 S_MEMBERSHIP.left_at/status=LEFT，保留历史；需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/TeamId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemberRemoveRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /visitors:
+    get:
+      tags: [visitor]
+      operationId: listVisitors
+      summary: 客座/访问学者列表（状态/host 筛选）
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+        - { name: status, in: query, schema: { type: string, enum: [APPLIED, APPROVED, REJECTED, ACTIVE, EXPIRED, TERMINATED] } }
+        - { name: host_pi_staff_id, in: query, schema: { type: integer, format: int64 } }
+      responses:
+        '200':
+          description: 分页客座学者列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list: { type: array, items: { $ref: '#/components/schemas/Visitor' } }
+                          total: { type: integer, format: int64 }
+                          page: { type: integer }
+                          size: { type: integer }
+    post:
+      tags: [visitor]
+      operationId: applyVisitor
+      summary: 客座学者入驻申请（S-08）
+      description: >-
+        提交申请（表单+材料+邀请人+项目关联+期限），落 APPLIED；审批通过后开通账号+授权（permissions_scope 限本项目/本团队）。
+        需 Idempotency-Key。跨机构外部学者不入本院主档，走 EXPERT（detail §8）。
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VisitorApplyRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /visitors/{id}/approve:
+    post:
+      tags: [visitor]
+      operationId: approveVisitor
+      summary: 客座学者入驻审批（S-08/S-11）
+      description: >-
+        APPROVE→建 sys_user+S_STAFF(staff_type=VISITING_SCHOLAR/GUEST)，按 permissions_scope 授予 sys_user_role（expires_at=end_date）；
+        REJECT→驳回。审批权限：团队负责人/管理员（PRD §9）。需 Idempotency-Key。到期 30/7 天提醒。
+      parameters:
+        - { $ref: '#/components/parameters/VisitorId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VisitorApproveRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /students:
+    post:
+      tags: [student]
+      operationId: registerStudent
+      summary: 学生参与科研登记（S-09）
+      description: 登记博/硕/本科毕设学生，同步建 S_STAFF(staff_type=STUDENT)+S_STUDENT，关联导师与参与项目；需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StudentRegisterRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /staff/{id}/talent-plans:
+    get:
+      tags: [talent]
+      operationId: listTalentPlans
+      summary: 人才计划与称号查询（S-12，画像时间轴数据源）
+      parameters:
+        - { $ref: '#/components/parameters/StaffId' }
+      responses:
+        '200':
+          description: 该学者人才计划列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/TalentPlan' }
+
+  /talent/analysis:
+    get:
+      tags: [talent]
+      operationId: talentGapAnalysis
+      summary: AI 人才梯队缺口分析（S-15）
+      description: >-
+        输入全院画像 + 退休时间表 + 战略方向，输出各方向年龄分布、后备人才缺口、招聘建议（模型+规则混合）。
+        限 R-MANAGER/R-LEADER。
+      parameters:
+        - { name: direction, in: query, description: 学科方向标签, schema: { type: string } }
+        - { name: year, in: query, description: 分析年度, schema: { type: integer } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
