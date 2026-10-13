@@ -63,16 +63,27 @@ function pathVar(p) {
   return m ? m[1] : null
 }
 
-function classify(op) {
+/** 契约实体名 → 业务表名：`${模块代号小写}_${snake(实体)}`（p_application / a_asset / d_report…）*/
+export function deriveTable(op, entity) {
+  const mod = String(op.module).toLowerCase()
+  let name = String(entity)
+  // 部分模块(E)实体带模块首字母以避免跨模块重名(EProject/ETask)，直接拼会得到 e_e_project 这类双重前缀；
+  // 仅当去掉首字母后余串仍以大写字母开头(PascalCase 前缀)才剥离，避免误伤 Envelope(模块E 下)这类真名。
+  if (name.length > 1 && name[0].toLowerCase() === mod && /^[A-Z]/.test(name.slice(1))) {
+    name = name.slice(1)
+  }
+  return `${mod}_${toSnake(name)}`
+}
+
+function classify(op, has = hasTable) {
   const method = op.method.toUpperCase()
-  const targetKey = `${method} ${op.path}`
   if (PASSTHROUGH_HINT.test(op.path)) return { kind: 'passthrough', reason: '分析/AI/自定义动作' }
 
   const ent = findEntity(extractDataSchema(op), op.doc)
   if (!ent || !ent.entity) return { kind: 'passthrough', reason: '契约未描述实体（泛型 Ok / 计算列）' }
 
-  const table = `${String(op.module).toLowerCase()}_${toSnake(ent.entity)}`
-  if (!hasTable(table)) return { kind: 'passthrough', reason: `表 ${table} 不存在/未迁移` }
+  const table = deriveTable(op, ent.entity)
+  if (!has(table)) return { kind: 'passthrough', reason: `表 ${table} 不存在/未迁移` }
 
   const casing = CAMEL_MODULES.has(String(op.module).toUpperCase()) ? 'camel' : 'snake'
 
@@ -90,6 +101,11 @@ function classify(op) {
   }
   // PUT/PATCH/DELETE
   return { kind: 'action', table, casing, entity: ent.entity, idParam: pathVar(op.path) }
+}
+
+/** 纯函数：给定“表是否存在”谓词即可分类，供离线覆盖率报告复用（不依赖已连库）*/
+export function classifyOp(op, has = () => false) {
+  return classify(op, has)
 }
 
 const registry = new Map()   // templateKey -> binding

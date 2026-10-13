@@ -11,7 +11,8 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "verify": "node scripts/verify.mjs",
-    "dbtest": "node scripts/db.adapter.test.mjs"
+    "dbtest": "node scripts/db.adapter.test.mjs",
+    "coverage": "node scripts/coverage-report.mjs"
   },
   "dependencies": {
     "@faker-js/faker": "^8.4.1",
