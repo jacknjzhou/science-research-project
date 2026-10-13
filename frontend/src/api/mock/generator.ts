@@ -18,8 +18,8 @@ interface GenCtx {
 
 function genString(schema: any, keyHint: string): string {
   const fmt = schema?.format
-  const enumVals = schema?.enum
-  if (enumVals && enumVals.length) {
+  const enumVals = (schema?.enum || []).filter((v: any) => v !== null && v !== undefined)
+  if (enumVals.length) {
     return String(faker.helpers.arrayElement(enumVals))
   }
   if (schema?.example != null) return String(schema.example)
@@ -98,7 +98,8 @@ function pickCodeish(keyHint: string): string {
 }
 
 function genNumber(schema: any, keyHint: string): number {
-  if (schema?.enum && schema.enum.length) return Number(faker.helpers.arrayElement(schema.enum))
+  const numEnum = (schema?.enum || []).filter((v: any) => v !== null && v !== undefined)
+  if (numEnum.length) return Number(faker.helpers.arrayElement(numEnum))
   if (schema?.example != null && !isNaN(Number(schema.example))) return Number(schema.example)
   const k = (keyHint || '').toLowerCase()
   const min = schema?.minimum ?? 0

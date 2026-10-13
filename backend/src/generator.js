@@ -44,8 +44,16 @@ function pickCodeish(keyHint) {
   return `${pre}-${y}-${String(nextSeq()).padStart(5, '0')}`
 }
 
+// 从 enum 中取一个具体值；可空枚举（如 next_level:[ADS,DWS,DWD,BIZ,null]）先剔除 null 候选，
+// 避免 String(null)="null" 被契约 enum 判为非法值（间歇性 verify 失败根因）。全为 null 时才返回 null。
+function pickEnum(schema, coerce) {
+  const vals = schema.enum.filter((v) => v !== null && v !== undefined)
+  if (!vals.length) return null
+  return coerce(faker.helpers.arrayElement(vals))
+}
+
 function genString(schema, keyHint) {
-  if (schema?.enum && schema.enum.length) return String(faker.helpers.arrayElement(schema.enum))
+  if (schema?.enum && schema.enum.length) return pickEnum(schema, String)
   if (schema?.example != null) return String(schema.example)
   const fmt = schema?.format
   const k = (keyHint || '').toLowerCase()
@@ -80,7 +88,7 @@ function genString(schema, keyHint) {
 }
 
 function genNumber(schema, keyHint) {
-  if (schema?.enum && schema.enum.length) return Number(faker.helpers.arrayElement(schema.enum))
+  if (schema?.enum && schema.enum.length) return pickEnum(schema, Number)
   if (schema?.example != null && !isNaN(Number(schema.example))) return Number(schema.example)
   const k = (keyHint || '').toLowerCase()
   const min = schema?.minimum ?? undefined
