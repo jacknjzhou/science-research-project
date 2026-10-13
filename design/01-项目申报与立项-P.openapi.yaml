@@ -1,0 +1,1331 @@
+openapi: 3.0.3
+info:
+  title: 科研管理系统 · 01 项目申报与立项 API（模块 P）
+  version: "1.0.0"
+  description: >-
+    M1 核心模块 P（Project Application）对外 REST 契约。自包含 OpenAPI 3.0.3，可直接导入 Swagger Editor / Postman。
+    统一响应包裹 ApiResponse{code,message,data,traceId,timestamp}；分页 PageResult{list,total,page,size}；
+    认证 Bearer JWT；所有 POST/PUT/DELETE 支持 Idempotency-Key 幂等头。
+    普通接口限流 100 req/min，AI 接口（/apply/ai/*）限流 20 req/min（超限返回 429）。
+    实体 schema 字段名与 DDL 列名一致（snake_case），枚举取 design/README.md §4 状态 token。
+    业务错误码见 components.responses 与 detail.md §8。
+servers:
+  - url: https://{host}/api/v1
+    variables:
+      host:
+        default: api.institute.example.com
+        description: 院所科研管理系统网关域名
+tags:
+  - name: guideline
+    description: 申报指南发布与浏览（P-02）
+  - name: template
+    description: 申报模板配置（P-01）
+  - name: application
+    description: 申报创建/撰写/预算/提交/撤回（P-03/P-04/P-05/P-06/P-18）
+  - name: ai
+    description: AI 起草/预算合规/查重/评审意见（P-13/P-14/P-15/P-16）
+  - name: review
+    description: 评审分派/打分/完成（P-08/P-09/P-10）
+  - name: decision
+    description: 立项决议与公示（P-11）
+  - name: taskbook
+    description: 任务书生成与签订（P-12）
+
+security:
+  - bearerAuth: []
+
+paths:
+  /apply/guidelines:
+    get:
+      tags: [guideline]
+      summary: 指南列表（筛选+分页）
+      description: 按项目类型/学科方向/截止时间/关键词筛选，返回分页；剩余天数倒计时由前端基于 apply_end_at 计算。
+      operationId: listGuidelines
+      parameters:
+        - name: project_type
+          in: query
+          schema: { type: string }
+        - name: discipline
+          in: query
+          schema: { type: string }
+        - name: deadline_before
+          in: query
+          description: 仅返回截止时间早于该时刻的指南（ISO8601）
+          schema: { type: string, format: date-time }
+        - name: keyword
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [DRAFT, PUBLISHED, CLOSED]
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 分页指南列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/Guideline' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [guideline]
+      summary: 创建/更新申报指南（P-02）
+      description: upsert，按 (tenant_id, code) 定位；仅 R-MANAGER/R-ADMIN 可写。
+      operationId: upsertGuideline
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GuidelineRequest' }
+      responses:
+        '200':
+          description: 保存后的指南
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Guideline' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /apply/guidelines/{id}:
+    get:
+      tags: [guideline]
+      summary: 指南详情
+      operationId: getGuideline
+      parameters: [ { $ref: '#/components/parameters/PathId' } ]
+      responses:
+        '200':
+          description: 指南详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Guideline' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /apply/templates:
+    get:
+      tags: [template]
+      summary: 模板列表（P-01）
+      operationId: listTemplates
+      parameters:
+        - name: project_type
+          in: query
+          schema: { type: string }
+        - name: active
+          in: query
+          schema: { type: boolean }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 分页模板列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/Template' }
+    post:
+      tags: [template]
+      summary: 创建/更新申报模板（P-01，配置生效 ≤ 5 分钟）
+      operationId: upsertTemplate
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TemplateRequest' }
+      responses:
+        '200':
+          description: 保存后的模板
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Template' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /apply/templates/{id}:activate:
+    put:
+      tags: [template]
+      summary: 启用模板版本（P-01）
+      description: 将指定版本置为 active=TRUE，同 project_type 旧版本置 SUPERSEDED。
+      operationId: activateTemplate
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200':
+          description: 启用结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /apply/applications:
+    get:
+      tags: [application]
+      summary: 我的申报列表（PI 视角）
+      operationId: listApplications
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/ApplicationStatus' }
+        - name: project_type
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 分页申报列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/Application' }
+    post:
+      tags: [application]
+      summary: 创建申报（P-03）
+      description: 基于指南/模板新建申报书，落库 status=DRAFT。校验 PI 在职、指南未截止、同指南同 PI 未重复。
+      operationId: createApplication
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApplicationCreateRequest' }
+      responses:
+        '200':
+          description: 创建后的申报
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Application' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /apply/applications/{id}:
+    get:
+      tags: [application]
+      summary: 申报详情
+      operationId: getApplication
+      parameters: [ { $ref: '#/components/parameters/PathId' } ]
+      responses:
+        '200':
+          description: 申报详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Application' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /apply/applications/{id}/sections/{code}:
+    put:
+      tags: [application]
+      summary: 保存申报书章节（P-03）
+      description: 按 template.sections 的 section_code upsert 当前版本；单份保存 < 300ms。
+      operationId: saveSection
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - name: code
+          in: path
+          required: true
+          description: 章节编码（对应 p_template.sections.code）
+          schema: { type: string }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SectionSaveRequest' }
+      responses:
+        '200':
+          description: 保存后的章节
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ApplicationDoc' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /apply/applications/{id}/documents:
+    get:
+      tags: [application]
+      summary: 章节列表与版本（P-03 版本历史）
+      operationId: listDocuments
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - name: current_only
+          in: query
+          schema: { type: boolean, default: true }
+      responses:
+        '200':
+          description: 章节数组
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/ApplicationDoc' }
+
+  /apply/applications/{id}/budget:
+    post:
+      tags: [application]
+      summary: 编制/更新预算草稿行（P-04）
+      description: upsert 单条科目×年度草稿；失焦保存时异步触发 P-14 合规预检。
+      operationId: upsertBudgetLine
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BudgetLineRequest' }
+      responses:
+        '200':
+          description: 保存后的预算草稿行
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/BudgetDraft' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    get:
+      tags: [application]
+      summary: 预算草稿列表（P-04）
+      operationId: listBudgetLines
+      parameters: [ { $ref: '#/components/parameters/PathId' } ]
+      responses:
+        '200':
+          description: 预算草稿行数组
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/BudgetDraft' }
+
+  /apply/applications/{id}/submit:
+    post:
+      tags: [application]
+      summary: 提交申报（P-05 形式审查）
+      description: >-
+        触发形式审查规则引擎校验（字数/章节完整/附件/签字），通过则 DRAFT→SUBMITTED 并发 application.submitted 事件；
+        拦截超期(40902)/PI 不在职(40903)/形式审查不通过(40904)。
+      operationId: submitApplication
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubmitRequest' }
+      responses:
+        '200':
+          description: 提交结果（含形式审查结论）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/FormalCheckResult' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /apply/applications/{id}:withdraw:
+    post:
+      tags: [application]
+      summary: 撤回申报
+      description: 未进入评审前 PI 可主动撤回（→WITHDRAWN）；进入评审后禁止撤回，只能终止且理由必填。
+      operationId: withdrawApplication
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, maxLength: 512 }
+      responses:
+        '200':
+          description: 撤回结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /apply/applications/{id}:terminate:
+    post:
+      tags: [application]
+      summary: 终止申报（进入评审后）
+      description: 已进入 UNDER_REVIEW 及之后的状态不可撤回，仅可终止；终止理由必填，终态映射为 REJECTED。
+      operationId: terminateApplication
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, maxLength: 512 }
+      responses:
+        '200':
+          description: 终止结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /apply/ai/draft:
+    post:
+      tags: [ai]
+      summary: AI 申报书起草（P-13）
+      description: >-
+        输入章节类型+研究关键词+项目类型，RAG 检索历史中标项目 Top-5（权限隔离）。
+        首字节 < 2s，完整 < 15s；置信度 < 0.7 降级为要点建议。输出带“AI 生成”水印标记，需 PI 显式确认，不自动写入已提交数据。
+        AI 接口限流 20 req/min；LLM 不可用返回 50301，不阻塞业务。
+      operationId: aiDraft
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiDraftRequest' }
+      responses:
+        '200':
+          description: AI 起草结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AiDraftResult' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/AiUnavailable' }
+
+  /apply/ai/budget-check:
+    post:
+      tags: [ai]
+      summary: AI 预算合规检查（P-14）
+      description: >-
+        输入预算表+项目类型+现行经费管理办法（RAG）。输出风险清单，每条含 {字段,违反条款,严重级别,建议}。
+        确定性金额/科目/审批越权判断由 svc-policy 规则引擎给出，本接口为 LLM 概率提示，召回率 ≥ 92%、误报 ≤ 5%。
+      operationId: aiBudgetCheck
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiBudgetCheckRequest' }
+      responses:
+        '200':
+          description: 合规风险清单
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AiBudgetCheckResult' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/AiUnavailable' }
+
+  /apply/ai/duplicate-check:
+    post:
+      tags: [ai]
+      summary: 查重与创新性预判（P-15）
+      description: 输入申报书全文+历史申报库+论文库，输出相似度分数+相似片段+创新度评分；题名相似 > 0.9 触发备案查重预警（P-17），仅作管理员参考，不作强制驳回。
+      operationId: aiDuplicateCheck
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [application_id]
+              properties:
+                application_id: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: 查重结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AiDuplicateCheckResult' }
+        '503': { $ref: '#/components/responses/AiUnavailable' }
+
+  /apply/ai/review-draft:
+    post:
+      tags: [ai]
+      summary: AI 评审意见草稿（P-16）
+      description: 仅在专家明确点击“生成参考”时触发，输出结构化意见草稿供专家编辑，不自动写入正式意见、不进入审批硬约束。
+      operationId: aiReviewDraft
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiReviewDraftRequest' }
+      responses:
+        '200':
+          description: 评审意见草稿
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/AiReviewDraftResult' }
+        '503': { $ref: '#/components/responses/AiUnavailable' }
+
+  /apply/review/tasks:dispatch:
+    post:
+      tags: [review]
+      summary: 分派评审任务（P-08）
+      description: >-
+        管理员手工或 AI 智能分派；按方向匹配+负荷均衡推荐候选人。回避关系（同单位/3 年合作/师生）命中自动排除（conflict_flag）。
+        落库后申报状态 RECOMMENDED→UNDER_REVIEW，发 application.recommended 事件驱动分派。
+      operationId: dispatchReview
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DispatchRequest' }
+      responses:
+        '200':
+          description: 生成的评审任务列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/ReviewTask' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /apply/review/mytasks:
+    get:
+      tags: [review]
+      summary: 我的评审任务队列（专家视角）
+      description: 仅返回分派给当前 R-EXPERT 且无利益冲突的任务，申报信息匿名化（隐藏 PI 与单位）。
+      operationId: listMyReviewTasks
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/ReviewTaskStatus' }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 评审任务分页
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/ReviewTask' }
+
+  /apply/review/tasks/{id}:score:
+    post:
+      tags: [review]
+      summary: 提交评审打分（P-09）
+      description: 按评分卡逐维度打分+评语；提交后 24h 内可撤回（RETURNED）。决议前评分对申请人不可见。
+      operationId: submitScore
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScoreRequest' }
+      responses:
+        '200':
+          description: 打分后的任务
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ReviewTask' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /apply/review/tasks/{id}:complete:
+    post:
+      tags: [review]
+      summary: 评审完成汇总（触发 review.completed）
+      description: 单申报的所有必需轮次任务提交完成后调用，汇总分数、生成排名（并列触发复议），发 review.completed 事件驱动决议流程。
+      operationId: completeReview
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200':
+          description: 评审结果汇总（待决议）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ReviewResult' }
+
+  /apply/review/{id}/decision:
+    post:
+      tags: [decision]
+      summary: 立项决议（P-11）
+      description: R-LEADER 设定 decision（DRAFT/APPROVED/REJECTED/PENDING_INTERVIEW）；APPROVED 且公示通过后触发 project.approved 事件，驱动 02 模块建 E_PROJECT。
+      operationId: upsertDecision
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DecisionRequest' }
+      responses:
+        '200':
+          description: 决议结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ReviewResult' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /apply/review/{id}:publish:
+    post:
+      tags: [decision]
+      summary: 立项公示（P-11）
+      description: DECIDED→PUBLISHED，进入公示期（publicity_start_at/end_at）；公示期内任何人可提异议。
+      operationId: publishResult
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                publicity_start_at: { type: string, format: date-time }
+                publicity_end_at:   { type: string, format: date-time }
+      responses:
+        '200':
+          description: 公示结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ReviewResult' }
+
+  /apply/review/{id}/objections:
+    post:
+      tags: [decision]
+      summary: 提交公示异议（P-11）
+      description: 公示期内提交异议，追加到 objections 数组，异议处理走独立状态机。
+      operationId: submitObjection
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string }
+      responses:
+        '200':
+          description: 已受理异议
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+
+  /apply/task-books:
+    post:
+      tags: [taskbook]
+      summary: 生成任务书（P-12）
+      description: 公示通过（PUBLISHED）后按套打模板自动生成，冻结 content_snapshot；幂等分配 code（前缀 PRJ），与申报 1:1。
+      operationId: generateTaskBook
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [application_id]
+              properties:
+                application_id: { type: integer, format: int64 }
+                print_template_code: { type: string, description: 'sys_print_template.code，默认 TASK_BOOK' }
+      responses:
+        '200':
+          description: 生成的任务书
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/TaskBook' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /apply/task-books/{id}:
+    get:
+      tags: [taskbook]
+      summary: 任务书详情（P-12）
+      operationId: getTaskBook
+      parameters: [ { $ref: '#/components/parameters/PathId' } ]
+      responses:
+        '200':
+          description: 任务书详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/TaskBook' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /apply/task-books/{id}:sign:
+    post:
+      tags: [taskbook]
+      summary: 电子签章签订（P-12）
+      description: 追加签章记录 sign_records；全部签署完成置 SIGNED，签订后触发进入执行（EXECUTING）并回填 project_id。
+      operationId: signTaskBook
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SignRequest' }
+      responses:
+        '200':
+          description: 签订后的任务书
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/TaskBook' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "Authorization: Bearer <JWT>；刷新走 Refresh Token。"
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: 幂等键（UUID）；服务端缓存去重，重试返回同一结果。
+      schema: { type: string }
+    Page:
+      name: page
+      in: query
+      required: false
+      description: 页码，1-based。
+      schema: { type: integer, minimum: 1, default: 1 }
+    Size:
+      name: size
+      in: query
+      required: false
+      description: 每页条数，默认 20，上限 200。
+      schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+    PathId:
+      name: id
+      in: path
+      required: true
+      description: 资源主键 id（BIGINT）。
+      schema: { type: integer, format: int64 }
+
+  responses:
+    BadRequest:
+      description: 参数校验失败（业务码 40001）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+          example: { code: 40001, message: "参数校验失败", data: null, traceId: "t-123", timestamp: 1700000000000 }
+    Unauthorized:
+      description: 未认证（业务码 40101）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+          example: { code: 40101, message: "未认证或令牌失效", data: null, traceId: "t-123", timestamp: 1700000000000 }
+    Forbidden:
+      description: 越权访问（业务码 40301；如非本人申报、评审期访问未授权数据）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+          example: { code: 40301, message: "越权访问被拒绝", data: null, traceId: "t-123", timestamp: 1700000000000 }
+    NotFound:
+      description: 资源不存在（业务码 40401）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+          example: { code: 40401, message: "资源不存在", data: null, traceId: "t-123", timestamp: 1700000000000 }
+    Conflict:
+      description: >-
+        业务冲突。模块业务码：40901 重复申报（同指南同 PI）；40902 超期申报；
+        40903 PI 不在职；40904 形式审查未通过；40905 已进入评审禁止撤回。
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+          example: { code: 40901, message: "同一指南同一 PI 只允许一份有效申报", data: null, traceId: "t-123", timestamp: 1700000000000 }
+    TooManyRequests:
+      description: 频率超限（业务码 42901；AI 接口 20 req/min）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+          example: { code: 42901, message: "请求过于频繁", data: null, traceId: "t-123", timestamp: 1700000000000 }
+    AiUnavailable:
+      description: AI 服务暂时不可用（业务码 50301；按钮置灰，不阻塞业务）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+          example: { code: 50301, message: "AI 服务暂时不可用", data: null, traceId: "t-123", timestamp: 1700000000000 }
+
+  schemas:
+    ApiResponse:
+      type: object
+      description: 统一响应包裹；code=0 表示成功，非 0 为业务错误，HTTP 状态表达传输层。
+      required: [code, message, traceId, timestamp]
+      properties:
+        code:      { type: integer, description: "业务码，0=ok" }
+        message:   { type: string,  description: "提示信息" }
+        data:      { description: "业务数据载荷", nullable: true }
+        traceId:   { type: string,  description: "全链路追踪 ID" }
+        timestamp: { type: integer, format: int64, description: "服务端毫秒时间戳" }
+
+    PageResult:
+      type: object
+      description: 分页数据体（ApiResponse.data）。
+      properties:
+        list:  { type: array, items: { type: object } }
+        total: { type: integer, format: int64 }
+        page:  { type: integer }
+        size:  { type: integer }
+
+    ApplicationStatus:
+      type: string
+      description: 申报状态机 token（design/README.md §4 P 申报序列）。
+      enum: [DRAFT, SUBMITTED, FORMAL_CHECK, RECOMMENDED, UNDER_REVIEW, INTERVIEWING,
+             DECIDED, PUBLISHED, SIGNED, EXECUTING, REJECTED, WITHDRAWN]
+    DecisionToken:
+      type: string
+      description: 立项决议 token（design/README.md §4 P 决议序列）。
+      enum: [DRAFT, APPROVED, REJECTED, PENDING_INTERVIEW]
+    ReviewTaskStatus:
+      type: string
+      enum: [ASSIGNED, ACCEPTED, SCORING, SUBMITTED, RETURNED, EXPIRED]
+
+    Guideline:
+      type: object
+      description: 申报指南（DDL p_guideline）。
+      properties:
+        id:            { type: integer, format: int64 }
+        code:          { type: string }
+        tenant_id:     { type: integer, format: int64 }
+        status:        { type: string, enum: [DRAFT, PUBLISHED, CLOSED] }
+        creator_id:    { type: integer, format: int64 }
+        modifier_id:   { type: integer, format: int64, nullable: true }
+        created_at:    { type: string, format: date-time }
+        updated_at:    { type: string, format: date-time }
+        remark:        { type: string, nullable: true }
+        title:         { type: string }
+        project_type:  { type: string }
+        funding_source: { type: string, nullable: true }
+        target_disciplines: { type: array, items: { type: object } }
+        apply_start_at: { type: string, format: date-time, nullable: true }
+        apply_end_at:   { type: string, format: date-time, nullable: true }
+        total_envelope: { type: string, description: "金额 NUMERIC(18,2)，字符串承载精度，单位元" }
+        content_rich:   { type: string, nullable: true }
+        attachment_ids: { type: array, items: { type: string } }
+        publish_at:     { type: string, format: date-time, nullable: true }
+
+    GuidelineRequest:
+      type: object
+      required: [title, project_type]
+      properties:
+        code:         { type: string }
+        title:        { type: string }
+        project_type: { type: string }
+        funding_source: { type: string }
+        target_disciplines: { type: array, items: { type: object } }
+        apply_start_at: { type: string, format: date-time }
+        apply_end_at:   { type: string, format: date-time }
+        total_envelope: { type: string }
+        content_rich:   { type: string }
+        attachment_ids: { type: array, items: { type: string } }
+        status:       { type: string, enum: [DRAFT, PUBLISHED, CLOSED] }
+        remark:       { type: string }
+
+    Template:
+      type: object
+      description: 申报模板（DDL p_template）。
+      properties:
+        id:            { type: integer, format: int64 }
+        code:          { type: string }
+        tenant_id:     { type: integer, format: int64 }
+        status:        { type: string, enum: [DRAFT, ACTIVE, SUPERSEDED] }
+        creator_id:    { type: integer, format: int64 }
+        created_at:    { type: string, format: date-time }
+        updated_at:    { type: string, format: date-time }
+        name:          { type: string }
+        project_type:  { type: string }
+        form_schema:   { type: object }
+        sections:      { type: array, items: { type: object } }
+        budget_schema: { type: object }
+        review_card:   { type: object }
+        approval_chain: { type: array, items: { type: object } }
+        version:       { type: integer }
+        active:        { type: boolean }
+
+    TemplateRequest:
+      type: object
+      required: [name, project_type]
+      properties:
+        code:         { type: string }
+        name:         { type: string }
+        project_type: { type: string }
+        form_schema:  { type: object }
+        sections:     { type: array, items: { type: object } }
+        budget_schema: { type: object }
+        review_card:  { type: object }
+        approval_chain: { type: array, items: { type: object } }
+        remark:       { type: string }
+
+    Application:
+      type: object
+      description: 申报主表（DDL p_application）。
+      properties:
+        id:            { type: integer, format: int64 }
+        code:          { type: string, description: "申报/立项编号，前缀 PRJ" }
+        tenant_id:     { type: integer, format: int64 }
+        status:        { $ref: '#/components/schemas/ApplicationStatus' }
+        deleted:       { type: integer }
+        creator_id:    { type: integer, format: int64 }
+        modifier_id:   { type: integer, format: int64, nullable: true }
+        created_at:    { type: string, format: date-time }
+        updated_at:    { type: string, format: date-time }
+        remark:        { type: string, nullable: true }
+        guideline_id:  { type: integer, format: int64, nullable: true }
+        template_id:   { type: integer, format: int64, nullable: true }
+        title:         { type: string }
+        project_type:  { type: string }
+        pi_user_id:    { type: integer, format: int64, description: "项目负责人 → sys_user(id)" }
+        member_ids:    { type: array, items: { type: object } }
+        department_id: { type: integer, format: int64, nullable: true, description: "申报部门 → sys_org(id)" }
+        abstract:      { type: string, nullable: true }
+        research_target: { type: string, nullable: true }
+        technical_route: { type: string, nullable: true }
+        expected_output: { type: string, nullable: true }
+        duration_months: { type: integer, nullable: true }
+        total_budget:  { type: string, description: "申报总预算 NUMERIC(18,2)，单位元" }
+        is_horizontal: { type: boolean }
+        funding_channel: { type: string, nullable: true }
+        ai_draft_marked: { type: boolean }
+        submit_at:     { type: string, format: date-time, nullable: true }
+        withdraw_at:   { type: string, format: date-time, nullable: true }
+        withdraw_reason: { type: string, nullable: true }
+
+    ApplicationCreateRequest:
+      type: object
+      required: [title, project_type, guideline_id]
+      properties:
+        guideline_id:  { type: integer, format: int64 }
+        template_id:   { type: integer, format: int64 }
+        title:         { type: string }
+        project_type:  { type: string }
+        pi_user_id:    { type: integer, format: int64 }
+        member_ids:    { type: array, items: { type: object } }
+        department_id: { type: integer, format: int64 }
+        abstract:      { type: string }
+        duration_months: { type: integer }
+        total_budget:  { type: string }
+        is_horizontal: { type: boolean }
+        funding_channel: { type: string }
+
+    SectionSaveRequest:
+      type: object
+      required: [content_rich]
+      properties:
+        content_rich: { type: string }
+        word_count:   { type: integer }
+        table_count:  { type: integer }
+        annotations:  { type: array, items: { type: object } }
+
+    ApplicationDoc:
+      type: object
+      description: 申报书章节（DDL p_application_doc）。
+      properties:
+        id:            { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        section_code:  { type: string }
+        content_rich:  { type: string }
+        word_count:    { type: integer }
+        table_count:   { type: integer }
+        doc_version:   { type: integer }
+        is_current:    { type: boolean }
+        status:        { type: string, enum: [DRAFT, FINAL] }
+        annotations:   { type: array, items: { type: object } }
+        updated_at:    { type: string, format: date-time }
+
+    BudgetDraft:
+      type: object
+      description: 预算草稿行（DDL p_budget_draft）。
+      properties:
+        id:            { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        subject_code:  { type: string, description: "预算科目编码 → 03 F_SUBJECT（逻辑引用）" }
+        subject_name:  { type: string }
+        fiscal_year:   { type: integer }
+        amount:        { type: string, description: "科目年度金额 NUMERIC(18,2)" }
+        calc_detail:   { type: object }
+        ai_compliance_flag:   { type: string, enum: [OK, WARN, VIOLATION, UNKNOWN], nullable: true }
+        ai_compliance_reason: { type: string, nullable: true }
+        status:        { type: string, enum: [DRAFT, CHECKED, APPROVED] }
+
+    BudgetLineRequest:
+      type: object
+      required: [subject_code, amount]
+      properties:
+        subject_code: { type: string }
+        subject_name: { type: string }
+        fiscal_year:  { type: integer }
+        amount:       { type: string }
+        calc_detail:  { type: object }
+
+    SubmitRequest:
+      type: object
+      properties:
+        confirm_ai_watermark: { type: boolean, description: "PI 确认含 AI 起草内容已审阅，PRD 8.1" }
+
+    FormalCheckResult:
+      type: object
+      description: 形式审查结论（P-05，svc-policy 规则引擎确定性判定）。
+      properties:
+        passed:     { type: boolean }
+        status:     { $ref: '#/components/schemas/ApplicationStatus' }
+        items:
+          type: array
+          description: 校验项明细
+          items:
+            type: object
+            properties:
+              item:      { type: string }
+              verdict:   { type: string, enum: [PASS, REJECT, WARN] }
+              rule_code: { type: string }
+              clause_ref: { type: string }
+              message:   { type: string }
+
+    AiDraftRequest:
+      type: object
+      required: [application_id, section_code, keywords]
+      properties:
+        application_id: { type: integer, format: int64 }
+        section_code:   { type: string }
+        keywords:       { type: array, items: { type: string } }
+        project_type:   { type: string }
+
+    AiDraftResult:
+      type: object
+      properties:
+        content:      { type: string, description: "生成正文；置信度<0.7 时为要点建议列表" }
+        mode:         { type: string, enum: [FULL_DRAFT, OUTLINE_HINT] }
+        confidence:   { type: string, description: "NUMERIC(6,4) 置信度 0-1" }
+        references:
+          type: array
+          items:
+            type: object
+            properties:
+              project_code: { type: string }
+              title:        { type: string }
+        watermark:    { type: string, description: "固定为 AI 生成水印标记" }
+
+    AiBudgetCheckRequest:
+      type: object
+      required: [application_id]
+      properties:
+        application_id: { type: integer, format: int64 }
+        budget_lines:
+          type: array
+          items: { $ref: '#/components/schemas/BudgetLineRequest' }
+
+    AiBudgetCheckResult:
+      type: object
+      properties:
+        risks:
+          type: array
+          items:
+            type: object
+            properties:
+              field:       { type: string }
+              violated_clause: { type: string }
+              severity:    { type: string, enum: [HIGH, MED, LOW] }
+              suggestion:  { type: string }
+              clause_ref:  { type: string, description: "条款原文出处，可点击跳转" }
+
+    AiDuplicateCheckResult:
+      type: object
+      properties:
+        similarity:     { type: string, description: "相似度 NUMERIC(6,4)" }
+        innovation:     { type: string, description: "创新度评分 NUMERIC(6,4)" }
+        conflict_list:
+          type: array
+          description: 备案查重冲突清单（P-17），题名相似>0.9 预警
+          items:
+            type: object
+            properties:
+              application_code: { type: string }
+              title:       { type: string }
+              similarity:  { type: string }
+              suggestion:  { type: string, description: "合并建议" }
+
+    AiReviewDraftRequest:
+      type: object
+      required: [task_id]
+      properties:
+        task_id:      { type: integer, format: int64 }
+        score_detail: { type: array, items: { type: object } }
+
+    AiReviewDraftResult:
+      type: object
+      properties:
+        overall:  { type: string }
+        strengths: { type: string }
+        weaknesses: { type: string }
+        suggestions: { type: string }
+        adopted:   { type: boolean, description: "是否被专家采用（数据回流）" }
+
+    DispatchRequest:
+      type: object
+      required: [application_id, review_round]
+      properties:
+        application_id: { type: integer, format: int64 }
+        review_round:   { type: integer, enum: [1, 2] }
+        dispatch_mode:  { type: string, enum: [MANUAL, AI], default: MANUAL }
+        expert_user_ids:
+          type: array
+          description: 手工分派专家 user_id 列表；AI 模式为空时系统按匹配度+负荷推荐
+          items: { type: integer, format: int64 }
+        deadline_at:    { type: string, format: date-time }
+
+    ReviewTask:
+      type: object
+      description: 评审任务（DDL p_review_task）。
+      properties:
+        id:            { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        expert_user_id: { type: integer, format: int64, description: "评审专家 → sys_user(id)" }
+        review_round:  { type: integer }
+        dispatch_mode: { type: string, enum: [MANUAL, AI] }
+        anonymous_view: { type: boolean }
+        conflict_flag: { type: boolean }
+        status:        { $ref: '#/components/schemas/ReviewTaskStatus' }
+        score_total:   { type: string, nullable: true }
+        score_detail:  { type: array, items: { type: object } }
+        comment_text:  { type: string, nullable: true }
+        ai_opinion_draft: { type: string, nullable: true }
+        deadline_at:   { type: string, format: date-time, nullable: true }
+        submitted_at:  { type: string, format: date-time, nullable: true }
+
+    ScoreRequest:
+      type: object
+      required: [score_detail]
+      properties:
+        score_detail:
+          type: array
+          items:
+            type: object
+            properties:
+              dim:      { type: string }
+              score:    { type: string }
+              max_score: { type: string }
+              comment:  { type: string }
+        comment_text: { type: string }
+
+    DecisionRequest:
+      type: object
+      required: [decision]
+      properties:
+        decision:    { $ref: '#/components/schemas/DecisionToken' }
+        final_score: { type: string }
+        rank:        { type: integer }
+        remark:      { type: string }
+
+    ReviewResult:
+      type: object
+      description: 评审结果与决议（DDL p_review_result）。
+      properties:
+        id:            { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        final_score:   { type: string, nullable: true }
+        rank:          { type: integer, nullable: true }
+        decision:      { $ref: '#/components/schemas/DecisionToken' }
+        decided_by:    { type: integer, format: int64, nullable: true }
+        decided_at:    { type: string, format: date-time, nullable: true }
+        status:        { type: string, enum: [PENDING, PUBLICIZING, PUBLISHED, FINAL] }
+        publicity_start_at: { type: string, format: date-time, nullable: true }
+        publicity_end_at:   { type: string, format: date-time, nullable: true }
+        objections:    { type: array, items: { type: object } }
+        publish_status: { type: string, enum: [UNPUBLISHED, PUBLISHED], nullable: true }
+
+    TaskBook:
+      type: object
+      description: 任务书（DDL p_task_book）。
+      properties:
+        id:            { type: integer, format: int64 }
+        code:          { type: string, description: "任务书编号，前缀 PRJ" }
+        application_id: { type: integer, format: int64 }
+        content_snapshot: { type: object }
+        print_template_code: { type: string }
+        signed_pdf_url: { type: string, nullable: true }
+        sign_records:  { type: array, items: { type: object } }
+        effective_date: { type: string, format: date, nullable: true }
+        project_id:    { type: integer, format: int64, nullable: true, description: "立项回填 → 02 E_PROJECT(id)" }
+        status:        { type: string, enum: [DRAFT, SIGNED, EXECUTING] }
+
+    SignRequest:
+      type: object
+      required: [signer_id, role]
+      properties:
+        signer_id:  { type: integer, format: int64 }
+        role:       { type: string, description: "签署方角色：PI/MANAGER/LEADER 等" }
+        signed_at:  { type: string, format: date-time }
+        sig_result: { type: string }

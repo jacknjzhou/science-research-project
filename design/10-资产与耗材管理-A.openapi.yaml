@@ -1,0 +1,1001 @@
+openapi: 3.0.3
+info:
+  title: 科研院所科研管理系统 · 10 资产与耗材管理（模块 A）API
+  description: >-
+    模块 A（Asset & Consumable）对外 REST 契约。覆盖资产建卡/到货转卡、台账与全生命周期档案、
+    领用/归还/调拨、耗材出入库（含危化双人双锁）、按月折旧批处理与凭证回调、处置、盘点、追溯与 AI 补全。
+    术语/状态 token/单号前缀（AST/DSP）与 design/README.md §四、PRD/10 §10 对齐。
+    统一响应包裹 ApiResponse，分页 page(1-based)+size（默认 20，上限 200），认证 Bearer JWT，
+    所有 POST/PUT 支持 Idempotency-Key 幂等头。涉密资产（security_level>=SECRET）在非涉密域不可见明细。
+  version: v1.1
+servers:
+  - url: /api/v1
+    description: 网关路由（内部按 svc-asset/svc-policy/svc-integration-fin/svc-ai-gateway 分派）
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: asset
+    description: 资产卡台账与生命周期（A-01..A-05、A-10、A-11、A-13）
+  - name: consumable
+    description: 耗材/试剂库存与领用（A-07、A-08）
+  - name: depreciation
+    description: 折旧计提与成本分摊、凭证（A-09、A-12、A-11/F-11）
+  - name: inventory
+    description: 盘点与账实一致（A-11、A-14）
+  - name: ai
+    description: AI 资产卡补全（A-15）
+
+paths:
+  /asset:
+    post:
+      tags: [asset]
+      operationId: createAsset
+      summary: 资产建卡（A-02）
+      description: 手工建卡登记固定资产/无形资产。要素缺失（价值/责任人等）时资产置 PENDING_RECEIPT 待确认，禁止进入折旧直到完整（PRD §11）。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetCreateRequest'
+      responses:
+        '200':
+          description: 建卡成功，返回资产卡
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Asset'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /asset/from-receipt:
+    post:
+      tags: [asset]
+      operationId: createAssetFromReceipt
+      summary: 从验收单建卡（A-03，承接 G-17）
+      description: 到货验收通过（G_ORDER ACCEPTED）后自动带出资产建卡要素生成待确认卡；与到货记录 1:1，要素缺失置 PENDING_RECEIPT。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetFromReceiptRequest'
+      responses:
+        '200':
+          description: 生成资产卡（可能为 PENDING_RECEIPT）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Asset'
+        '409':
+          description: 同一到货验收单已建卡（1:1 冲突）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /asset/ledger:
+    get:
+      tags: [asset]
+      operationId: queryAssetLedger
+      summary: 资产台账查询（A-02/A-13）
+      description: 卡片+表格双视图数据源，按法人/密级隔离；非涉密域自动过滤 security_level>=SECRET 明细。
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/AssetStatus'
+        - name: assetType
+          in: query
+          schema:
+            $ref: '#/components/schemas/AssetType'
+        - name: deptId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: custodianId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: projectId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: categoryCode
+          in: query
+          schema: { type: string }
+        - name: keyword
+          in: query
+          description: 名称/型号/序列号模糊
+          schema: { type: string }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 分页资产台账
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items:
+                                  $ref: '#/components/schemas/Asset'
+
+  /asset/{id}/lifecycle:
+    get:
+      tags: [asset]
+      operationId: getAssetLifecycle
+      summary: 资产全周期档案（A-05/审计）
+      description: 验收—建卡—领用/调拨/维修—折旧—分摊—盘点—处置 全链路时间线与责任链，支持套打导出。
+      parameters:
+        - $ref: '#/components/parameters/AssetId'
+      responses:
+        '200':
+          description: 全生命周期档案
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AssetLifecycle'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /asset/{id}/issue:
+    post:
+      tags: [asset]
+      operationId: issueAsset
+      summary: 资产领用（A-05）
+      description: 名下责任人/放置地变更并留痕，生成 A_STOCK_TXN(type=REQUISITION)。
+      parameters:
+        - $ref: '#/components/parameters/AssetId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetIssueRequest'
+      responses:
+        '200':
+          description: 领用流水
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/StockTxn'
+
+  /asset/{id}/return:
+    post:
+      tags: [asset]
+      operationId: returnAsset
+      summary: 资产归还（A-05）
+      parameters:
+        - $ref: '#/components/parameters/AssetId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetReturnRequest'
+      responses:
+        '200':
+          description: 归还流水
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/StockTxn'
+
+  /asset/{id}/transfer:
+    post:
+      tags: [asset]
+      operationId: transferAsset
+      summary: 资产调拨（A-05）
+      description: 跨部门/跨法人调拨，置 TRANSFERRING 直到落地确认；涉密资产调拨须保密审查（联动 11）。
+      parameters:
+        - $ref: '#/components/parameters/AssetId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetTransferRequest'
+      responses:
+        '200':
+          description: 调拨后的资产卡
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Asset'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /consumable/{sku}/stock-in:
+    post:
+      tags: [consumable]
+      operationId: consumableStockIn
+      summary: 耗材/试剂入库（A-07）
+      description: 生成批次库存记录，写入 A_STOCK_TXN(type=STOCK_IN) 与 balance_after；危化入库绑定 MSDS。
+      parameters:
+        - $ref: '#/components/parameters/Sku'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StockInRequest'
+      responses:
+        '200':
+          description: 入库流水
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/StockTxn'
+
+  /consumable/{sku}/stock-out:
+    post:
+      tags: [consumable]
+      operationId: consumableStockOut
+      summary: 耗材/试剂出库领用（A-07/A-08）
+      description: >-
+        领用状态机 REQUESTED→（危化 DOUBLE_CONFIRM 双签）→ISSUED；过期批次冻结不可领用（走危废）；
+        管制类危化超额/单锁硬拦截并告警安全管理员；违反 FIFO 须 fifoExempt 授权豁免留痕。
+        生成 A_STOCK_TXN(type=REQUISITION/STOCK_OUT)。
+      parameters:
+        - $ref: '#/components/parameters/Sku'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StockOutRequest'
+      responses:
+        '200':
+          description: 出库/领用流水（含双人确认结果与余额快照）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/StockTxn'
+        '403':
+          description: 危化双人确认缺失/跨法人越权/过期批次冻结，硬拦截
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /asset/depreciation/run:
+    post:
+      tags: [depreciation]
+      operationId: runDepreciation
+      summary: 按月折旧批处理（A-09/A-12）
+      description: >-
+        按 policy_pack_id 命中政策对 status=IN_USE 且要素完整的资产按月计提（直线/工作量法），
+        生成 A_DEPRECIATION 记录并按 alloc_project_ids 分摊到项目（跨法人按使用比例拆分避免重复计入），
+        完成后发布事件驱动凭证生成（→ /finance/voucher）。(asset_id,period) 唯一保证幂等重算。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DepreciationRunRequest'
+      responses:
+        '200':
+          description: 批处理汇总
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/DepreciationRunResult'
+
+  /finance/voucher:
+    post:
+      tags: [depreciation]
+      operationId: syncDepreciationVoucher
+      summary: 折旧凭证回调（→ F-11）
+      description: 接收财务侧生成/过账的凭证号回写 A_DEPRECIATION.voucher_id / posted=1 / status=POSTED。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VoucherCallbackRequest'
+      responses:
+        '200':
+          description: 回写成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /asset/{id}/disposal:
+    post:
+      tags: [asset]
+      operationId: createDisposal
+      summary: 资产处置发起（A-10）
+      description: 建处置单（DSP-年-序），走 APPLIED→APPRAISED→APPROVED→EXECUTING→BOOKED→ARCHIVED；残值>原值或为负转财务复核。
+      parameters:
+        - $ref: '#/components/parameters/AssetId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DisposalCreateRequest'
+      responses:
+        '200':
+          description: 处置单
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Disposal'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /asset/inventory:
+    post:
+      tags: [inventory]
+      operationId: submitInventory
+      summary: 盘点任务与结果提交（A-11/A-14）
+      description: >-
+        扫码/RFID 采集实物清单，系统比对财务账 vs 资产卡 vs 实物三方，生成盘盈/盘亏差异（COUNT_GAIN/COUNT_LOSS）；
+        差异须原因说明 + 审批方可调账。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InventoryRequest'
+      responses:
+        '200':
+          description: 盘点差异对比与盘盈盘亏草案
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/InventoryResult'
+
+  /asset/{id}/trace:
+    get:
+      tags: [asset]
+      operationId: getAssetTrace
+      summary: 资产端到端追溯（→ E-17）
+      description: 返回申报→合同→采购→经费→成果→资产→归档链的追溯节点（复用 e_trace_node）。
+      parameters:
+        - $ref: '#/components/parameters/AssetId'
+      responses:
+        '200':
+          description: 追溯链
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/TraceChain'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /asset/{id}/ai-fill:
+    post:
+      tags: [ai]
+      operationId: aiFillAsset
+      summary: AI 资产卡自动补全（A-15）
+      description: >-
+        读取发票/合同（复用 G-13 解析），抽取 brand/model/serial_no/value/purchase_date/category 预填建议，
+        字段附 confidence（<0.85 标黄），原值/序列号等关键项须人工确认。限流 20 req/min。
+      parameters:
+        - $ref: '#/components/parameters/AssetId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AiFillRequest'
+      responses:
+        '200':
+          description: 补全建议（不落库，供确认）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AiFillResult'
+        '429':
+          description: AI 接口限流（20 req/min）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: 幂等键（UUID），服务端缓存去重，重复提交返回首次结果
+      required: true
+      schema: { type: string, format: uuid }
+    Page:
+      name: page
+      in: query
+      description: 页码（1-based）
+      schema: { type: integer, minimum: 1, default: 1 }
+    Size:
+      name: size
+      in: query
+      description: 每页条数（默认 20，上限 200）
+      schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+    AssetId:
+      name: id
+      in: path
+      required: true
+      description: 资产主键 id
+      schema: { type: integer, format: int64 }
+    Sku:
+      name: sku
+      in: path
+      required: true
+      description: 耗材物料主编码
+      schema: { type: string }
+
+  responses:
+    Forbidden:
+      description: 跨法人/涉密越权或双人确认缺失，拒绝
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+    ValidationError:
+      description: 业务校验失败（要素缺失/残值异常等）
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+
+  schemas:
+    ApiResponse:
+      type: object
+      description: 统一响应包裹
+      properties:
+        code:    { type: integer, description: '0=成功，非 0=业务错误', example: 0 }
+        message: { type: string, example: ok }
+        data:    { type: object, nullable: true }
+        traceId: { type: string }
+        timestamp: { type: integer, format: int64 }
+      required: [code, message]
+
+    PageResult:
+      type: object
+      properties:
+        total: { type: integer, format: int64 }
+        page:  { type: integer }
+        size:  { type: integer }
+        list:  { type: array, items: { type: object } }
+
+    AssetType:
+      type: string
+      description: 资产类型（走字典 asset_type）
+      enum: [FIXED, INTANGIBLE]
+
+    DepreciationMethod:
+      type: string
+      description: 折旧方法（走字典）
+      enum: [STRAIGHT_LINE, WORKLOAD, ACCELERATED, NONE]
+
+    AssetSourceType:
+      type: string
+      enum: [PURCHASE, SELF_DEV, DONATION, TRANSFER]
+
+    SecurityLevel:
+      type: string
+      enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET]
+
+    AssetStatus:
+      type: string
+      description: 资产全生命周期状态（README §4）
+      enum: [PENDING_RECEIPT, IN_USE, IDLE, UNDER_MAINT, TRANSFERRING, PENDING_DISPOSE, DISPOSED]
+
+    ConsumableStatus:
+      type: string
+      description: 耗材库存状态
+      enum: [IN_STOCK, LOW_STOCK, NEAR_EXPIRY, EXPIRED, STAGNANT]
+
+    StockTxnType:
+      type: string
+      description: 出入库/领用流水类型（走字典 stock_txn_type）
+      enum: [STOCK_IN, STOCK_OUT, REQUISITION, RETURN, RETURN_TO_STOCK, HAZARD_DISPOSE, COUNT_GAIN, COUNT_LOSS]
+
+    IssueStatus:
+      type: string
+      description: 耗材/危化领用状态机
+      enum: [REQUESTED, DOUBLE_CONFIRM, ISSUED]
+
+    DisposalMethod:
+      type: string
+      enum: [SCRAP, SELL, TRANSFER, DESTROY]
+
+    DisposalStatus:
+      type: string
+      enum: [APPLIED, APPRAISED, APPROVED, EXECUTING, BOOKED, ARCHIVED]
+
+    Asset:
+      type: object
+      description: 资产卡（对齐 A_ASSET）
+      properties:
+        id:           { type: integer, format: int64 }
+        code:         { type: string, description: 'AST-{yyyy}-{seq6}' }
+        tenantId:     { type: integer, format: int64 }
+        legalEntityId : {type: integer, format: int64 }
+        securityLevel: { $ref: '#/components/schemas/SecurityLevel' }
+        policyPackId: { type: integer, format: int64, nullable: true }
+        assetType:    { $ref: '#/components/schemas/AssetType' }
+        categoryCode: { type: string }
+        name:         { type: string }
+        brand:        { type: string }
+        model:        { type: string }
+        serialNo:     { type: string }
+        value:        { type: number, format: double, description: '入账原值 NUMERIC(18,2)' }
+        purchaseDate: { type: string, format: date }
+        inDate:       { type: string, format: date }
+        deprMethod:   { $ref: '#/components/schemas/DepreciationMethod' }
+        deprYears:    { type: integer }
+        deprAccum:    { type: number, format: double }
+        netValue:     { type: number, format: double }
+        custodianId:  { type: integer, format: int64, nullable: true }
+        deptId:       { type: integer, format: int64, nullable: true }
+        location:     { type: string }
+        sourceType:   { $ref: '#/components/schemas/AssetSourceType' }
+        sourceRef:    { type: integer, format: int64, nullable: true, description: 'G_CONTRACT/验收单逻辑引用' }
+        projectId:    { type: integer, format: int64, nullable: true, description: 'E_PROJECT 逻辑引用' }
+        usageRate:    { type: number, format: double, description: '0~1' }
+        shareFlag:    { type: boolean }
+        openFlag:     { type: boolean }
+        status:       { $ref: '#/components/schemas/AssetStatus' }
+        createdAt:    { type: string, format: date-time }
+        updatedAt:    { type: string, format: date-time }
+        remark:       { type: string }
+
+    AssetCreateRequest:
+      type: object
+      required: [assetType, categoryCode, name]
+      properties:
+        legalEntityId: { type: integer, format: int64 }
+        securityLevel: { $ref: '#/components/schemas/SecurityLevel' }
+        policyPackId:  { type: integer, format: int64, nullable: true }
+        assetType:     { $ref: '#/components/schemas/AssetType' }
+        categoryCode:  { type: string }
+        name:          { type: string }
+        brand:         { type: string }
+        model:         { type: string }
+        serialNo:      { type: string }
+        value:         { type: number, format: double }
+        purchaseDate:  { type: string, format: date }
+        inDate:        { type: string, format: date }
+        deprMethod:    { $ref: '#/components/schemas/DepreciationMethod' }
+        deprYears:     { type: integer }
+        custodianId:   { type: integer, format: int64 }
+        deptId:        { type: integer, format: int64 }
+        location:      { type: string }
+        sourceType:    { $ref: '#/components/schemas/AssetSourceType' }
+        sourceRef:     { type: integer, format: int64 }
+        projectId:     { type: integer, format: int64 }
+        shareFlag:     { type: boolean }
+        openFlag:      { type: boolean }
+        remark:        { type: string }
+
+    AssetFromReceiptRequest:
+      type: object
+      description: 承接 G-17 验收通过到货单自动建卡（1:1）
+      required: [orderId]
+      properties:
+        orderId:     { type: integer, format: int64, description: 'G_ORDER/验收单 id（逻辑引用）' }
+        receiptId:   { type: integer, format: int64, description: '到货验收记录 id' }
+        contractId:  { type: integer, format: int64, description: 'G_CONTRACT 逻辑引用' }
+        legalEntityId: { type: integer, format: int64 }
+        custodianId: { type: integer, format: int64 }
+        deptId:      { type: integer, format: int64 }
+        location:    { type: string }
+        projectId:   { type: integer, format: int64 }
+        missingFields:
+          type: array
+          description: 到货即缺失的关键要素清单，命中则整卡置 PENDING_RECEIPT
+          items: { type: string }
+
+    AssetLifecycle:
+      type: object
+      properties:
+        asset: { $ref: '#/components/schemas/Asset' }
+        events:
+          type: array
+          items:
+            type: object
+            properties:
+              stage:  { type: string, description: 'RECEIPT/REGISTER/ISSUE/TRANSFER/MAINT/DEPRECIATION/ALLOC/INVENTORY/DISPOSAL/ARCHIVE' }
+              refType : {type: string }
+              refId:  { type: integer, format: int64 }
+              actorId : {type: integer, format: int64 }
+              at:     { type: string, format: date-time }
+              detail: { type: object }
+        depreciations:
+          type: array
+          items: { $ref: '#/components/schemas/Depreciation' }
+        disposals:
+          type: array
+          items: { $ref: '#/components/schemas/Disposal' }
+
+    AssetIssueRequest:
+      type: object
+      required: [projectId]
+      properties:
+        custodianId:  { type: integer, format: int64 }
+        deptId:       { type: integer, format: int64 }
+        location:     { type: string }
+        projectId:    { type: integer, format: int64 }
+        usageRate:    { type: number, format: double }
+        remark:       { type: string }
+
+    AssetReturnRequest:
+      type: object
+      properties:
+        location:   { type: string }
+        deptId:     { type: integer, format: int64 }
+        remark:     { type: string }
+
+    AssetTransferRequest:
+      type: object
+      required: [toLegalEntityId, toDeptId]
+      properties:
+        toLegalEntityId: { type: integer, format: int64 }
+        toDeptId:        { type: integer, format: int64 }
+        toCustodianId:   { type: integer, format: int64 }
+        toLocation:      { type: string }
+        secrecyReviewId: { type: integer, format: int64, description: '涉密资产调拨保密审查单（联动 11）' }
+        remark:          { type: string }
+
+    StockTxn:
+      type: object
+      description: 出入库/领用流水（对齐 A_STOCK_TXN）
+      properties:
+        id:           { type: integer, format: int64 }
+        code:         { type: string }
+        legalEntityId : {type: integer, format: int64 }
+        securityLevel: { $ref: '#/components/schemas/SecurityLevel' }
+        type:         { $ref: '#/components/schemas/StockTxnType' }
+        refAssetId:   { type: integer, format: int64, nullable: true }
+        refSku:       { type: string, nullable: true }
+        refBatchNo:   { type: string, nullable: true }
+        qty:          { type: number, format: double, description: 'NUMERIC(18,3)' }
+        amount:       { type: number, format: double, description: 'NUMERIC(18,2)' }
+        projectId:    { type: integer, format: int64, nullable: true }
+        operatorId:   { type: integer, format: int64 }
+        doubleConfirmBy: { type: integer, format: int64, nullable: true }
+        relatedExpenseId: { type: integer, format: int64, nullable: true }
+        txnTime:      { type: string, format: date-time }
+        balanceAfter: { type: number, format: double }
+        fifoExempt:   { type: boolean }
+        status:       { $ref: '#/components/schemas/IssueStatus' }
+
+    StockInRequest:
+      type: object
+      required: [qty]
+      properties:
+        batchNo:     { type: string }
+        name:        { type: string }
+        category:    { type: string, description: 'REAGENT/CONSUMABLE/COMPONENT/OFFICE' }
+        isHazard:    { type: boolean }
+        hazardLevel: { type: string }
+        msdsUrl:     { type: string }
+        qty:         { type: number, format: double }
+        unit:        { type: string }
+        produceDate: { type: string, format: date }
+        expireDate:  { type: string, format: date }
+        safeStock:   { type: number, format: double }
+        amount:      { type: number, format: double }
+        location:    { type: string }
+        custodianId: { type: integer, format: int64 }
+        legalEntityId: { type: integer, format: int64 }
+
+    StockOutRequest:
+      type: object
+      required: [qty, projectId, operatorId]
+      properties:
+        batchNo:      { type: string, description: '缺省按 FIFO 自动选最早到期批次' }
+        qty:          { type: number, format: double }
+        projectId:    { type: integer, format: int64 }
+        operatorId:   { type: integer, format: int64 }
+        doubleConfirmBy: { type: integer, format: int64, description: '危化第二确认人；管制类必填' }
+        usage:        { type: string, description: '领用用途（危化记录用途）' }
+        relatedExpenseId: { type: integer, format: int64 }
+        fifoExempt:   { type: boolean, description: '违反 FIFO 的授权豁免' }
+        fifoExemptApproverId: { type: integer, format: int64 }
+
+    Depreciation:
+      type: object
+      description: 折旧记录（对齐 A_DEPRECIATION）
+      properties:
+        id:           { type: integer, format: int64 }
+        code:         { type: string }
+        legalEntityId : {type: integer, format: int64 }
+        policyPackId: { type: integer, format: int64, nullable: true }
+        assetId:      { type: integer, format: int64 }
+        period:       { type: string, description: 'YYYY-MM' }
+        deprAmount:   { type: number, format: double }
+        allocProjectIds:
+          type: array
+          description: 成本分摊明细 [{projectId,ratio,amount}]
+          items:
+            type: object
+            properties:
+              projectId: { type: integer, format: int64 }
+              ratio:     { type: number, format: double }
+              amount:    { type: number, format: double }
+        voucherId:    { type: integer, format: int64, nullable: true }
+        posted:       { type: integer, description: '0 未过账 / 1 已过账' }
+        status:       { type: string, enum: [DRAFT, CALCULATED, POSTED, REVERSED] }
+
+    DepreciationRunRequest:
+      type: object
+      required: [period]
+      properties:
+        period:        { type: string, description: '计提月份 YYYY-MM' }
+        legalEntityId: { type: integer, format: int64, description: '限主责法人；缺省全租户批处理' }
+        policyPackId:  { type: integer, format: int64, description: '指定折旧政策快照；缺省按命中 ACTIVE 制度包' }
+        assetIds:
+          type: array
+          description: 指定资产子集（缺省为全部 status=IN_USE 且要素完整的资产）
+          items: { type: integer, format: int64 }
+
+    DepreciationRunResult:
+      type: object
+      properties:
+        period:       { type: string }
+        processedCount: { type: integer }
+        skippedCount:   { type: integer, description: '要素缺失/待验收被排除' }
+        totalDeprAmount : {type: number, format: double }
+        allocationCount : {type: integer }
+        records:
+          type: array
+          items: { $ref: '#/components/schemas/Depreciation' }
+
+    VoucherCallbackRequest:
+      type: object
+      required: [period, items]
+      properties:
+        period: { type: string }
+        items:
+          type: array
+          items:
+            type: object
+            required: [depreciationId, voucherId]
+            properties:
+              depreciationId: { type: integer, format: int64 }
+              voucherId:      { type: integer, format: int64, description: 'F-11 凭证 id' }
+              posted:         { type: boolean }
+
+    Disposal:
+      type: object
+      description: 处置单（对齐 A_DISPOSAL）
+      properties:
+        id:           { type: integer, format: int64 }
+        code:         { type: string, description: 'DSP-{yyyy}-{seq6}' }
+        legalEntityId : {type: integer, format: int64 }
+        assetId:      { type: integer, format: int64 }
+        method:       { $ref: '#/components/schemas/DisposalMethod' }
+        appraisal:    { type: object }
+        residualValue : {type: number, format: double }
+        approvalChain:
+          type: array
+          items: { type: object }
+        relatedVoucher: { type: integer, format: int64, nullable: true }
+        archiveRef:   { type: string, nullable: true }
+        status:       { $ref: '#/components/schemas/DisposalStatus' }
+
+    DisposalCreateRequest:
+      type: object
+      required: [method]
+      properties:
+        method:        { $ref: '#/components/schemas/DisposalMethod' }
+        appraisal:
+          type: object
+          properties:
+            conclusion: { type: string }
+            expertIds:  { type: array, items: { type: integer, format: int64 } }
+            attachmentRef: { type: string }
+            opinion:    { type: string }
+        residualValue: { type: number, format: double }
+        approvalChain:
+          type: array
+          items:
+            type: object
+            properties:
+              node:       { type: string }
+              approverId: { type: integer, format: int64 }
+              action:     { type: string }
+              comment:    { type: string }
+        archiveRef:    { type: string }
+        remark:        { type: string }
+
+    InventoryRequest:
+      type: object
+      required: [items]
+      properties:
+        planId:      { type: integer, format: int64 }
+        deptId:      { type: integer, format: int64 }
+        legalEntityId: { type: integer, format: int64 }
+        collectedBy: { type: integer, format: int64 }
+        items:
+          type: array
+          description: 扫码/RFID 采集的实物清单
+          items:
+            type: object
+            required: [serialNo]
+            properties:
+              serialNo:   { type: string }
+              assetCode:  { type: string }
+              qty:        { type: number, format: double }
+              location:   { type: string }
+
+    InventoryResult:
+      type: object
+      properties:
+        matchedCount: { type: integer }
+        gainCount:    { type: integer }
+        lossCount:    { type: integer }
+        differences:
+          type: array
+          items:
+            type: object
+            properties:
+              diffType:   { type: string, enum: [COUNT_GAIN, COUNT_LOSS, BOOK_MISMATCH] }
+              serialNo:   { type: string }
+              assetId:    { type: integer, format: int64, nullable: true }
+              bookValue:  { type: number, format: double, nullable: true }
+              physicalValue: { type: number, format: double, nullable: true }
+              reason:     { type: string }
+              needApproval: { type: boolean }
+
+    TraceChain:
+      type: object
+      properties:
+        traceId: { type: string }
+        nodes:
+          type: array
+          items:
+            type: object
+            properties:
+              nodeSeq:   { type: integer }
+              objectType : {type: string }
+              objectId:  { type: integer, format: int64 }
+              bizCode:   { type: string }
+              action:    { type: string }
+              occurredAt : {type: string, format: date-time }
+
+    AiFillRequest:
+      type: object
+      required: [docUrls]
+      properties:
+        docUrls:
+          type: array
+          description: 发票/合同文件地址（对象存储）
+          items: { type: string }
+        contractId: { type: integer, format: int64, description: '可选，复用 G-13 解析结果' }
+
+    AiFillResult:
+      type: object
+      properties:
+        suggestions:
+          type: object
+          description: 预填建议字段
+          properties:
+            brand:       { type: string }
+            model:       { type: string }
+            serialNo:    { type: string }
+            value:       { type: number, format: double }
+            purchaseDate : {type: string, format: date }
+            categoryCode : {type: string }
+        confidence:
+          type: object
+          description: 各字段置信度 0~1（<0.85 标黄）
+          additionalProperties: { type: number, format: double }
+        needsManualConfirm:
+          type: array
+          description: 需人工确认的关键项（原值/序列号）
+          items: { type: string }
+        modelVersion: { type: string }
