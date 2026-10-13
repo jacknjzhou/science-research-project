@@ -1,0 +1,1080 @@
+openapi: 3.0.3
+info:
+  title: 科研院所科研管理系统 · 11 涉密管理与多法人治理（模块 X）API
+  description: >-
+    模块 X（Confidentiality & Multi-legal-entity Governance）对外 REST 契约。横切安全与组织治理底座，
+    为 P/E/F/R/T/G/A/C/D 提供密级、三网隔离、信息流向、分级授权与并表口径能力。
+    覆盖 PRD/11 §10：法人树、合并视图与下钻、密级策略发布/查当前、授权与密级许可、涉密输出审批（发起/审批/二次鉴别放行）、
+    密级判定与降密/解密、安全日志埋点与稽核、涉密人员审查清退。
+    术语/状态 token/单号前缀（LE/EXF/SEC）与 design/README.md §四、PRD/README.md 2.12/2.13 对齐。
+    【复用】法人=sys_legal_entity（00-common），输出审批=x_flow_audit（00-common，EXF）；本模块不落这两张表的重复定义。
+    统一响应包裹 ApiResponse，分页 page(1-based)+size（默认 20，上限 200），认证 Bearer JWT，
+    所有 POST 支持 Idempotency-Key；二次身份鉴别端点携带 X-MFA-Assert 头（硬件 Key/生物断言）。
+    铁律：涉密正文接口在非对应网络域（network_zone）返回 403（业务码），且不暴露对象存在性/细节（防探测）。
+  version: v1.1
+servers:
+  - url: /api/v1
+    description: 网关路由（zone-guard 前置三网判定 → svc-iam/svc-identity/svc-policy/svc-audit 分派）
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: governance
+    description: 多法人治理与分级授权、合并视图（X-08/X-09/X-10；读写 sys_legal_entity + sys_org，不重复建表）
+  - name: policy
+    description: 密级/流向策略发布与查询（X-01/X-02/X-05；X_SECURITY_POLICY，联动 sys_policy_pack）
+  - name: grant
+    description: 授权与密级许可（X-01/X-04/X-11；X_ACCESS_GRANT）
+  - name: export
+    description: 涉密信息输出/跨网审批（X-05/X-06；落 x_flow_audit，EXF）
+  - name: classify
+    description: 密级继承与降密/解密（X-14；AI 仅提示不定密 X-13）
+  - name: log
+    description: 涉密专用安全审计日志（X-07；X_SEC_LOG，SM3 哈希链）
+  - name: personnel
+    description: 涉密人员审查/清退（X-11；X_PERSONNEL_SEC，联动 07）
+
+paths:
+  /governance/entity:
+    get:
+      tags: [governance]
+      operationId: getLegalEntityTree
+      summary: 法人树查询（X-08，读 sys_legal_entity + sys_org）
+      description: >-
+        返回总院—分院法人树；每法人显示项目数/经费/资产/人员与并表口径、主责法人标注。
+        数据按调用者法人分级授权：总院看全量，分院看本法人及下属（ABAC tenant_id+legal_entity_id）。
+      parameters:
+        - name: rootId
+          in: query
+          description: 起始法人 id（默认租户根法人）
+          schema: { type: integer, format: int64 }
+        - name: depth
+          in: query
+          description: 展开层级（1=仅直属下属，0=全树）
+          schema: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: 法人树
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/LegalEntityNode'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [governance]
+      operationId: upsertLegalEntity
+      summary: 法人新增/变更（X-08，落 sys_legal_entity）
+      description: >-
+        登记或变更法人主体（总院/分院、统一社会信用代码、法人短码、并表口径、ACTIVE|DEREGISTERED）。
+        写入 common 的 sys_legal_entity，本模块不重复建表；仅系统管理员在配置职责内可发起。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LegalEntityUpsertRequest'
+      responses:
+        '200':
+          description: 落库后的法人（映射自 sys_legal_entity）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/LegalEntity'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /governance/consolidate:
+    get:
+      tags: [governance]
+      operationId: getConsolidatedView
+      summary: 并表合并视图与分法人下钻（X-10，联动 F/D）
+      description: >-
+        项目/经费/资产/合同的分法人汇总与总院合并口径。level=merge 返回合并总量；level=drill 返回下钻明细。
+        口径：以主责法人为准入账，参与法人按分摊比例，避免收入/资产重复计入合并值（§4 并表口径）。查询 < 1s（预聚合）。
+      parameters:
+        - name: level
+          in: query
+          required: true
+          description: merge=总院合并总量 / drill=分法人下钻
+          schema: { type: string, enum: [merge, drill], default: merge }
+        - name: dimension
+          in: query
+          description: 汇总维度
+          schema: { type: string, enum: [PROJECT, EXPENSE, ASSET, CONTRACT, PERSONNEL], default: PROJECT }
+        - name: legalEntityId
+          in: query
+          description: level=drill 时下钻的法人 id
+          schema: { type: integer, format: int64 }
+        - name: period
+          in: query
+          description: 会计/统计期间 YYYY
+          schema: { type: string }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 合并或下钻视图
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ConsolidatedView'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /security/policy:
+    post:
+      tags: [policy]
+      operationId: publishSecurityPolicy
+      summary: 发布密级/流向策略版本（X-01/02/05）
+      description: >-
+        版本化发布 security_level×网络域×角色可见性矩阵（X_SECURITY_POLICY.matrix_json）；同租户同生效模块集合仅一套 ACTIVE，
+        旧版本转 SUPERSEDED。联动 sys_policy_pack。仅安全管理员可发起（三员分立），并写二次鉴别与审计。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/MfaAssert'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SecurityPolicyPublishRequest'
+      responses:
+        '200':
+          description: 发布后的策略
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SecurityPolicy'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /security/policy/current:
+    get:
+      tags: [policy]
+      operationId: getCurrentSecurityPolicy
+      summary: 查当前生效密级策略
+      description: 返回指定生效模块集合下当前 ACTIVE 的 X_SECURITY_POLICY（zone-guard 判定依据）。只读，审计管理员/安全管理员可读。
+      parameters:
+        - name: module
+          in: query
+          description: 生效模块（判定其命中的 ACTIVE 策略集合），如 E/F/R
+          schema: { type: string }
+      responses:
+        '200':
+          description: 当前生效策略
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SecurityPolicy'
+        '404':
+          description: 当前无 ACTIVE 策略（回落内置保守默认：SECRET+ 一律拒绝）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /security/grant:
+    post:
+      tags: [grant]
+      operationId: grantAccess
+      summary: 授予授权/密级许可（X-01/04/11）
+      description: >-
+        写 X_ACCESS_GRANT：subject_user + scope(法人/部门/项目/密级) + granted_level + network_zone。
+        SECRET/TOP_SECRET 授权强制 mfa_bound=1 并二次鉴别。仅安全管理员可发起。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/MfaAssert'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccessGrantRequest'
+      responses:
+        '200':
+          description: 生效的授权记录
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AccessGrant'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    get:
+      tags: [grant]
+      operationId: queryAccessGrant
+      summary: 授权与密级许可查询
+      description: 按被授权人/法人/域过滤 X_ACCESS_GRANT，返回有效授权（分页）。审计管理员只读稽核。
+      parameters:
+        - name: subjectUserId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: networkZone
+          in: query
+          schema: { $ref: '#/components/schemas/NetworkZone' }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/GrantStatus' }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 分页授权列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items:
+                                  $ref: '#/components/schemas/AccessGrant'
+
+  /security/revoke:
+    post:
+      tags: [grant]
+      operationId: revokeAccess
+      summary: 吊销/冻结授权（X-11）
+      description: >-
+        将 X_ACCESS_GRANT 置 REVOKED 或 FROZEN（离岗未清退、复审逾期、三员兼任等触发）。二次鉴别。写审计与 X_SEC_LOG。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/MfaAssert'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccessRevokeRequest'
+      responses:
+        '200':
+          description: 处置后的授权记录
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AccessGrant'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /security/export:
+    post:
+      tags: [export]
+      operationId: createExportApply
+      summary: 发起涉密输出/跨网审批（X-05/06，落 x_flow_audit EXF）
+      description: >-
+        提交拟输出内容与脱密说明、内容指纹 payload_digest，创建 x_flow_audit（APPLIED）。跨网默认禁止，例外走此审批。
+        本模块不重复建表，直接落 common 的 x_flow_audit。payload_digest 用 SM3，供放行时比对防篡改。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportApplyRequest'
+      responses:
+        '200':
+          description: 创建的输出审批单（映射自 x_flow_audit）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/FlowAudit'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /security/export/approve:
+    post:
+      tags: [export]
+      operationId: approveExport
+      summary: 涉密输出双审（X-06，项目负责人初审→安全管理员复审）
+      description: >-
+        推进 x_flow_audit 状态：APPLIED→PRE_REVIEW（初审）→SEC_REVIEW（复审）。approver 与申请人须不同人；
+        不可输出则转 REJECTED 并留痕告警。审批人按职责与密级许可校验。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportApproveRequest'
+      responses:
+        '200':
+          description: 审批后的单据
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/FlowAudit'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: 状态非法（未达可审批态或已终态）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /security/export/release:
+    post:
+      tags: [export]
+      operationId: releaseExport
+      summary: 二次鉴别放行（X-04/06）
+      description: >-
+        SEC_REVIEW 后强制二次身份鉴别（X-MFA-Assert）方置 RELEASED 并记录放行范围与内容指纹。
+        放行按 payload_digest 比对，实际输出与审批指纹不一致则二次拦截（409）并 risk_flag=2 告警。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/MfaAssert'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportReleaseRequest'
+      responses:
+        '200':
+          description: 放行结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/FlowAudit'
+        '403':
+          description: 二次鉴别未通过 / 非涉密网络域请求涉密正文（不暴露对象细节）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+        '409':
+          description: 内容指纹与审批不符，二次拦截
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /security/export/{id}:
+    get:
+      tags: [export]
+      operationId: getExportDetail
+      summary: 查询输出审批状态（X-06）
+      description: >-
+        返回 x_flow_audit 审批链与放行范围。涉密正文在非对应网络域不可见，返回 403（业务码）且不暴露对象存在性（防探测）。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: 审批单
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/FlowAudit'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /security/classify:
+    post:
+      tags: [classify]
+      operationId: submitClassify
+      summary: 密级判定/降密/解密申请（X-14；AI 辅助提示 X-13）
+      description: >-
+        对对象或人员发起定密/升密/降密/解密，走人工审批。classify_status 记工作态 UNCLASSIFIED|DOWN_CLASSIFY|DECLASSIFY；
+        审批完成回写对象 security_level 或 X_PERSONNEL_SEC.granted_level。铁律：AI 绝不自动定密/降密，仅提示。二次鉴别。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/MfaAssert'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClassifyRequest'
+      responses:
+        '200':
+          description: 判定/变更结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ClassifyResult'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /security/log:
+    post:
+      tags: [log]
+      operationId: writeSecLog
+      summary: 安全日志埋点写入（X-07，内部埋点，异步哈希链）
+      description: >-
+        供 zone-guard/各服务在跨域判定、授权变更、输出放行时埋点写 X_SEC_LOG；SM3 逐条链式摘要（hash_prev/hash_self）。
+        异步写入不影响主流程。内部端点，仅服务身份可调用。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SecLogWriteRequest'
+      responses:
+        '200':
+          description: 入链结果（返回 id 与 hash_self）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SecLogWriteResult'
+    get:
+      tags: [log]
+      operationId: querySecLog
+      summary: 安全日志稽核查询（X-07）
+      description: >-
+        分页查询 X_SEC_LOG，支持 risk=true 仅看风险事件（risk_flag>0）。返回含哈希链校验状态。审计管理员主用（只读，不可删改）。
+      parameters:
+        - name: risk
+          in: query
+          description: true=仅风险/高危事件（risk_flag>0）
+          schema: { type: boolean, default: false }
+        - name: legalEntityId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: networkZone
+          in: query
+          schema: { $ref: '#/components/schemas/NetworkZone' }
+        - name: object
+          in: query
+          description: 对象定位 object_type:object_id
+          schema: { type: string }
+        - name: from
+          in: query
+          description: 起始时间（ISO8601）
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 分页安全日志 + 链校验状态
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              chainIntact:
+                                type: boolean
+                                description: 查询区间 SM3 哈希链是否完好；false 触发最高级告警与只读取证
+                              list:
+                                type: array
+                                items:
+                                  $ref: '#/components/schemas/SecLog'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /security/personnel/review:
+    post:
+      tags: [personnel]
+      operationId: personnelSecReview
+      summary: 涉密人员入职审查/在岗复审/离岗清退（X-11，联动 07）
+      description: >-
+        维护 X_PERSONNEL_SEC：入职审查授密级许可、在岗复审刷新 review/next_review_date、离岗清退核销载体与权限。
+        离岗清退三要素（载体归还/权限回收/保密承诺）未完成则授权自动收敛（X_ACCESS_GRANT→FROZEN 只读占位）。二次鉴别。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/MfaAssert'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PersonnelReviewRequest'
+      responses:
+        '200':
+          description: 处置后的涉密人员档案
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PersonnelSec'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: 幂等键（UUID），服务端缓存去重，重复提交返回首次结果
+      required: true
+      schema: { type: string, format: uuid }
+    MfaAssert:
+      name: X-MFA-Assert
+      in: header
+      description: >-
+        二次身份鉴别断言（口令 + 硬件 Key/生物，等保三级/分级保护）。
+        涉密输出放行、定密/降密/解密、密级许可授予/吊销、策略发布等关键操作必填；缺失或校验失败返回 403。
+      required: false
+      schema: { type: string, description: 'MFA 断言令牌（硬件 Key/生物特征核验结果签名）' }
+    Page:
+      name: page
+      in: query
+      description: 页码（1-based）
+      schema: { type: integer, minimum: 1, default: 1 }
+    Size:
+      name: size
+      in: query
+      description: 每页条数（默认 20，上限 200）
+      schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+
+  responses:
+    Forbidden:
+      description: >-
+        越权/跨域/未二次鉴别/三员兼任，拒绝。涉密正文在非对应网络域返回本码（业务码非 0），且不暴露对象存在性或细节（防探测）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+    NotFound:
+      description: 资源不存在（或存在但无权可见，按防探测策略统一返回不可区分响应）
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+    ValidationError:
+      description: 业务校验失败（密级降级非法/双人审批同人/离岗清退未完备等）
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+
+  schemas:
+    ApiResponse:
+      type: object
+      description: 统一响应包裹
+      properties:
+        code:      { type: integer, description: '0=成功，非 0=业务错误（跨域/越权/未鉴别均为业务码，HTTP 403 表达传输层）', example: 0 }
+        message:   { type: string, example: ok }
+        data:      { type: object, nullable: true }
+        traceId:   { type: string }
+        timestamp: { type: integer, format: int64 }
+      required: [code, message]
+
+    PageResult:
+      type: object
+      properties:
+        total: { type: integer, format: int64 }
+        page:  { type: integer }
+        size:  { type: integer }
+        list:  { type: array, items: { type: object } }
+
+    # ── 枚举（= DDL CHECK token / 状态机 token）───────────────────────────────
+    SecurityLevel:
+      type: string
+      description: 对象/可见密级集合（README 2.13，静态分级）
+      enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET]
+    NetworkZone:
+      type: string
+      description: 三网安全域（README 2.13 / TECH_ARCH §七）
+      enum: [INTERNET, OFFICE, SECRET_NET]
+    PolicyStatus:
+      type: string
+      description: 策略版本状态（对齐 sys_policy_pack）
+      enum: [DRAFT, ACTIVE, SUPERSEDED]
+    ClassifyStatus:
+      type: string
+      description: 定/降/解密【工作态】（PRD 6.2），≠ 对象 security_level
+      enum: [UNCLASSIFIED, DOWN_CLASSIFY, DECLASSIFY]
+    GrantScopeType:
+      type: string
+      description: 授权范围类型（法人/部门/项目/密级）
+      enum: [LEGAL_ENTITY, DEPT, PROJECT, SECURITY_LEVEL]
+    GrantStatus:
+      type: string
+      enum: [EFFECTIVE, FROZEN, REVOKED]
+    PersonnelStatus:
+      type: string
+      description: 涉密人员审查/清退状态
+      enum: [PENDING_REVIEW, GRANTED, RE_REVIEW, FROZEN, CLEARED_OUT]
+    LogResult:
+      type: string
+      enum: [ALLOW, DENY]
+    FlowStatus:
+      type: string
+      description: x_flow_audit 输出/跨网审批状态（00-common）
+      enum: [APPLIED, PRE_REVIEW, SEC_REVIEW, RELEASED, REJECTED, RECORDED]
+    FlowDirection:
+      type: string
+      description: 流向（涉密→内网 DOWN / 互联网→涉密 UP）
+      enum: [DOWN, UP]
+    EntityType:
+      type: string
+      description: 法人类型（sys_legal_entity.entity_type）
+      enum: [TOTAL_INSTITUTE, BRANCH_INSTITUTE]
+    EntityStatus:
+      type: string
+      description: 法人状态（sys_legal_entity.status）
+      enum: [ACTIVE, DEREGISTERED]
+    ConsolidateDimension:
+      type: string
+      enum: [PROJECT, EXPENSE, ASSET, CONTRACT, PERSONNEL]
+
+    # ── 法人（映射 sys_legal_entity + sys_org 法人树，本模块不重复建表）─────────
+    LegalEntity:
+      type: object
+      description: 法人主体（读写 common.sys_legal_entity；树层级由 sys_org 承载）
+      properties:
+        id:            { type: integer, format: int64 }
+        code:          { type: string, description: 'LE-{yyyy}-{seq6}' }
+        tenantId:      { type: integer, format: int64 }
+        name:          { type: string }
+        creditCode:    { type: string, description: 统一社会信用代码 }
+        entityType:    { $ref: '#/components/schemas/EntityType' }
+        shortCode:     { type: string, description: 法人短码（号段前缀） }
+        consolidated:  { type: boolean, description: 是否并表主体 }
+        parentId:      { type: integer, format: int64, nullable: true, description: '上级法人（由 sys_org.parent_id 组织树映射）' }
+        reportScope:   { type: string, description: 并表口径（联动 F/D） }
+        status:        { $ref: '#/components/schemas/EntityStatus' }
+
+    LegalEntityNode:
+      type: object
+      description: 法人树节点（含治理统计与主责标注）
+      properties:
+        entity:    { $ref: '#/components/schemas/LegalEntity' }
+        children:
+          type: array
+          items: { $ref: '#/components/schemas/LegalEntityNode' }
+        stats:
+          type: object
+          properties:
+            projectCount:   { type: integer, format: int64 }
+            expenseAmount:  { type: number, format: double }
+            assetCount:     { type: integer, format: int64 }
+            personnelCount: { type: integer, format: int64 }
+        asPrimary:  { type: boolean, description: '是否为跨法人事项的主责法人' }
+
+    LegalEntityUpsertRequest:
+      type: object
+      description: 法人新增/变更（落 sys_legal_entity）
+      required: [name, entityType]
+      properties:
+        id:           { type: integer, format: int64, description: '变更时传入法人 id' }
+        name:         { type: string }
+        creditCode:   { type: string }
+        entityType:   { $ref: '#/components/schemas/EntityType' }
+        shortCode:    { type: string }
+        consolidated: { type: boolean }
+        parentId:     { type: integer, format: int64 }
+        reportScope:  { type: string }
+        status:       { $ref: '#/components/schemas/EntityStatus' }
+
+    ConsolidatedView:
+      type: object
+      description: 并表合并/下钻视图（主责法人为准、参与法人按分摊，避免重复计入）
+      properties:
+        level:     { type: string, enum: [merge, drill] }
+        dimension: { $ref: '#/components/schemas/ConsolidateDimension' }
+        period:    { type: string }
+        merged:
+          type: object
+          description: 合并总量（level=merge）
+          properties:
+            totalAmount: { type: number, format: double }
+            totalCount:  { type: integer, format: int64 }
+            dedupNote:   { type: string, description: 去重口径说明（跨法人重复统计抵销） }
+        rows:
+          type: array
+          description: 分法人下钻明细（level=drill）
+          items:
+            type: object
+            properties:
+              legalEntityId:   { type: integer, format: int64 }
+              legalEntityName: { type: string }
+              role:            { type: string, enum: [PRIMARY, PARTICIPANT], description: 主责/参与 }
+              amount:          { type: number, format: double }
+              allocRatio:      { type: number, format: double, description: 参与法人分摊比例 0~1 }
+
+    # ── 密级/流向策略（X_SECURITY_POLICY）───────────────────────────────────────
+    SecurityPolicy:
+      type: object
+      description: 密级/流向策略（对齐 X_SECURITY_POLICY）
+      properties:
+        id:             { type: integer, format: int64 }
+        code:           { type: string, description: 'SEC-{yyyy}-{seq6}' }
+        tenantId:       { type: integer, format: int64 }
+        legalEntityId:  { type: integer, format: int64 }
+        securityLevel:  { $ref: '#/components/schemas/SecurityLevel' }
+        version:        { type: integer }
+        effectiveFrom:  { type: string, format: date }
+        effectiveTo:    { type: string, format: date, nullable: true }
+        matrixJson:     { type: object, additionalProperties: true, description: '每密级的 visible_zones/role_whitelist/can_export/can_cross_net/desensitize' }
+        appliedModules: { type: array, items: { type: string }, description: '{P,E,F,R,T,G,A,C,D...}' }
+        policyPackId:   { type: integer, format: int64, nullable: true, description: '联动 sys_policy_pack.id' }
+        status:         { $ref: '#/components/schemas/PolicyStatus' }
+
+    SecurityPolicyPublishRequest:
+      type: object
+      required: [matrixJson, appliedModules]
+      properties:
+        legalEntityId:  { type: integer, format: int64 }
+        securityLevel:  { $ref: '#/components/schemas/SecurityLevel' }
+        effectiveFrom:  { type: string, format: date }
+        effectiveTo:    { type: string, format: date }
+        matrixJson:     { type: object, additionalProperties: true }
+        appliedModules: { type: array, items: { type: string } }
+        policyPackId:   { type: integer, format: int64 }
+        remark:         { type: string }
+
+    # ── 授权与密级许可（X_ACCESS_GRANT）─────────────────────────────────────────
+    AccessGrant:
+      type: object
+      description: 授权与密级许可（对齐 X_ACCESS_GRANT）
+      properties:
+        id:            { type: integer, format: int64 }
+        code:          { type: string, description: 'SEC-{yyyy}-{seq6}' }
+        tenantId:      { type: integer, format: int64 }
+        legalEntityId: { type: integer, format: int64 }
+        securityLevel: { $ref: '#/components/schemas/SecurityLevel' }
+        subjectUserId: { type: integer, format: int64 }
+        scopeType:     { $ref: '#/components/schemas/GrantScopeType' }
+        scopeRef:      { type: integer, format: int64, nullable: true, description: '法人/部门/项目 id（SECURITY_LEVEL 时可空）' }
+        grantedLevel:  { $ref: '#/components/schemas/SecurityLevel' }
+        networkZone:   { $ref: '#/components/schemas/NetworkZone' }
+        mfaBound:      { type: boolean }
+        validFrom:     { type: string, format: date-time }
+        validTo:       { type: string, format: date-time, nullable: true }
+        status:        { $ref: '#/components/schemas/GrantStatus' }
+
+    AccessGrantRequest:
+      type: object
+      required: [subjectUserId, scopeType, grantedLevel, networkZone]
+      properties:
+        legalEntityId: { type: integer, format: int64 }
+        subjectUserId: { type: integer, format: int64 }
+        scopeType:     { $ref: '#/components/schemas/GrantScopeType' }
+        scopeRef:      { type: integer, format: int64 }
+        grantedLevel:  { $ref: '#/components/schemas/SecurityLevel' }
+        networkZone:   { $ref: '#/components/schemas/NetworkZone' }
+        mfaBound:      { type: boolean, description: 'SECRET/TOP_SECRET 强制 true' }
+        validFrom:     { type: string, format: date-time }
+        validTo:       { type: string, format: date-time }
+        remark:        { type: string }
+
+    AccessRevokeRequest:
+      type: object
+      required: [grantId, action]
+      properties:
+        grantId: { type: integer, format: int64 }
+        action:  { type: string, enum: [FREEZE, REVOKE], description: '冻结（可恢复）/吊销（不可逆）' }
+        reason:  { type: string }
+
+    # ── 涉密输出/跨网审批（映射 x_flow_audit，本模块不重复建表）────────────────
+    FlowAudit:
+      type: object
+      description: 输出/跨网审批单（对齐 common.x_flow_audit，EXF）
+      properties:
+        id:                { type: integer, format: int64 }
+        code:              { type: string, description: 'EXF-{yyyy}-{seq6}' }
+        direction:         { $ref: '#/components/schemas/FlowDirection' }
+        objectType:        { type: string }
+        objectId:          { type: integer, format: int64 }
+        fromDomain:        { $ref: '#/components/schemas/NetworkZone' }
+        toDomain:          { $ref: '#/components/schemas/NetworkZone' }
+        applicantId:       { type: integer, format: int64 }
+        approver1Id:       { type: integer, format: int64, nullable: true, description: 项目负责人初审 }
+        approver2Id:       { type: integer, format: int64, nullable: true, description: 安全管理员复审 }
+        secondVerifierId:  { type: integer, format: int64, nullable: true }
+        payloadDigest:     { type: string, description: '内容指纹（SM3），放行比对防篡改' }
+        desensitizeNote:   { type: string, description: 脱密说明 }
+        releaseScope:      { type: string, description: 放行范围 }
+        securityLevel:     { $ref: '#/components/schemas/SecurityLevel' }
+        status:            { $ref: '#/components/schemas/FlowStatus' }
+        reason:            { type: string }
+
+    ExportApplyRequest:
+      type: object
+      required: [direction, objectType, objectId, toDomain, payloadDigest]
+      properties:
+        direction:       { $ref: '#/components/schemas/FlowDirection' }
+        objectType:      { type: string }
+        objectId:        { type: integer, format: int64 }
+        fromDomain:      { $ref: '#/components/schemas/NetworkZone' }
+        toDomain:        { $ref: '#/components/schemas/NetworkZone' }
+        securityLevel:   { $ref: '#/components/schemas/SecurityLevel' }
+        payloadDigest:   { type: string, description: '拟输出内容 SM3 指纹' }
+        desensitizeNote: { type: string }
+        reason:          { type: string }
+        legalEntityId:   { type: integer, format: int64 }
+
+    ExportApproveRequest:
+      type: object
+      required: [exportId, stage, verdict]
+      properties:
+        exportId: { type: integer, format: int64 }
+        approverId: { type: integer, format: int64, description: '审批人（须与申请人不同，初审/复审分级）' }
+        stage:    { type: string, enum: [PRE_REVIEW, SEC_REVIEW] }
+        verdict:  { type: string, enum: [PASS, REJECT] }
+        releaseScope: { type: string, description: 复审通过时指定放行范围 }
+        comment:  { type: string }
+
+    ExportReleaseRequest:
+      type: object
+      required: [exportId, actualPayloadDigest]
+      properties:
+        exportId:          { type: integer, format: int64 }
+        secondVerifierId:  { type: integer, format: int64 }
+        actualPayloadDigest: { type: string, description: '实际输出内容 SM3 指纹，须与审批 payload_digest 一致，否则二次拦截' }
+        releaseScope:      { type: string }
+
+    # ── 密级判定/降密/解密（X-14）───────────────────────────────────────────────
+    ClassifyRequest:
+      type: object
+      required: [targetType, targetId, op]
+      properties:
+        targetType:  { type: string, enum: [OBJECT, PERSONNEL], description: 对象密级 或 人员密级许可 }
+        targetId:    { type: integer, format: int64 }
+        op:          { type: string, enum: [SET_LEVEL, DOWN_CLASSIFY, DECLASSIFY], description: '定密/升密=SET_LEVEL（人工），降密/解密' }
+        proposedLevel: { $ref: '#/components/schemas/SecurityLevel', description: '人工确定的目标密级' }
+        aiHint:
+          type: object
+          description: 'X-13 AI 疑似涉密识别提示（仅参考，不定密）'
+          properties:
+            hitKeywords: { type: array, items: { type: string } }
+            suggestedLevel: { $ref: '#/components/schemas/SecurityLevel' }
+            confidence:  { type: number, format: double, description: '0~1；低置信仅提示不拦截' }
+            ruleRef:     { type: string, description: 命中脱密规则编号 }
+        reason: { type: string }
+        legalEntityId: { type: integer, format: int64 }
+
+    ClassifyResult:
+      type: object
+      properties:
+        targetId:     { type: integer, format: int64 }
+        classifyStatus: { $ref: '#/components/schemas/ClassifyStatus' }
+        securityLevel:  { $ref: '#/components/schemas/SecurityLevel', description: 审批完成后回写的对象密级/人员许可 }
+        needApproval:   { type: boolean, description: 'AI 结果永不自动生效，一律需人工审批' }
+        auditRef:       { type: string, description: '关联 sys_audit_log / x_flow_audit 凭证号' }
+
+    # ── 安全日志（X_SEC_LOG）────────────────────────────────────────────────────
+    SecLog:
+      type: object
+      description: 涉密专用安全日志（对齐 X_SEC_LOG）
+      properties:
+        id:             { type: integer, format: int64 }
+        tenantId:       { type: integer, format: int64 }
+        legalEntityId:  { type: integer, format: int64 }
+        actorId:        { type: integer, format: int64 }
+        actorRole:      { type: string }
+        networkZone:    { $ref: '#/components/schemas/NetworkZone' }
+        action:         { type: string }
+        objectType:     { type: string }
+        objectId:       { type: integer, format: int64 }
+        fieldDiffJson:  { type: object, additionalProperties: true, nullable: true }
+        securityLevel:  { $ref: '#/components/schemas/SecurityLevel' }
+        grantedLevel:   { $ref: '#/components/schemas/SecurityLevel' }
+        result:         { $ref: '#/components/schemas/LogResult' }
+        riskFlag:       { type: integer, description: '0 常规/1 风险/2 高危（越权探测/哈希链断裂）' }
+        hashPrev:       { type: string, nullable: true }
+        hashSelf:       { type: string, description: SM3 链式摘要 }
+        occurredAt:     { type: string, format: date-time }
+        sourceIp:       { type: string }
+        deviceId:       { type: string }
+
+    SecLogWriteRequest:
+      type: object
+      description: 内部埋点（zone-guard/服务调用），异步入链
+      required: [actorId, networkZone, action, objectType, objectId, result]
+      properties:
+        tenantId:      { type: integer, format: int64 }
+        legalEntityId: { type: integer, format: int64 }
+        actorId:       { type: integer, format: int64 }
+        actorRole:     { type: string }
+        networkZone:   { $ref: '#/components/schemas/NetworkZone' }
+        action:        { type: string }
+        objectType:    { type: string }
+        objectId:      { type: integer, format: int64 }
+        fieldDiffJson: { type: object, additionalProperties: true }
+        securityLevel: { $ref: '#/components/schemas/SecurityLevel' }
+        grantedLevel:  { $ref: '#/components/schemas/SecurityLevel' }
+        result:        { $ref: '#/components/schemas/LogResult' }
+        riskFlag:      { type: integer, minimum: 0, maximum: 2, default: 0 }
+        occurredAt:    { type: string, format: date-time }
+        sourceIp:      { type: string }
+        deviceId:      { type: string }
+        traceId:       { type: string, description: '与 sys_audit_log 关联' }
+
+    SecLogWriteResult:
+      type: object
+      properties:
+        id:        { type: integer, format: int64 }
+        hashSelf:  { type: string, description: '新条目 SM3 摘要（服务端计算链值后返回）' }
+        async:     { type: boolean, description: 'true=异步入链，不阻塞主流程' }
+
+    # ── 涉密人员（X_PERSONNEL_SEC）──────────────────────────────────────────────
+    PersonnelSec:
+      type: object
+      description: 涉密人员档案（对齐 X_PERSONNEL_SEC，联动 07）
+      properties:
+        id:             { type: integer, format: int64 }
+        code:           { type: string, description: 'SEC-{yyyy}-{seq6}' }
+        tenantId:       { type: integer, format: int64 }
+        legalEntityId:  { type: integer, format: int64 }
+        securityLevel:  { $ref: '#/components/schemas/SecurityLevel' }
+        userId:         { type: integer, format: int64 }
+        staffId:        { type: integer, format: int64, nullable: true, description: 'S_STAFF.id（07 逻辑引用）' }
+        secretEligible: { type: boolean }
+        grantedLevel:   { $ref: '#/components/schemas/SecurityLevel' }
+        classifyStatus: { $ref: '#/components/schemas/ClassifyStatus' }
+        reviewDate:     { type: string, format: date, nullable: true }
+        nextReviewDate: { type: string, format: date, nullable: true }
+        trainingRecords:
+          type: array
+          items:
+            type: object
+            properties:
+              type:         { type: string }
+              trainingDate: { type: string, format: date }
+              result:       { type: string }
+              trainer:      { type: string }
+              certRef:      { type: string }
+        leaveClearance:
+          type: object
+          nullable: true
+          properties:
+            carrierReturned:   { type: boolean, description: 载体归还 }
+            accessRevoked:     { type: boolean, description: 权限回收 }
+            undertakingSigned: { type: boolean, description: 保密承诺 }
+            closedBy:          { type: integer, format: int64 }
+            closedAt:          { type: string, format: date-time }
+        status:         { $ref: '#/components/schemas/PersonnelStatus' }
+
+    PersonnelReviewRequest:
+      type: object
+      required: [userId, op]
+      properties:
+        userId:         { type: integer, format: int64 }
+        staffId:        { type: integer, format: int64 }
+        op:             { type: string, enum: [ONBOARD_REVIEW, INPOST_RE_REVIEW, LEAVE_CLEARANCE], description: '入职审查/在岗复审/离岗清退' }
+        secretEligible: { type: boolean }
+        grantedLevel:   { $ref: '#/components/schemas/SecurityLevel', description: 入职审查通过后授予的密级许可 }
+        classifyStatus: { $ref: '#/components/schemas/ClassifyStatus' }
+        reviewDate:     { type: string, format: date }
+        nextReviewDate: { type: string, format: date }
+        trainingRecord: { type: object, additionalProperties: true }
+        leaveClearance:
+          type: object
+          properties:
+            carrierReturned:   { type: boolean }
+            accessRevoked:     { type: boolean }
+            undertakingSigned: { type: boolean }
+        legalEntityId:  { type: integer, format: int64 }
+        remark:         { type: string }

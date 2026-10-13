@@ -1,0 +1,1065 @@
+openapi: 3.0.3
+info:
+  title: 科研诚信与伦理（C）API
+  version: "1.0"
+  description: >-
+    06 科研诚信与伦理模块对外 REST 契约（自包含 OpenAPI 3.0.3，可独立导入 Swagger/Postman）。
+    覆盖伦理审查案卷全生命周期：申请创建/提交（带材料上传）、AI 伦理风险预审、形式审查、
+    分派主审+委员、委员打分/意见、会议审查（签到/表决/生成纪要）、批件签发与公开验证（编号+二维码）、
+    修正案、不良事件报告、年度复审；诚信承诺签署、失信档案 CRUD 与本人申诉、学术不端扫描、
+    人类遗传资源备案（对接国家系统）。
+    字段与 ../README.md §2 通用列及 06-科研诚信与伦理-C.ddl.sql 对齐；状态 enum 取 §4/PRD §6.2 案卷 token。
+    伦理案卷内容读接口标注权限隔离（涉受试者信息，PRD §9 保密）；批件公开验证仅返回真伪，不泄露内容。
+    上游 PRD：../PRD/06-科研诚信与伦理.md（C-01..C-19）。
+servers:
+  - url: /api/v1
+    description: 科研管理系统网关（v1）
+
+tags:
+  - name: ethics
+    description: 伦理审查案卷（申请/提交/审查/决议/批件，C-01..C-13）
+  - name: review
+    description: 分派、委员意见、会议审查（C-03/C-04）
+  - name: ai
+    description: AI 伦理风险预审与学术不端扫描（C-14/C-17/C-18，限流 20/min）
+  - name: letter
+    description: 批件签发与公开验证（C-06，公开可查编号不可查内容）
+  - name: integrity
+    description: 诚信承诺签署与失信档案（C-15/C-16）
+  - name: hgr
+    description: 人类遗传资源备案，对接国家系统（C-10）
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      description: 页码，1-based
+      schema: { type: integer, minimum: 1, default: 1 }
+    SizeParam:
+      name: size
+      in: query
+      description: 每页条数，默认 20，上限 200
+      schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: 幂等键（UUID），POST/PUT 服务端缓存去重（§3）
+      schema: { type: string, format: uuid }
+    CaseId:
+      name: id
+      in: path
+      required: true
+      description: 伦理案卷主键 C_ETHICS_CASE.id
+      schema: { type: integer, format: int64 }
+    LetterNo:
+      name: letterNo
+      in: path
+      required: true
+      description: 批件编号（对外验证标识，C_DECISION_LETTER.letter_no）
+      schema: { type: string }
+    RecordId:
+      name: id
+      in: path
+      required: true
+      description: 失信档案主键 C_INTEGRITY_RECORD.id
+      schema: { type: integer, format: int64 }
+    FilingId:
+      name: id
+      in: path
+      required: true
+      description: 人遗备案主键 C_HGR_FILING.id
+      schema: { type: integer, format: int64 }
+
+  schemas:
+    ApiResponse:
+      type: object
+      description: 统一响应包裹（§3）
+      properties:
+        code:    { type: integer, description: 0 为成功，非 0 为业务错误码 }
+        message: { type: string }
+        data:    { type: object, nullable: true }
+        traceId: { type: string }
+        timestamp: { type: integer, format: int64 }
+
+    PageResult:
+      type: object
+      description: 通用分页结果（list 元素类型随接口而定）
+      properties:
+        list: { type: array, items: { type: object } }
+        total: { type: integer, format: int64 }
+        page:  { type: integer }
+        size:  { type: integer }
+
+    MaterialItem:
+      type: object
+      description: 附件材料（方案/招募材料/知情同意书等）
+      properties:
+        name:        { type: string }
+        url:         { type: string, description: 对象存储地址 }
+        type:        { type: string, enum: [PROTOCOL, CONSENT, RECRUIT, BUDGET, CV, OTHER] }
+        uploaded_at: { type: string, format: date-time }
+
+    EthicsCase:
+      type: object
+      description: 伦理审查案卷视图（字段对齐 C_ETHICS_CASE DDL）
+      properties:
+        id:               { type: integer, format: int64 }
+        code:             { type: string, nullable: true, description: 案卷编号 ETH-年-序 }
+        tenant_id:        { type: integer, format: int64 }
+        status:
+          type: string
+          enum: [DRAFT, SUBMITTED, FORMAL_CHECK, UNDER_REVIEW, NEEDS_REVISION,
+                 APPROVED, REJECTED, MONITORING, EXPIRED]
+        review_type:      { type: string, enum: [HUMAN, ANIMAL, BIO_SAFETY, HGR, DATA_EXPORT] }
+        project_id:       { type: integer, format: int64, nullable: true, description: 逻辑引用 E_PROJECT.id }
+        applicant_user_id: { type: integer, format: int64 }
+        department_id:    { type: integer, format: int64, nullable: true }
+        protocol_title:   { type: string }
+        protocol_summary: { type: string, nullable: true, description: 涉受试者信息，权限隔离字段 }
+        methodology:      { type: string, nullable: true }
+        risk_level:       { type: string, enum: [HIGH, MED, LOW] }
+        materials:        { type: array, items: { $ref: '#/components/schemas/MaterialItem' } }
+        informed_consent_url: { type: string, nullable: true }
+        risk_assessment:  { type: object, nullable: true, description: 'AI 风险预判 {risk_points,need_supplement,confidence}' }
+        ai_prescreen:     { type: object, nullable: true, description: '关键要素完整性 {missing_fields,passed}' }
+        submitted_at:     { type: string, format: date-time, nullable: true }
+        decision_date:    { type: string, format: date, nullable: true }
+        valid_until:      { type: string, format: date, nullable: true }
+        next_review_at:   { type: string, format: date, nullable: true }
+        is_emergency:     { type: boolean }
+        legal_entity_id:  { type: integer, format: int64 }
+        security_level:   { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET] }
+        x_ref:            { type: string, nullable: true, description: 移交 X 模块涉密审计引用，本模块不存涉密正文 }
+        created_at:       { type: string, format: date-time }
+        updated_at:       { type: string, format: date-time }
+        remark:           { type: string, nullable: true }
+
+    ReviewerAssign:
+      type: object
+      description: 分派记录（C_REVIEWER_ASSIGN）
+      properties:
+        id:               { type: integer, format: int64 }
+        case_id:          { type: integer, format: int64 }
+        reviewer_user_id: { type: integer, format: int64 }
+        role:             { type: string, enum: [CHIEF, BOARD] }
+        assigned_at:      { type: string, format: date-time }
+        deadline:         { type: string, format: date-time, nullable: true }
+        conflict_of_interest: { type: boolean, description: 回避命中标记（同部门/师生强制回避） }
+        coi_reason:       { type: string, nullable: true }
+        status:           { type: string, enum: [ASSIGNED, ACCEPTED, RECUSED, COMPLETED, TIMEOUT, REASSIGNED] }
+
+    ReviewOpinion:
+      type: object
+      description: 委员审阅意见（C_REVIEW_OPINION；对 PI 匿名展示）
+      properties:
+        id:               { type: integer, format: int64 }
+        case_id:          { type: integer, format: int64 }
+        reviewer_user_id: { type: integer, format: int64, nullable: true, description: 对 PI 视图脱敏为匿名 }
+        score:            { type: number, format: double, nullable: true }
+        comments:         { type: string }
+        objection:        { type: object, nullable: true, description: '异议 {points,requested_docs}' }
+        risks_identified: { type: array, items: { type: object } }
+        recommendation:   { type: string, enum: [APPROVE, APPROVE_WITH_CHANGES, REJECT] }
+
+    MeetingRecord:
+      type: object
+      description: 会议审查纪要（C_MEETING_RECORD）
+      properties:
+        id:               { type: integer, format: int64 }
+        case_id:          { type: integer, format: int64 }
+        meeting_date:     { type: string, format: date-time }
+        attendees:        { type: array, items: { type: object, description: '{user_id,name,role,signed_in,signed_at}' } }
+        quorum_met:       { type: boolean }
+        discussion_text:  { type: string, nullable: true }
+        decision:         { type: string, enum: [APPROVE, APPROVE_WITH_CHANGES, REJECT, CONTINUE], nullable: true }
+        vote_result:      { type: object, nullable: true, description: '表决 {approve,reject,abstain,total,pass}' }
+        status:           { type: string, enum: [SCHEDULED, IN_PROGRESS, MINUTED, FINALIZED] }
+
+    DecisionLetter:
+      type: object
+      description: 伦理批件（C_DECISION_LETTER，1:1 案卷）
+      properties:
+        id:               { type: integer, format: int64 }
+        case_id:          { type: integer, format: int64 }
+        decision_type:    { type: string, enum: [APPROVE, APPROVE_WITH_CHANGES, REJECT] }
+        letter_no:        { type: string }
+        letter_url:       { type: string, nullable: true }
+        verify_url:       { type: string, nullable: true }
+        qr_code_url:      { type: string, nullable: true }
+        signature_url:    { type: string, nullable: true }
+        issued_at:        { type: string, format: date-time, nullable: true }
+        expires_at:       { type: string, format: date-time, nullable: true }
+        status:           { type: string, enum: [DRAFT, ISSUED, PUBLISHED, REVOKED, EXPIRED] }
+
+    LetterVerifyResult:
+      type: object
+      description: 批件公开验证结果（不含受试者内容，仅真伪与元数据）
+      properties:
+        valid:            { type: boolean, description: 编号是否有效存在 }
+        letter_no:        { type: string }
+        decision_type:    { type: string, enum: [APPROVE, APPROVE_WITH_CHANGES, REJECT], nullable: true }
+        issued_at:        { type: string, format: date-time, nullable: true }
+        expires_at:       { type: string, format: date-time, nullable: true }
+        status:           { type: string, enum: [ISSUED, PUBLISHED, REVOKED, EXPIRED] }
+        qr_code_url:      { type: string, nullable: true, description: 验证二维码地址 }
+
+    Amendment:
+      type: object
+      description: 修正案（C_AMENDMENT）
+      properties:
+        id:               { type: integer, format: int64 }
+        case_id:          { type: integer, format: int64 }
+        change_summary:   { type: string }
+        materials:        { type: array, items: { $ref: '#/components/schemas/MaterialItem' } }
+        status:           { type: string, enum: [DRAFT, SUBMITTED, UNDER_REVIEW, APPROVED, REJECTED] }
+        submitted_at:     { type: string, format: date-time, nullable: true }
+        decided_at:       { type: string, format: date-time, nullable: true }
+        decision_note:    { type: string, nullable: true }
+
+    AEReport:
+      type: object
+      description: 不良事件报告（C_AE_REPORT，涉受试者信息，权限隔离）
+      properties:
+        id:               { type: integer, format: int64 }
+        case_id:          { type: integer, format: int64 }
+        event_date:       { type: string, format: date-time }
+        severity:         { type: string, enum: [SERIOUS, NON_SERIOUS, SUSAR] }
+        description:      { type: string }
+        action_taken:     { type: string, nullable: true }
+        reported_at:      { type: string, format: date-time }
+        status:           { type: string, enum: [REPORTED, ASSESSING, ACTIONED, CLOSED] }
+
+    AnnualReview:
+      type: object
+      description: 年度复审（C_ANNUAL_REVIEW）
+      properties:
+        id:               { type: integer, format: int64 }
+        case_id:          { type: integer, format: int64 }
+        review_year:      { type: integer }
+        progress_summary: { type: string }
+        incidents:        { type: array, items: { type: object } }
+        next_plan:        { type: string, nullable: true }
+        status:           { type: string, enum: [PENDING, SUBMITTED, UNDER_REVIEW, APPROVED, OVERDUE] }
+
+    IntegrityPledge:
+      type: object
+      description: 诚信承诺签署（C_INTEGRITY_PLEDGE）
+      properties:
+        id:               { type: integer, format: int64 }
+        user_id:          { type: integer, format: int64 }
+        pledge_type:      { type: string, enum: [ONBOARD, APPLY, AWARD, ANNUAL], description: 入职/申报/评奖/年度（走字典 c_pledge_type） }
+        content_version:  { type: string }
+        read_seconds:     { type: integer }
+        signed_at:        { type: string, format: date-time }
+        signature_url:    { type: string, nullable: true }
+        ip:               { type: string }
+        ua:               { type: string }
+        status:           { type: string, enum: [PENDING, SIGNED, REVOKED] }
+
+    IntegrityRecord:
+      type: object
+      description: 失信档案（C_INTEGRITY_RECORD；独立调查/申诉流程；仅纪检与本人可见部分对外）
+      properties:
+        id:               { type: integer, format: int64 }
+        user_id:          { type: integer, format: int64 }
+        event_type:       { type: string, description: 中文标签：抄袭/数据造假/一稿多投/违规报销/利益冲突未申报/其他 }
+        event_type_code:  { type: string, enum: [PLAGIARISM, DATA_FABRICATION, DUAL_SUBMISSION, EXPENSE_VIOLATION, COI_UNDISCLOSED, OTHER] }
+        discovered_date:  { type: string, format: date, nullable: true }
+        evidence:         { type: array, items: { type: object } }
+        investigation:    { type: object, nullable: true }
+        case_no:          { type: string, nullable: true, description: 失信案号（通用编号，前缀待 2.11 登记） }
+        investigation_status: { type: string, enum: [INVESTIGATING, SUSTAINED, UNSUSTAINED, CLOSED] }
+        decision:         { type: string, nullable: true }
+        sanction:         { type: string, nullable: true }
+        sanction_effective_until: { type: string, format: date, nullable: true }
+        is_public:        { type: boolean }
+        appeal_status:    { type: string, enum: [NONE, FILED, REVIEWING, UPHELD, OVERTURNED] }
+        appeal_deadline:  { type: string, format: date, nullable: true }
+        status:           { type: string, enum: [CREATED, APPEALING, CLOSED] }
+
+    MisconductScan:
+      type: object
+      description: 学术不端检测记录（C_MISCONDUCT_SCAN）
+      properties:
+        id:               { type: integer, format: int64 }
+        target_type:      { type: string, enum: [PAPER, DEAL, OUTPUT] }
+        target_id:        { type: integer, format: int64 }
+        scan_type:        { type: string, enum: [TEXT_DUP, IMAGE_DUP, DATA_ANOMALY] }
+        score:            { type: number, format: double, nullable: true }
+        confidence:       { type: number, format: double, nullable: true }
+        report_url:       { type: string, nullable: true }
+        verdict:          { type: string, enum: [CLEAN, SUSPECTED, CONFIRMED], nullable: true }
+        engine:           { type: string, enum: [CNKI, TURNITIN, PHASH_CNN, BENFORD, MULTIMODAL_LLM], nullable: true }
+        triggered_by:     { type: string, enum: [MANUAL, ON_REGISTER, PRE_FUNDING, SCHEDULED] }
+        scanned_at:       { type: string, format: date-time }
+        status:           { type: string, enum: [PENDING, RUNNING, DONE, FAILED] }
+
+    HgrFiling:
+      type: object
+      description: 人类遗传资源备案（C_HGR_FILING，对接国家系统）
+      properties:
+        id:               { type: integer, format: int64 }
+        case_id:          { type: integer, format: int64, nullable: true }
+        project_id:       { type: integer, format: int64, nullable: true }
+        filing_type:      { type: string, description: 中文：采集/保藏/国际合作/开发利用 }
+        filing_type_code: { type: string, enum: [COLLECT, PRESERVE, INTL_COOP, DEVELOP] }
+        filing_no:        { type: string, nullable: true }
+        national_approval_no: { type: string, nullable: true, description: 国家人遗系统批准号（外部回传） }
+        submission_date:  { type: string, format: date, nullable: true }
+        approval_status:  { type: string, enum: [PENDING, APPROVED, REJECTED], nullable: true }
+        approval_date:    { type: string, format: date, nullable: true }
+        expiry_date:      { type: string, format: date, nullable: true }
+        security_level:   { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET] }
+        status:           { type: string, enum: [DRAFT, SUBMITTED, NATIONAL_RECEIVED, APPROVED, REJECTED, EXPIRED] }
+
+    # ---- 请求体 --------------------------------------------------------------
+    EthicsCaseCreateRequest:
+      type: object
+      description: 创建伦理案卷（C-02，落 DRAFT）
+      required: [review_type, protocol_title, applicant_user_id]
+      properties:
+        review_type:      { type: string, enum: [HUMAN, ANIMAL, BIO_SAFETY, HGR, DATA_EXPORT] }
+        project_id:       { type: integer, format: int64, nullable: true, description: 涉人样本申报须关联立项前预填或案卷先行 }
+        applicant_user_id: { type: integer, format: int64 }
+        department_id:    { type: integer, format: int64, nullable: true }
+        protocol_title:   { type: string }
+        protocol_summary: { type: string }
+        methodology:      { type: string }
+        risk_level:       { type: string, enum: [HIGH, MED, LOW], default: MED }
+        informed_consent_url: { type: string }
+        is_emergency:     { type: boolean, default: false }
+        security_level:   { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET], default: INTERNAL }
+        remark:           { type: string }
+
+    EthicsSubmitRequest:
+      type: object
+      description: 提交送审（DRAFT→SUBMITTED→FORMAL_CHECK），携带材料清单
+      properties:
+        materials:        { type: array, items: { $ref: '#/components/schemas/MaterialItem' } }
+        consent_url:      { type: string }
+        note:             { type: string }
+
+    FormalCheckRequest:
+      type: object
+      description: 形式审查（管理员/秘书，C-02）；齐备进入 UNDER_REVIEW，缺件退回 NEEDS_REVISION
+      required: [result]
+      properties:
+        result:           { type: string, enum: [PASS, RETURN], description: PASS 齐备/RETURN 缺件退回 }
+        missing_docs:     { type: array, items: { type: string }, description: result=RETURN 时的缺件清单 }
+        comment:          { type: string }
+
+    AssignRequest:
+      type: object
+      description: 分派主审+委员（C-03）；服务端按利益冲突规则校验回避
+      required: [assignments]
+      properties:
+        review_deadline:  { type: string, format: date-time, description: 统一审阅时限（超期催办） }
+        assignments:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [reviewer_user_id, role]
+            properties:
+              reviewer_user_id: { type: integer, format: int64 }
+              role:             { type: string, enum: [CHIEF, BOARD] }
+
+    OpinionRequest:
+      type: object
+      description: 委员打分与意见（C-03/C-04）
+      required: [recommendation]
+      properties:
+        score:            { type: number, format: double }
+        comments:         { type: string }
+        objection:        { type: object, description: '异议 {points:[],requested_docs:[]}' }
+        risks_identified: { type: array, items: { type: object } }
+        recommendation:   { type: string, enum: [APPROVE, APPROVE_WITH_CHANGES, REJECT] }
+
+    MeetingCheckInRequest:
+      type: object
+      description: 会议签到（回避委员不计入表决）
+      required: [attendees]
+      properties:
+        attendees:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [user_id]
+            properties:
+              user_id:    { type: integer, format: int64 }
+              role:       { type: string, enum: [CHIEF, BOARD] }
+              signed_in:  { type: boolean, default: true }
+
+    MeetingVoteRequest:
+      type: object
+      description: 会议表决（C-04，汇聚意见生成决议）
+      required: [decision, vote]
+      properties:
+        decision:         { type: string, enum: [APPROVE, APPROVE_WITH_CHANGES, REJECT, CONTINUE] }
+        vote:
+          type: object
+          properties:
+            approve:      { type: integer }
+            reject:       { type: integer }
+            abstain:      { type: integer }
+        quorum_met:       { type: boolean }
+        discussion_text:  { type: string, description: 会审讨论记录（供自动生成纪要） }
+
+    LetterIssueRequest:
+      type: object
+      description: 批件签发（主审 CHIEF，C-06）
+      required: [decision_type]
+      properties:
+        decision_type:    { type: string, enum: [APPROVE, APPROVE_WITH_CHANGES, REJECT] }
+        valid_until:      { type: string, format: date, description: 批件有效期截止（到期联动 F 冻结支付） }
+        next_review_at:   { type: string, format: date, description: 下次年度复审日（30 天前提醒） }
+        letter_body_ref:  { type: string, description: 批件 PDF 对象存储引用；涉密正文不入库，走 X }
+        publish:          { type: boolean, default: true, description: 是否对外公开验证 }
+
+    AmendmentRequest:
+      type: object
+      description: 修正案提交（C-08）
+      required: [change_summary]
+      properties:
+        change_summary:   { type: string }
+        materials:        { type: array, items: { $ref: '#/components/schemas/MaterialItem' } }
+
+    AmendmentDecisionRequest:
+      type: object
+      description: 修正案决定（主审/会议）
+      required: [decision]
+      properties:
+        decision:         { type: string, enum: [APPROVE, APPROVE_WITH_CHANGES, REJECT] }
+        decision_note:    { type: string }
+
+    AEReportRequest:
+      type: object
+      description: 不良事件报告（C-09；SERIOUS/SUSAR 触发主审快速评估）
+      required: [event_date, severity, description]
+      properties:
+        event_date:       { type: string, format: date-time }
+        severity:         { type: string, enum: [SERIOUS, NON_SERIOUS, SUSAR] }
+        description:      { type: string }
+        action_taken:     { type: string }
+
+    AnnualReviewRequest:
+      type: object
+      description: 年度复审提交（C-07）
+      required: [review_year, progress_summary]
+      properties:
+        review_year:      { type: integer }
+        progress_summary: { type: string }
+        incidents:        { type: array, items: { type: object } }
+        next_plan:        { type: string }
+
+    PledgeSignRequest:
+      type: object
+      description: 诚信承诺签署（C-15，电子签名 + 阅读倒计时存证）
+      required: [user_id, pledge_type, content_version, read_seconds]
+      properties:
+        user_id:          { type: integer, format: int64 }
+        pledge_type:      { type: string, enum: [ONBOARD, APPLY, AWARD, ANNUAL] }
+        content_version:  { type: string }
+        read_seconds:     { type: integer, description: 前端强制阅读秒数（低于阈值拒绝签署） }
+        signature_url:    { type: string, description: 电子签名板存证地址 }
+        biz_ref_type:     { type: string, enum: [APPLICATION, AWARD, ANNUAL, ONBOARD], nullable: true }
+        biz_ref_id:       { type: integer, format: int64, nullable: true }
+
+    IntegrityRecordRequest:
+      type: object
+      description: 失信档案创建/更新（C-16，仅纪检/管理员）
+      required: [user_id, event_type_code]
+      properties:
+        user_id:          { type: integer, format: int64 }
+        event_type_code:  { type: string, enum: [PLAGIARISM, DATA_FABRICATION, DUAL_SUBMISSION, EXPENSE_VIOLATION, COI_UNDISCLOSED, OTHER] }
+        discovered_date:  { type: string, format: date }
+        evidence:         { type: array, items: { type: object } }
+        investigation:    { type: object }
+        decision:         { type: string }
+        sanction:         { type: string }
+        sanction_effective_until: { type: string, format: date }
+        is_public:        { type: boolean, default: false }
+
+    AppealRequest:
+      type: object
+      description: 本人申诉（C-16 独立流程，PRD §11 异议/申诉）
+      required: [reason]
+      properties:
+        reason:           { type: string }
+        evidence:         { type: array, items: { type: object } }
+
+    MisconductScanRequest:
+      type: object
+      description: 学术不端扫描（C-14/C-18，异步）
+      required: [target_type, target_id, scan_type]
+      properties:
+        target_type:      { type: string, enum: [PAPER, DEAL, OUTPUT] }
+        target_id:        { type: integer, format: int64 }
+        scan_type:        { type: string, enum: [TEXT_DUP, IMAGE_DUP, DATA_ANOMALY] }
+        full_text_url:    { type: string, description: 待检测全文/图片地址（供 CNKI/Turnitin/pHash） }
+        engine:           { type: string, enum: [CNKI, TURNITIN, PHASH_CNN, BENFORD, MULTIMODAL_LLM] }
+        triggered_by:     { type: string, enum: [MANUAL, ON_REGISTER, PRE_FUNDING, SCHEDULED], default: MANUAL }
+
+    HgrFilingRequest:
+      type: object
+      description: 人类遗传资源备案提交（C-10，对接国家系统）
+      required: [project_id, filing_type_code]
+      properties:
+        case_id:          { type: integer, format: int64, nullable: true }
+        project_id:       { type: integer, format: int64 }
+        filing_type_code: { type: string, enum: [COLLECT, PRESERVE, INTL_COOP, DEVELOP] }
+        submission_date:  { type: string, format: date }
+        security_level:   { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET], default: INTERNAL }
+
+    Error:
+      type: object
+      description: 业务错误（HTTP 表达传输层，code 非 0 表达业务错误）
+      properties:
+        code:    { type: integer }
+        message: { type: string }
+        traceId: { type: string }
+
+  responses:
+    Ok:
+      description: 成功
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    BadRequest:
+      description: 参数校验失败
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    Forbidden:
+      description: 越权（受试者信息隔离/回避未生效/失信记录非纪检非本人，见 detail §7）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    TooManyRequests:
+      description: 限流（普通 100/min，AI 接口 20/min）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /ethics:
+    get:
+      tags: [ethics]
+      operationId: listEthicsCases
+      summary: 伦理案卷列表（按类型/状态/项目/申请人筛选）
+      description: >-
+        PI 见自己 applicant_user_id 的案卷；委员见被分派案卷；管理员/纪检/审计见全部（PRD §9）。
+        涉密/受试者字段（protocol_summary 等）在列表视图脱敏。分页 page/size。
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+        - { name: review_type, in: query, schema: { type: string, enum: [HUMAN, ANIMAL, BIO_SAFETY, HGR, DATA_EXPORT] } }
+        - { name: status, in: query, schema: { type: string, enum: [DRAFT, SUBMITTED, FORMAL_CHECK, UNDER_REVIEW, NEEDS_REVISION, APPROVED, REJECTED, MONITORING, EXPIRED] } }
+        - { name: risk_level, in: query, schema: { type: string, enum: [HIGH, MED, LOW] } }
+        - { name: project_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: applicant_user_id, in: query, schema: { type: integer, format: int64 } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    post:
+      tags: [ethics]
+      operationId: createEthicsCase
+      summary: 创建伦理申请（C-02，落 DRAFT）
+      description: 新建伦理审查案卷；需 Idempotency-Key。涉人样本项目在申报提交前须关联 APPROVED 案卷（ethics.approved 前置卡点，见 detail §4）。
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EthicsCaseCreateRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /ethics/{id}:
+    get:
+      tags: [ethics]
+      operationId: getEthicsCase
+      summary: 案卷详情（权限隔离：涉受试者内容仅授权角色可读）
+      description: >-
+        读接口权限隔离（PRD §9 保密）：PI 读自己案卷、分派委员/主审读被分派案卷、管理员/纪检/审计读全部；
+        protocol_summary/methodology/不良事件等涉受试者字段对无权角色 403 或脱敏。委员意见对 PI 匿名展示。
+      parameters:
+        - { $ref: '#/components/parameters/CaseId' }
+      responses:
+        '200':
+          description: 案卷详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/EthicsCase' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /ethics/{id}/submit:
+    post:
+      tags: [ethics]
+      operationId: submitEthicsCase
+      summary: 提交送审（带材料上传，DRAFT→SUBMITTED→FORMAL_CHECK）
+      description: 上传方案/知情同意书/招募材料并提交；触发形式审查队列；需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/CaseId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EthicsSubmitRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /ethics/{id}/ai-prescreen:
+    post:
+      tags: [ai]
+      operationId: aiPrescreenEthics
+      summary: AI 伦理风险预审（C-17，风险点+需补材料，附置信度）
+      description: >-
+        LLM 检索类似研究历史风险事件 + 关键要素完整性检查，输出 risk_points/need_supplement/confidence，
+        写入 C_ETHICS_CASE.risk_assessment 与 ai_prescreen；辅助 PI 完善、辅助委员聚焦，人工兜底不作最终裁决。限流 20/min。
+      parameters:
+        - { $ref: '#/components/parameters/CaseId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /ethics/{id}/formal-check:
+    post:
+      tags: [ethics]
+      operationId: formalCheck
+      summary: 形式审查（管理员/秘书；齐备→UNDER_REVIEW，缺件→NEEDS_REVISION）
+      description: 材料齐备性核验；需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/CaseId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FormalCheckRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /ethics/{id}/assign:
+    post:
+      tags: [review]
+      operationId: assignReviewers
+      summary: 分派主审(CHIEF)+委员(BOARD)（C-03，含利益冲突回避校验）
+      description: >-
+        服务端强制校验回避：与被审 PI 同部门或有师生关系者标记 conflict_of_interest 并拒绝指派（PRD §11）。
+        写入审阅时限，超期由调度自动升级催办；需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/CaseId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssignRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /ethics/{id}/opinion:
+    post:
+      tags: [review]
+      operationId: submitOpinion
+      summary: 委员打分与意见（C-03/C-04）
+      description: 仅被分派且非回避的委员可提交；recommendation∈APPROVE/APPROVE_WITH_CHANGES/REJECT；对 PI 匿名。需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/CaseId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OpinionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /ethics/{id}/meeting/check-in:
+    post:
+      tags: [review]
+      operationId: meetingCheckIn
+      summary: 会议审查签到（C-04）
+      description: 记录出席；回避委员不计入表决；达法定到会人数置 quorum_met。需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/CaseId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MeetingCheckInRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /ethics/{id}/meeting/vote:
+    post:
+      tags: [review]
+      operationId: meetingVote
+      summary: 会议表决与生成纪要（C-04）
+      description: 汇聚意见与表决写 C_MEETING_RECORD，据 discussion_text 自动生成纪要；决议驱动案卷状态。需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/CaseId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MeetingVoteRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /ethics/{id}/letter:
+    post:
+      tags: [letter]
+      operationId: issueDecisionLetter
+      summary: 伦理批件签发（主审 CHIEF，C-06）
+      description: >-
+        签发批件并生成 letter_no/verify_url/二维码；APPROVE 时案卷→APPROVED 并发 ethics.approved（跨模块解锁 01 申报提交）。
+        到期 valid_until 联动 F 冻结该项目支付。需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/CaseId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LetterIssueRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /ethics/letter/{letterNo}:
+    get:
+      tags: [letter]
+      operationId: verifyDecisionLetter
+      summary: 批件编号公开验证（免鉴权；仅返回真伪与元数据，不含受试者内容）
+      description: >-
+        对外公开验证接口（PRD §12 编号可外部验证 + 二维码）。编号可查、内容不可查：仅返回 valid/decision_type/有效期/状态与二维码，
+        不返回案卷正文、申请人、受试者信息。
+      security: []
+      parameters:
+        - { $ref: '#/components/parameters/LetterNo' }
+      responses:
+        '200':
+          description: 验证结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/LetterVerifyResult' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /ethics/{id}/amendment:
+    post:
+      tags: [ethics]
+      operationId: submitAmendment
+      summary: 修正案提交（C-08，批件有效期内方案变更）
+      description: 需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/CaseId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AmendmentRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /ethics/amendment/{id}/decision:
+    post:
+      tags: [ethics]
+      operationId: decideAmendment
+      summary: 修正案决定（主审/会议，C-08）
+      description: 需 Idempotency-Key。
+      parameters:
+        - { name: id, in: path, required: true, description: 修正案主键 C_AMENDMENT.id, schema: { type: integer, format: int64 } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AmendmentDecisionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /ethics/{id}/ae-report:
+    post:
+      tags: [ethics]
+      operationId: reportAdverseEvent
+      summary: 不良事件报告（C-09）
+      description: >-
+        PI 提交不良事件；severity=SERIOUS/SUSAR 触发主审快速评估与升级；涉受试者描述读接口权限隔离。需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/CaseId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AEReportRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /ethics/{id}/annual-review:
+    post:
+      tags: [ethics]
+      operationId: submitAnnualReview
+      summary: 年度复审提交（C-07）
+      description: >-
+        批件有效期内按年复审；到期前 30 天由调度向 PI 提醒（next_review_at）；逾期 OVERDUE 并可致案卷 EXPIRED。需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/CaseId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnnualReviewRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    get:
+      tags: [ethics]
+      operationId: listAnnualReviews
+      summary: 年度复审记录列表
+      parameters:
+        - { $ref: '#/components/parameters/CaseId' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+
+  /integrity/pledge:
+    post:
+      tags: [integrity]
+      operationId: signPledge
+      summary: 诚信承诺签署（C-15，电子签名 + 阅读倒计时存证）
+      description: >-
+        入职/申报/评奖/年度承诺签署；read_seconds 低于制度包阈值拒绝；存签名/IP/UA/content_version。
+        申报承诺是 01 提交的前置之一（未签不可提交涉人/涉奖申报）。需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PledgeSignRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    get:
+      tags: [integrity]
+      operationId: listMyPledges
+      summary: 我的承诺签署记录
+      parameters:
+        - { name: user_id, in: query, schema: { type: integer, format: int64 }, description: 缺省取当前用户 }
+        - { name: pledge_type, in: query, schema: { type: string, enum: [ONBOARD, APPLY, AWARD, ANNUAL] } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+
+  /integrity/records:
+    get:
+      tags: [integrity]
+      operationId: listIntegrityRecords
+      summary: 失信档案列表（纪检/管理员查全部，本人查自己）
+      description: 可见性隔离（PRD §9）：仅纪检与本人可见，普通角色越权 403；is_public 记录可对外。分页。
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+        - { name: user_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: event_type_code, in: query, schema: { type: string, enum: [PLAGIARISM, DATA_FABRICATION, DUAL_SUBMISSION, EXPENSE_VIOLATION, COI_UNDISCLOSED, OTHER] } }
+        - { name: investigation_status, in: query, schema: { type: string, enum: [INVESTIGATING, SUSTAINED, UNSUSTAINED, CLOSED] } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [integrity]
+      operationId: createIntegrityRecord
+      summary: 建立失信档案（C-16，纪检/管理员）
+      description: 记录违规事实+证据+调查；investigation_status=INVESTIGATING；发 integrity.record.created 通知本人（可申诉）。需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IntegrityRecordRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /integrity/records/{id}:
+    get:
+      tags: [integrity]
+      operationId: getIntegrityRecord
+      summary: 失信档案详情（纪检/本人可见）
+      parameters:
+        - { $ref: '#/components/parameters/RecordId' }
+      responses:
+        '200':
+          description: 详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/IntegrityRecord' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [integrity]
+      operationId: updateIntegrityRecord
+      summary: 更新失信档案/调查结论（纪检/管理员）
+      description: 需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/RecordId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IntegrityRecordRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    delete:
+      tags: [integrity]
+      operationId: deleteIntegrityRecord
+      summary: 逻辑删除失信档案（纪检/管理员，软删留审计）
+      description: deleted=1；sys_audit_log 留痕，不物理删除（案卷保留≥10 年）。
+      parameters:
+        - { $ref: '#/components/parameters/RecordId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /integrity/records/{id}/appeal:
+    post:
+      tags: [integrity]
+      operationId: appealIntegrityRecord
+      summary: 本人申诉（C-16 独立流程，PRD §11）
+      description: >-
+        仅被记录人本人可在 appeal_deadline 前发起；appeal_status NONE→FILED；申诉期内处分生效冻结。需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/RecordId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AppealRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /integrity/misconduct-scan:
+    post:
+      tags: [ai]
+      operationId: runMisconductScan
+      summary: 学术不端扫描（C-14/C-18，异步任务）
+      description: >-
+        对 PAPER/DEAL/OUTPUT 触发文字/图片/数据异常扫描；接入 CNKI/Turnitin + pHash+CNN + Benford/多模态 LLM，
+        附置信度，SUSPECTED 发 misconduct.suspected 通知管理员并人工兜底。PI 可触发自己成果、管理员可触发全部。限流 20/min。需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MisconductScanRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /hgr/filing:
+    get:
+      tags: [hgr]
+      operationId: listHgrFilings
+      summary: 人类遗传资源备案列表
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+        - { name: project_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: filing_type_code, in: query, schema: { type: string, enum: [COLLECT, PRESERVE, INTL_COOP, DEVELOP] } }
+        - { name: approval_status, in: query, schema: { type: string, enum: [PENDING, APPROVED, REJECTED] } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+    post:
+      tags: [hgr]
+      operationId: createHgrFiling
+      summary: 人遗资源备案提交（C-10，对接国家系统）
+      description: >-
+        采集/保藏/国际合作/开发利用备案；提交后由 svc-integration 推送国家人遗管理服务系统，回执回写 national_approval_no/approval_status。
+        涉外/涉密材料正文由 X 管理（security_level 标注）。需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HgrFilingRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /hgr/filing/{id}/sync:
+    post:
+      tags: [hgr]
+      operationId: syncHgrFiling
+      summary: 同步备案状态至国家系统（拉取审批结果/批准号）
+      description: 拉取国家侧审批态镜像 approval_status，回写 national_approval_no/approval_date/expiry_date；需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/FilingId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }

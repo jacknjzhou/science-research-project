@@ -1,0 +1,1094 @@
+openapi: 3.0.3
+info:
+  title: 科技成果转化（T）API
+  version: "1.0"
+  description: >-
+    05 科技成果转化模块对外 REST 契约（自包含 OpenAPI 3.0.3，可独立导入 Swagger Editor / Postman）。
+    覆盖成果披露→评估分派（内评/外评/上传外评报告）→挂牌发布→意向企业登记→谈判条款→合同起草→
+    多级审批→电子签→公示（公开可访问）→到账登记与匹配→分配规则配置→生成分配明细→发放到人→
+    年度报告一键生成，以及 AI 转化机会识别 / AI 合同风险审查 / AI 定价参考。
+    字段名与 ../PRD/05-科技成果转化.md §5.1 及 05-科技成果转化-T.ddl.sql 对齐；
+    status enum 取 ./README.md §4 与 PRD §6.2 交易状态机 token；金额 NUMERIC(18,2)、比例 NUMERIC(6,4)。
+    上游 PRD：../PRD/05-科技成果转化.md（T-01..T-19）。
+servers:
+  - url: https://{host}/api/v1
+    description: 科研管理系统网关（v1）
+    variables:
+      host:
+        default: api.institute.example.com
+        description: 部署主机名
+
+tags:
+  - name: disclosure
+    description: 成果披露（T-01）
+  - name: valuation
+    description: 评估分派与外评报告（T-03/T-04）
+  - name: deal
+    description: 转化交易与状态机（T-02/T-07/T-08/T-09）
+  - name: contract
+    description: 合同起草与电子签（T-08/T-10）
+  - name: partner
+    description: 意向企业登记与真实性（T-06）
+  - name: income
+    description: 到账登记与匹配（T-11）
+  - name: distribution
+    description: 收益分配规则与发放到人（T-12/T-13）
+  - name: publicity
+    description: 公示与异议（T-14）
+  - name: report
+    description: 年度转化报告（T-15）
+  - name: ai
+    description: AI 机会识别/条款风险/定价参考（T-17/T-18/T-19，限流 20/min）
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "Authorization: Bearer <JWT>；刷新走 Refresh Token（./README.md §3）"
+
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      description: 页码，1-based
+      schema: { type: integer, minimum: 1, default: 1 }
+    SizeParam:
+      name: size
+      in: query
+      description: 每页条数，默认 20，上限 200
+      schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: 幂等键（UUID），POST/PUT/DELETE 服务端缓存去重（./README.md §3）
+      schema: { type: string }
+    DisclosureId:
+      name: id
+      in: path
+      required: true
+      description: 披露主键 T_DISCLOSURE.id
+      schema: { type: integer, format: int64 }
+    ValuationId:
+      name: id
+      in: path
+      required: true
+      description: 评估主键 T_VALUATION.id
+      schema: { type: integer, format: int64 }
+    DealId:
+      name: id
+      in: path
+      required: true
+      description: 交易主键 T_DEAL.id
+      schema: { type: integer, format: int64 }
+    ContractId:
+      name: id
+      in: path
+      required: true
+      description: 合同主键 T_CONTRACT.id
+      schema: { type: integer, format: int64 }
+    IncomeId:
+      name: id
+      in: path
+      required: true
+      description: 到账主键 T_INCOME.id
+      schema: { type: integer, format: int64 }
+    DistributionId:
+      name: id
+      in: path
+      required: true
+      description: 分配明细主键 T_DISTRIBUTION_RECORD.id
+      schema: { type: integer, format: int64 }
+    PublicityDealId:
+      name: dealId
+      in: path
+      required: true
+      description: 交易主键（公示按交易查）
+      schema: { type: integer, format: int64 }
+
+  schemas:
+    ApiResponse:
+      type: object
+      description: 统一响应包裹（./README.md §3）
+      properties:
+        code:      { type: integer, description: 0 为成功，非 0 为业务错误码 }
+        message:   { type: string }
+        data:      { type: object, nullable: true }
+        traceId:   { type: string }
+        timestamp: { type: integer, format: int64 }
+
+    PageResult:
+      type: object
+      description: 分页响应（data 内层）
+      properties:
+        list:  { type: array, items: { type: object } }
+        total: { type: integer, format: int64 }
+        page:  { type: integer }
+        size:  { type: integer }
+
+    # ---------------- 实体 schema（字段对齐 DDL）----------------
+    Disclosure:
+      type: object
+      description: 成果披露（T_DISCLOSURE）
+      properties:
+        id:            { type: integer, format: int64 }
+        code:          { type: string, nullable: true }
+        tenant_id:     { type: integer, format: int64 }
+        status:        { type: string, enum: [DRAFT, SUBMITTED, UNDER_EVAL, DEALING, COMPLETED, REJECTED] }
+        output_id:     { type: integer, format: int64, description: 逻辑引用 R_OUTPUT.id（04） }
+        project_id:    { type: integer, format: int64, nullable: true, description: 逻辑引用 E_PROJECT.id（02） }
+        disclosed_by:  { type: integer, format: int64 }
+        department_id: { type: integer, format: int64, nullable: true }
+        disclosure_date: { type: string, format: date }
+        tech_summary:  { type: string, nullable: true }
+        application_scenarios: { type: array, items: { type: object } }
+        maturity_level: { type: integer, minimum: 1, maximum: 9, nullable: true, description: TRL 1-9 }
+        is_core_tech:  { type: boolean }
+        target_partners: { type: array, items: { type: object } }
+        expected_value: { type: number, format: double, nullable: true }
+        legal_entity_id: { type: integer, format: int64 }
+        security_level:  { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET] }
+        created_at:    { type: string, format: date-time }
+        updated_at:    { type: string, format: date-time }
+        remark:        { type: string, nullable: true }
+
+    Valuation:
+      type: object
+      description: 资产评估（T_VALUATION）
+      properties:
+        id:            { type: integer, format: int64 }
+        disclosure_id: { type: integer, format: int64 }
+        status:        { type: string, enum: [DRAFT, ASSIGNED, REPORT_UPLOADED, CONFIRMED, INVALID] }
+        valuator_type: { type: string, enum: [INTERNAL, EXTERNAL] }
+        valuator_name: { type: string }
+        valuator_org:  { type: string, nullable: true }
+        method:        { type: string, enum: ["收益法", "成本法", "市场法"] }
+        valuation_amount: { type: number, format: double }
+        currency:      { type: string, default: CNY }
+        report_url:    { type: string, nullable: true }
+        valuation_date: { type: string, format: date, nullable: true }
+        valid_until:   { type: string, format: date, nullable: true }
+
+    EntPartner:
+      type: object
+      description: 合作企业库（T_ENTERPARTNER）
+      properties:
+        id:            { type: integer, format: int64 }
+        status:        { type: string, enum: [PENDING, ACTIVE, BLACKLIST, EXPIRED] }
+        company_name:  { type: string }
+        credit_code:   { type: string, nullable: true }
+        industry:      { type: string, nullable: true }
+        register_status: { type: string, nullable: true }
+        check_abnormal: { type: boolean, description: 工商 API 异常/风险 → 签约前标红 }
+        tech_needs:    { type: array, items: { type: object } }
+        contact:       { type: object, nullable: true }
+        past_deals:    { type: array, items: { type: object } }
+        evaluation_score: { type: number, format: double, nullable: true }
+
+    Deal:
+      type: object
+      description: 转化交易（T_DEAL，状态机主体）
+      properties:
+        id:            { type: integer, format: int64 }
+        code:          { type: string, description: DEAL-年-序（已登记前缀） }
+        status:
+          type: string
+          enum: [DRAFT, VALUATED, NEGOTIATING, DRAFT_CONTRACT, UNDER_APPROVAL, APPROVED,
+                 PUBLICIZED, SIGNED, EXECUTING, INCOME_RECEIVED, DISTRIBUTED, CLOSED, TERMINATED]
+        disclosure_id: { type: integer, format: int64 }
+        output_id:     { type: integer, format: int64 }
+        project_id:    { type: integer, format: int64, nullable: true }
+        enterpartner_id: { type: integer, format: int64, nullable: true }
+        deal_type:     { type: string, enum: ["转让", "独占许可", "排他许可", "普通许可", "作价投资", "合作实施"] }
+        partner_name:  { type: string }
+        partner_credit_code: { type: string, nullable: true }
+        contract_amount: { type: number, format: double }
+        payment_method: { type: string, enum: ["一次性", "分期", "入门费+销售提成"] }
+        initial_fee:   { type: number, format: double, nullable: true }
+        royalty_rate:  { type: number, format: double, nullable: true, description: 销售提成比例 0-1 }
+        term_start:    { type: string, format: date, nullable: true }
+        term_end:      { type: string, format: date, nullable: true }
+        partner_check_abnormal: { type: boolean }
+        equity_ratio:  { type: number, format: double, nullable: true }
+        equity_value:  { type: number, format: double, nullable: true }
+        approval_required_level: { type: string, enum: [LEGAL, FINANCE, INSTITUTE, COMPETENT_DEPT, BOARD], nullable: true }
+        policy_pack_id: { type: integer, format: int64, nullable: true }
+        signed_at:     { type: string, format: date-time, nullable: true }
+        legal_entity_id: { type: integer, format: int64 }
+        security_level:  { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET] }
+
+    Contract:
+      type: object
+      description: 转化合同（T_CONTRACT）
+      properties:
+        id:            { type: integer, format: int64 }
+        deal_id:       { type: integer, format: int64 }
+        status:        { type: string, enum: [DRAFT, UNDER_APPROVAL, TO_SIGN, SIGNED, AMENDING, ARCHIVED, TERMINATED] }
+        contract_no:   { type: string, nullable: true }
+        template_code: { type: string, nullable: true }
+        contract_file_url: { type: string, nullable: true }
+        redline_file_url:  { type: string, nullable: true }
+        signed_at:     { type: string, format: date-time, nullable: true }
+        seal_records:  { type: array, items: { type: object } }
+        legal_opinion: { type: string, nullable: true }
+        finance_opinion: { type: string, nullable: true }
+        leader_opinion: { type: string, nullable: true }
+        version:       { type: integer }
+
+    ApprovalChain:
+      type: object
+      description: 审批链节点（T_APPROVAL_CHAIN）
+      properties:
+        id:            { type: integer, format: int64 }
+        deal_id:       { type: integer, format: int64 }
+        step_order:    { type: integer }
+        parallel_group: { type: string, nullable: true }
+        approver_role: { type: string, enum: [LEGAL, FINANCE, INSTITUTE, COMPETENT_DEPT, BOARD] }
+        approver_id:   { type: integer, format: int64, nullable: true }
+        status:        { type: string, enum: [PENDING, APPROVED, REJECTED, RETURNED, SKIPPED] }
+        action:        { type: string, enum: [APPROVE, REJECT, RETURN, SKIP], nullable: true }
+        comment:       { type: string, nullable: true }
+        amount_threshold: { type: number, format: double, nullable: true }
+        acted_at:      { type: string, format: date-time, nullable: true }
+
+    Income:
+      type: object
+      description: 转化到账（T_INCOME）
+      properties:
+        id:            { type: integer, format: int64 }
+        deal_id:       { type: integer, format: int64 }
+        finance_receipt_id: { type: integer, format: int64, nullable: true, description: 逻辑引用 03 经费到账/认领 }
+        status:        { type: string, enum: [PENDING, MATCHED, ALLOCATED, REVERSED] }
+        received_date: { type: string, format: date }
+        amount:        { type: number, format: double }
+        currency:      { type: string, default: CNY }
+        receipt_no:    { type: string, nullable: true }
+        bank_flow_no:  { type: string, nullable: true }
+        payment_phase: { type: string, nullable: true }
+        sales_amount:  { type: number, format: double, nullable: true }
+        royalty_calc_amount: { type: number, format: double, nullable: true }
+        voucher_url:   { type: string, nullable: true }
+        allocated:     { type: boolean }
+
+    DistributionRule:
+      type: object
+      description: 分配规则（T_DISTRIBUTION_RULE）
+      properties:
+        id:            { type: integer, format: int64 }
+        status:        { type: string, enum: [DRAFT, ACTIVE, SUPERSEDED] }
+        rule_name:     { type: string }
+        applies_to:    { type: string, enum: ["转让", "许可", "作价"] }
+        team_pct:      { type: number, format: double }
+        institute_pct: { type: number, format: double }
+        individual_pct: { type: number, format: double }
+        min_team_pct:  { type: number, format: double, description: 团队最低限，低于则拦截 }
+        policy_ref:    { type: string, nullable: true }
+        policy_pack_id: { type: integer, format: int64, nullable: true }
+        effective_from: { type: string, format: date }
+        effective_to:  { type: string, format: date, nullable: true }
+        active:        { type: boolean }
+
+    DistributionRecord:
+      type: object
+      description: 分配明细（T_DISTRIBUTION_RECORD）
+      properties:
+        id:            { type: integer, format: int64 }
+        income_id:     { type: integer, format: int64 }
+        deal_id:       { type: integer, format: int64 }
+        rule_id:       { type: integer, format: int64, nullable: true }
+        status:        { type: string, enum: [DRAFT, GENERATED, PUBLISHED, CONFIRMED, DISPUTED, HELD, ISSUED] }
+        total_amount:  { type: number, format: double }
+        team_amount:   { type: number, format: double }
+        institute_amount: { type: number, format: double }
+        individual_amount: { type: number, format: double }
+        breakdown:
+          type: array
+          items:
+            type: object
+            properties:
+              user_id: { type: integer, format: int64 }
+              pct:     { type: number, format: double }
+              amount:  { type: number, format: double }
+              basis:   { type: string, description: 分配依据（份额/贡献） }
+        held_reason:   { type: string, enum: [DISPUTE, ARBITRATION, OBJECTION, OTHER], nullable: true }
+        issued_at:     { type: string, format: date-time, nullable: true }
+
+    Publicity:
+      type: object
+      description: 公示记录（T_PUBLICITY）
+      properties:
+        id:            { type: integer, format: int64 }
+        deal_id:       { type: integer, format: int64 }
+        status:        { type: string, enum: [DRAFT, PUBLISHED, IN_PROGRESS, OBJECTION_PENDING, OBJECTION_RESOLVED, COMPLETED, TERMINATED] }
+        publish_start_at: { type: string, format: date-time }
+        publish_end_at: { type: string, format: date-time }
+        duration_days: { type: integer }
+        url:           { type: string, nullable: true }
+        summary_json:  { type: object }
+        objection_open: { type: boolean, description: 存在未结异议 → 阻断进入执行 }
+        objections:
+          type: array
+          items:
+            type: object
+            properties:
+              objection_id: { type: string }
+              submitter:    { type: string }
+              contact:      { type: string, nullable: true }
+              content:      { type: string }
+              submitted_at: { type: string, format: date-time }
+              handle_status: { type: string, enum: [OPEN, PROCESSING, SUSTAINED, DISMISSED] }
+              handle_result: { type: string, nullable: true }
+              handled_at:   { type: string, format: date-time, nullable: true }
+
+    AnnualReport:
+      type: object
+      description: 年度转化报告（T_ANNUAL_REPORT）
+      properties:
+        id:            { type: integer, format: int64 }
+        report_year:   { type: integer }
+        status:        { type: string, enum: [DRAFT, GENERATED, PUBLISHED, EXPORTED] }
+        total_deals:   { type: integer }
+        total_contract_amount: { type: number, format: double }
+        total_income:  { type: number, format: double }
+        total_distributed: { type: number, format: double }
+        top_deals:     { type: array, items: { type: object } }
+        distribution_summary: { type: object, nullable: true }
+        report_file_url: { type: string, nullable: true }
+        generated_at:  { type: string, format: date-time, nullable: true }
+        published_at:  { type: string, format: date-time, nullable: true }
+
+    # ---------------- 请求 DTO ----------------
+    DisclosureCreateRequest:
+      type: object
+      description: 创建披露（T-01）
+      required: [output_id, disclosure_date]
+      properties:
+        output_id:     { type: integer, format: int64 }
+        project_id:    { type: integer, format: int64 }
+        disclosed_by:  { type: integer, format: int64 }
+        disclosure_date: { type: string, format: date }
+        tech_summary:  { type: string }
+        application_scenarios: { type: array, items: { type: object } }
+        maturity_level: { type: integer, minimum: 1, maximum: 9 }
+        is_core_tech:  { type: boolean, default: false }
+        target_partners: { type: array, items: { type: object } }
+        expected_value: { type: number, format: double }
+        security_level: { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET], default: INTERNAL }
+        remark:        { type: string }
+
+    ValuationAssignRequest:
+      type: object
+      description: 评估分派（T-03 内评 / T-04 外评）
+      required: [valuator_type]
+      properties:
+        valuator_type: { type: string, enum: [INTERNAL, EXTERNAL] }
+        valuator_name: { type: string }
+        valuator_org:  { type: string, description: 外评机构名称（valuator_type=EXTERNAL 必填） }
+        method:        { type: string, enum: ["收益法", "成本法", "市场法"] }
+
+    ExternalReportRequest:
+      type: object
+      description: 上传第三方评估报告（T-04）
+      required: [valuation_amount]
+      properties:
+        valuation_amount: { type: number, format: double }
+        currency:      { type: string, default: CNY }
+        report_url:    { type: string }
+        valuation_date: { type: string, format: date }
+        valid_until:   { type: string, format: date }
+
+    NegotiationRequest:
+      type: object
+      description: 谈判条款（T-07），推进 DRAFT/VALUATED → NEGOTIATING
+      required: [deal_type, contract_amount, payment_method]
+      properties:
+        deal_type:     { type: string, enum: ["转让", "独占许可", "排他许可", "普通许可", "作价投资", "合作实施"] }
+        enterpartner_id: { type: integer, format: int64 }
+        partner_name:  { type: string }
+        partner_credit_code: { type: string }
+        contract_amount: { type: number, format: double }
+        payment_method: { type: string, enum: ["一次性", "分期", "入门费+销售提成"] }
+        initial_fee:   { type: number, format: double }
+        royalty_rate:  { type: number, format: double }
+        term_start:    { type: string, format: date }
+        term_end:      { type: string, format: date }
+        equity_ratio:  { type: number, format: double, description: 作价投资必填股权比例 }
+        equity_value:  { type: number, format: double }
+        exit_arrangement: { type: object, description: 退出机制（作价投资） }
+
+    ContractDraftRequest:
+      type: object
+      description: 合同起草（T-08），进入 DRAFT_CONTRACT
+      required: [deal_id]
+      properties:
+        deal_id:       { type: integer, format: int64 }
+        template_code: { type: string }
+        contract_file_url: { type: string }
+        redline_file_url:  { type: string }
+
+    ApproveRequest:
+      type: object
+      description: 多级审批动作（T-09），UNDER_APPROVAL 环节
+      required: [action]
+      properties:
+        step_order:    { type: integer, description: 目标审批步序；缺省为当前待审步骤 }
+        action:        { type: string, enum: [APPROVE, REJECT, RETURN] }
+        comment:       { type: string }
+
+    SignRequest:
+      type: object
+      description: 电子签发起/回调（T-10），APPROVED → SIGNED，触发 deal.signed
+      properties:
+        provider:      { type: string, enum: ["e签宝", "法大大", "CFCA"] }
+        seal_records:  { type: array, items: { type: object } }
+        signed_at:     { type: string, format: date-time }
+
+    PublicityCreateRequest:
+      type: object
+      description: 公示发布（T-14），SIGNED → PUBLICIZED，启动倒计时
+      required: [duration_days, summary_json]
+      properties:
+        duration_days: { type: integer, default: 15 }
+        summary_json:  { type: object }
+
+    ObjectionRequest:
+      type: object
+      description: 公示异议提交（公开可访问），置 objection_open=TRUE
+      required: [content]
+      properties:
+        submitter:     { type: string }
+        contact:       { type: string }
+        content:       { type: string }
+
+    ObjectionHandleRequest:
+      type: object
+      description: 异议处置（法务/转化办），SUSTAINED→TERMINATED，DISMISSED→解除阻断
+      required: [objection_id, handle_status]
+      properties:
+        objection_id:  { type: string }
+        handle_status: { type: string, enum: [PROCESSING, SUSTAINED, DISMISSED] }
+        handle_result: { type: string }
+
+    IncomeRegisterRequest:
+      type: object
+      description: 到账登记（T-11），R-FINANCE 权限
+      required: [deal_id, received_date, amount]
+      properties:
+        deal_id:       { type: integer, format: int64 }
+        finance_receipt_id: { type: integer, format: int64 }
+        received_date: { type: string, format: date }
+        amount:        { type: number, format: double }
+        currency:      { type: string, default: CNY }
+        receipt_no:    { type: string }
+        bank_flow_no:  { type: string }
+        payment_phase: { type: string }
+        sales_amount:  { type: number, format: double, description: 提成模式：企业上报销售额 }
+        voucher_url:   { type: string }
+
+    DistributionRuleRequest:
+      type: object
+      description: 分配规则配置（T-12）；team_pct < min_team_pct 将被拦截（业务码 50003）
+      required: [rule_name, applies_to, team_pct, institute_pct, individual_pct, min_team_pct, effective_from]
+      properties:
+        rule_name:     { type: string }
+        applies_to:    { type: string, enum: ["转让", "许可", "作价"] }
+        team_pct:      { type: number, format: double }
+        institute_pct: { type: number, format: double }
+        individual_pct: { type: number, format: double }
+        min_team_pct:  { type: number, format: double }
+        policy_ref:    { type: string }
+        policy_pack_id: { type: integer, format: int64 }
+        effective_from: { type: string, format: date }
+        effective_to:  { type: string, format: date }
+        active:        { type: boolean, default: true }
+
+    DistributionGenerateRequest:
+      type: object
+      description: 按到账生成分配明细（T-12），命中规则可复写
+      properties:
+        rule_id:       { type: integer, format: int64, description: 缺省按 deal_type+生效期自动命中规则 }
+        breakdown:
+          type: array
+          items:
+            type: object
+            properties:
+              user_id: { type: integer, format: int64 }
+              pct:     { type: number, format: double }
+              basis:   { type: string }
+
+    IssueRequest:
+      type: object
+      description: 发放到人（T-13）；DISPUTED/HELD 需带仲裁结论或暂缓原因
+      properties:
+        action:        { type: string, enum: [ISSUE, HOLD, RESUME], default: ISSUE }
+        held_reason:   { type: string, enum: [DISPUTE, ARBITRATION, OBJECTION, OTHER] }
+        note:          { type: string }
+
+    AnnualReportGenerateRequest:
+      type: object
+      description: 年度报告一键生成（T-15）
+      required: [report_year]
+      properties:
+        report_year:   { type: integer }
+        legal_entity_id: { type: integer, format: int64 }
+        format:        { type: string, enum: [PDF, XLSX], default: PDF }
+        template_code: { type: string }
+
+    OpportunityRequest:
+      type: object
+      description: AI 转化机会识别输入（T-17）
+      properties:
+        output_id:     { type: integer, format: int64, description: 待转化专利族/成果 }
+        top_n:         { type: integer, default: 10 }
+        filter_industry: { type: string }
+
+    OpportunityItem:
+      type: object
+      description: 潜在买家推荐条目
+      properties:
+        enterpartner_id: { type: integer, format: int64 }
+        company_name:  { type: string }
+        match_score:   { type: number, format: double, description: 匹配度 0-1 }
+        confidence:    { type: number, format: double, description: LLM/向量置信度 }
+        reason:        { type: string, description: 匹配依据（专利族相似 vs 企业技术需求） }
+        suggestion:    { type: string, description: 沟通建议 }
+
+    ContractRiskItem:
+      type: object
+      description: AI 条款风险条目（T-18）
+      properties:
+        clause:        { type: string }
+        severity:      { type: string, enum: [HIGH, MED, LOW] }
+        issue:         { type: string }
+        suggestion:    { type: string }
+        ref_article:   { type: string, description: 出处法条（促进科技成果转化法/民法典技术合同章/院所规定） }
+        confidence:    { type: number, format: double }
+
+    PricingRequest:
+      type: object
+      description: AI 定价参考输入（T-19）
+      properties:
+        comparable_tags: { type: array, items: { type: string } }
+
+    PricingResult:
+      type: object
+      description: 定价区间 + 依据 + 可比案例（仅供参考，不硬约束）
+      properties:
+        price_low:     { type: number, format: double }
+        price_high:    { type: number, format: double }
+        currency:      { type: string, default: CNY }
+        confidence:    { type: number, format: double }
+        basis:         { type: string }
+        comparables:
+          type: array
+          items:
+            type: object
+            properties:
+              deal_code: { type: string }
+              amount:    { type: number, format: double }
+              year:      { type: integer }
+        disclaimer:    { type: string, description: 最终定价以评估机构报告与谈判为准 }
+
+  responses:
+    Ok:
+      description: 成功
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    BadRequest:
+      description: 参数校验失败（code 非 0）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    Forbidden:
+      description: 越权（谈判细节仅参与人、分配仅本人相关、法务角色限制，见 detail §7）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    Conflict:
+      description: 状态/业务冲突（非法状态迁移、异议未结、比例低于最低限、工商异常阻断、重复登记）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    TooManyRequests:
+      description: 限流（普通 100/min，AI 接口 20/min）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+
+paths:
+  /disclosure:
+    get:
+      tags: [disclosure]
+      operationId: listDisclosure
+      summary: 披露列表 / 我的披露（T-01）
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+        - { name: status, in: query, schema: { type: string, enum: [DRAFT, SUBMITTED, UNDER_EVAL, DEALING, COMPLETED, REJECTED] } }
+        - { name: output_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: mine, in: query, description: true=仅当前发明人, schema: { type: boolean } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+    post:
+      tags: [disclosure]
+      operationId: createDisclosure
+      summary: 创建披露（T-01，一键拟转化）
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/DisclosureCreateRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /disclosure/{id}/submit:
+    post:
+      tags: [disclosure]
+      operationId: submitDisclosure
+      summary: 提交披露（DRAFT→SUBMITTED，触发 disclosure.submitted）
+      parameters:
+        - { $ref: '#/components/parameters/DisclosureId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /disclosure/{id}/valuation:
+    post:
+      tags: [valuation]
+      operationId: assignValuation
+      summary: 评估分派（T-03 内评 / T-04 外评）
+      description: 置披露 UNDER_EVAL，创建 T_VALUATION（valuator_type=INTERNAL/EXTERNAL）；需 Idempotency-Key。
+      parameters:
+        - { $ref: '#/components/parameters/DisclosureId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/ValuationAssignRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /valuation/{id}/external-report:
+    post:
+      tags: [valuation]
+      operationId: uploadExternalReport
+      summary: 上传第三方评估报告（T-04）
+      parameters:
+        - { $ref: '#/components/parameters/ValuationId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/ExternalReportRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /deal:
+    get:
+      tags: [deal]
+      operationId: listDeals
+      summary: 交易列表（组合过滤，<500ms）
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+        - { name: status, in: query, schema: { type: string, enum: [DRAFT, VALUATED, NEGOTIATING, DRAFT_CONTRACT, UNDER_APPROVAL, APPROVED, PUBLICIZED, SIGNED, EXECUTING, INCOME_RECEIVED, DISTRIBUTED, CLOSED, TERMINATED] } }
+        - { name: deal_type, in: query, schema: { type: string, enum: ["转让", "独占许可", "排他许可", "普通许可", "作价投资", "合作实施"] } }
+        - { name: output_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: enterpartner_id, in: query, schema: { type: integer, format: int64 } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+    post:
+      tags: [deal]
+      operationId: createDeal
+      summary: 发起转化交易（code=DEAL-年-序）
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/NegotiationRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /deal/{id}:
+    get:
+      tags: [deal]
+      operationId: getDeal
+      summary: 交易详情（进度条 + 各标签页）
+      parameters: [ { $ref: '#/components/parameters/DealId' } ]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /deal/{id}/negotiation:
+    post:
+      tags: [deal]
+      operationId: saveNegotiation
+      summary: 谈判条款（T-07）→ NEGOTIATING
+      description: 谈判细节仅参与人可见（detail §7）；作价投资需携 equity_ratio/exit_arrangement。
+      parameters:
+        - { $ref: '#/components/parameters/DealId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/NegotiationRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /deal/{id}/publish:
+    post:
+      tags: [deal]
+      operationId: publishDeal
+      summary: 挂牌发布与展示门户（T-05，推送国家技术转移平台）
+      parameters:
+        - { $ref: '#/components/parameters/DealId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /partner:
+    post:
+      tags: [partner]
+      operationId: registerPartner
+      summary: 意向企业登记（T-06）+ 工商真实性核验
+      description: 落 T_ENTERPARTNER；异步调天眼查/企查查校验，异常置 check_abnormal。
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/EntPartner' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    get:
+      tags: [partner]
+      operationId: listPartners
+      summary: 合作企业库查询
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+        - { name: industry, in: query, schema: { type: string } }
+        - { name: check_abnormal, in: query, schema: { type: boolean } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+
+  /contract/draft:
+    post:
+      tags: [contract]
+      operationId: draftContract
+      summary: 合同起草（T-08）→ DRAFT_CONTRACT
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/ContractDraftRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /contract/{id}:
+    get:
+      tags: [contract]
+      operationId: getContract
+      summary: 合同详情（含多级意见/红线版/AI 风险）
+      parameters: [ { $ref: '#/components/parameters/ContractId' } ]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /deal/{id}/approve:
+    post:
+      tags: [deal]
+      operationId: approveDeal
+      summary: 多级审批（T-09）：法务/财务/院所/主管/理事会
+      description: 审批层级由 T-08 规则引擎按金额阈值判定（>500 万需 BOARD）；REJECT 回 DRAFT_CONTRACT。
+      parameters:
+        - { $ref: '#/components/parameters/DealId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/ApproveRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /deal/{id}/sign:
+    post:
+      tags: [contract]
+      operationId: signDeal
+      summary: 电子签章（T-10）→ SIGNED，触发 deal.signed
+      parameters:
+        - { $ref: '#/components/parameters/DealId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/SignRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /publicity/{dealId}:
+    get:
+      tags: [publicity]
+      operationId: getPublicity
+      summary: 公示页（公开可访问，走 CDN，不登录）
+      security: []
+      description: 返回脱敏对外摘要 summary_json + 异议提交通道；满足《促进科技成果转化法》第 27 条。
+      parameters: [ { $ref: '#/components/parameters/PublicityDealId' } ]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [publicity]
+      operationId: publishPublicity
+      summary: 发布公示（SIGNED→PUBLICIZED，启动倒计时）
+      parameters:
+        - { $ref: '#/components/parameters/PublicityDealId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/PublicityCreateRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /publicity/{dealId}/objection:
+    post:
+      tags: [publicity]
+      operationId: submitObjection
+      summary: 提交公示异议（公开通道）
+      description: 置 objection_open=TRUE，进入异议独立状态机；未结不得进 EXECUTING（PRD §11）。
+      parameters:
+        - { $ref: '#/components/parameters/PublicityDealId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/ObjectionRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+
+  /publicity/{dealId}/objection/handle:
+    post:
+      tags: [publicity]
+      operationId: handleObjection
+      summary: 异议处置（法务/转化办）
+      parameters:
+        - { $ref: '#/components/parameters/PublicityDealId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/ObjectionHandleRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /income:
+    post:
+      tags: [income]
+      operationId: registerIncome
+      summary: 到账登记（T-11）+ 触发分配计算
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/IncomeRegisterRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /income/{id}/match:
+    post:
+      tags: [income]
+      operationId: matchIncome
+      summary: 到账匹配合同（关联 03 经费到账/认领）
+      parameters:
+        - { $ref: '#/components/parameters/IncomeId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /distribution-rule:
+    post:
+      tags: [distribution]
+      operationId: saveDistributionRule
+      summary: 分配规则配置（T-12）
+      description: 可视化滑块配置；team_pct<min_team_pct 或三比例之和≠1 拦截（业务码 50003/50010）。
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/DistributionRuleRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /income/{id}/distribution:
+    post:
+      tags: [distribution]
+      operationId: generateDistribution
+      summary: 生成分配明细（T-12，按到账）
+      description: 命中生效规则计算 team/institute/individual + breakdown 到人；分期/提成按合同期比例。
+      parameters:
+        - { $ref: '#/components/parameters/IncomeId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: false
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/DistributionGenerateRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /distribution/{id}/issue:
+    post:
+      tags: [distribution]
+      operationId: issueDistribution
+      summary: 发放到人（T-13）；争议仲裁可暂缓
+      description: action=HOLD 置 HELD（争议暂缓），RESUME 恢复，ISSUE 发放并触发 distribution.issued。
+      parameters:
+        - { $ref: '#/components/parameters/DistributionId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/IssueRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /distribution/mine:
+    get:
+      tags: [distribution]
+      operationId: listMyDistribution
+      summary: 与我相关的分配明细（员工仅见本人条目）
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+
+  /annual-report/generate:
+    post:
+      tags: [report]
+      operationId: generateAnnualReport
+      summary: 年度报告一键生成（T-15/T-14）
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/AnnualReportGenerateRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /ai/opportunity:
+    post:
+      tags: [ai]
+      operationId: aiOpportunity
+      summary: AI 转化机会识别（T-17，限流 20/min）
+      description: 待转化专利族向量化 + 企业技术需求相似度检索 + GNN 合作网络，返回潜在买家清单（附置信度）。
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/OpportunityRequest' } }
+      responses:
+        '200':
+          description: 推荐清单
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list: { type: array, items: { $ref: '#/components/schemas/OpportunityItem' } }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /contract/{id}/ai-risk:
+    post:
+      tags: [ai]
+      operationId: aiContractRisk
+      summary: AI 合同条款风险审查（T-18，限流 20/min，<10s）
+      description: LLM 逐条对照《促进科技成果转化法》《民法典技术合同章》院所规定，输出风险条款+建议+出处+置信度；召回率≥85%。
+      parameters:
+        - { $ref: '#/components/parameters/ContractId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200':
+          description: 风险审查报告
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list: { type: array, items: { $ref: '#/components/schemas/ContractRiskItem' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /deal/{id}/ai-pricing:
+    post:
+      tags: [ai]
+      operationId: aiPricing
+      summary: AI 定价参考（T-19，限流 20/min）
+      description: 标的技术 + 可比交易库 + 行业指标 → 定价区间+依据+可比案例；仅供参考，最终定价以评估报告与谈判为准。
+      parameters:
+        - { $ref: '#/components/parameters/DealId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: false
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/PricingRequest' } }
+      responses:
+        '200':
+          description: 定价参考
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PricingResult' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }

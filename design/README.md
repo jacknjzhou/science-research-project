@@ -1,10 +1,10 @@
 # 科研管理系统 · 详细设计与接口契约
 
-**版本**：v1.0 · **日期**：2026-10-13
+**版本**：v1.1 · **日期**：2026-10-13
 **上游文档**：`../PRODUCT_PLAN.md`（产品规划 v1.1）、`../TECH_ARCHITECTURE.md`（架构与技术方案 v1.0）、`../PRD/README.md`（PRD 通用规约 v1.1）及 01–11 模块 PRD
 **读者对象**：后端开发、前端开发、测试、DBA、AI 工程师
 
-> 本目录把 M1 核心模块的 PRD 落地为可实现的**详细设计 + 数据库 DDL + OpenAPI 接口契约**。术语、命名、状态、编号一律以 `../PRD/README.md` 为准，本文只引用与实现，不重复定义。
+> 本目录把 11 个业务模块的 PRD 落地为可实现的**详细设计 + 数据库 DDL + OpenAPI 接口契约**。术语、命名、状态、编号一律以 `../PRD/README.md` 为准，本文只引用与实现，不重复定义。
 
 ---
 
@@ -21,7 +21,7 @@ design/
   <模块>-<代号>.openapi.yaml    ← 该模块对外 REST 契约（OpenAPI 3.0.3，可导入 Swagger/Postman）
 ```
 
-M1 核心模块范围：01 申报(P) · 02 过程(E) · 03 经费(F) · 04 成果(R) · 07 人员(S) · 09 采购与合同(G) · 10 资产与耗材(A)。05/06/08/11 的 P0 骨架并入 M1，但详细设计延后到 M2，本批次不交付。
+交付范围：**M1 核心七模块** 01 申报(P) · 02 过程(E) · 03 经费(F) · 04 成果(R) · 07 人员(S) · 09 采购与合同(G) · 10 资产与耗材(A)，**M2-M3 四模块** 05 转化(T) · 06 诚信与伦理(C) · 08 数据分析(D) · 11 涉密与多法人(X) 的三件套已全部交付（共 11 个业务模块 + 横切 `00-common.sql`）。
 
 ---
 
@@ -124,6 +124,32 @@ M1 核心模块范围：01 申报(P) · 02 过程(E) · 03 经费(F) · 04 成�
 | A | 耗材库存 | `IN_STOCK/LOW_STOCK/NEAR_EXPIRY/EXPIRED/STAGNANT` |
 | A | 领用 | `REQUESTED/DOUBLE_CONFIRM/ISSUED`（+ `IN_STOCK` 退库回环） |
 | A | 处置 | `APPLIED/APPRAISED/APPROVED/EXECUTING/BOOKED/ARCHIVED` |
+| T | 披露 | `DRAFT/SUBMITTED/UNDER_EVAL/DEALING/COMPLETED/REJECTED` |
+| T | 交易（DEAL） | `DRAFT/VALUATED/NEGOTIATING/DRAFT_CONTRACT/UNDER_APPROVAL/APPROVED/PUBLICIZED/SIGNED/EXECUTING/INCOME_RECEIVED/DISTRIBUTED/CLOSED/TERMINATED` |
+| T | 评估 | `DRAFT/ASSIGNED/REPORT_UPLOADED/CONFIRMED/INVALID` |
+| T | 合同 | `DRAFT/UNDER_APPROVAL/TO_SIGN/SIGNED/AMENDING/ARCHIVED/TERMINATED` |
+| T | 到账 | `PENDING/MATCHED/ALLOCATED/REVERSED` |
+| T | 分配记录 | `DRAFT/GENERATED/PUBLISHED/CONFIRMED/DISPUTED/HELD/ISSUED` |
+| T | 公示 | `DRAFT/PUBLISHED/IN_PROGRESS/OBJECTION_PENDING/OBJECTION_RESOLVED/COMPLETED/TERMINATED` |
+| T | 审批动作 | `PENDING/APPROVED/REJECTED/RETURNED/SKIPPED` |
+| C | 伦理案卷 | `DRAFT/SUBMITTED/FORMAL_CHECK/UNDER_REVIEW/NEEDS_REVISION/APPROVED/REJECTED/MONITORING/EXPIRED` |
+| C | 委员分派 | `ASSIGNED/ACCEPTED/RECUSED/COMPLETED/TIMEOUT/REASSIGNED` |
+| C | 会审纪要 | `SCHEDULED/IN_PROGRESS/MINUTED/FINALIZED` |
+| C | 批件 | `DRAFT/ISSUED/PUBLISHED/REVOKED/EXPIRED` |
+| C | 失信调查 | `INVESTIGATING/SUSTAINED/UNSUSTAINED/CLOSED`；申诉 `NONE/FILED/REVIEWING/UPHELD/OVERTURNED` |
+| C | 人遗备案 | `DRAFT/SUBMITTED/NATIONAL_RECEIVED/APPROVED/REJECTED/EXPIRED` |
+| C | 风险级别 | `HIGH/MED/LOW` |
+| D | 指标 | `DRAFT/ACTIVE/DEPRECATED`（口径版本 `DRAFT/ACTIVE/SUPERSEDED`） |
+| D | 报表 | `DRAFT/PUBLISHED/OFFLINE` |
+| D | 报表实例 | `GENERATING/GENERATED/EXPIRED/FAILED` |
+| D | 订阅 | `ACTIVE/PAUSED/CANCELLED` |
+| D | NL2SQL 查询 | `SUCCESS/FAILED/TIMEOUT/REJECTED_UNMAPPED` |
+| D | 政策问答 | `ANSWERED/FALLBACK/FAILED` |
+| X | 授权与密级许可 | `EFFECTIVE/FROZEN/REVOKED` |
+| X | 网络域 | `INTERNET/OFFICE/SECRET_NET` |
+| X | 输出审批（EXF，见 common `x_flow_audit`） | `APPLIED/PRE_REVIEW/SEC_REVIEW/RELEASED/REJECTED/RECORDED` |
+| X | 人员定密态（区别于 `security_level` 取值） | `UNCLASSIFIED/DOWN_CLASSIFY/DECLASSIFY` |
+| X | 安全日志判定 | `ALLOW/DENY`（`risk_flag` 标记越权/流向告警） |
 
 ---
 
@@ -150,6 +176,18 @@ M1 核心模块范围：01 申报(P) · 02 过程(E) · 03 经费(F) · 04 成�
 
 引用规则遵循 PRD 2.15 单一事实来源：非拥有模块只读引用，不重复存储可派生字段。
 
+**跨批次补充登记**：
+
+| 实体（表） | 拥有模块 | 主键 | 业务编号 | 被引列名 |
+|------------|----------|------|----------|----------|
+| `T_DEAL` | 05 T | `id` | `DEAL-年-序` | `deal_id` |
+| `T_DISCLOSURE` | 05 T | `id` | — | `disclosure_id` |
+| `C_ETHICS_CASE` | 06 C | `id` | `ETH-年-序` | `ethics_case_id`（01 申报前置卡点引用） |
+| `x_flow_audit` | common(X) | `id` | `EXF-年-序` | `x_ref` / `flow_audit_id`（各模块涉密输出/移交引用） |
+| `R_OUTPUT` | 04 R | `id` | — | `output_id`（05 披露、08 成果分析引用） |
+
+**模块 X 与 common 的表名映射（重要）**：PRD 11 用逻辑名 `X_LEGAL_ENTITY`、`X_FLOW_AUDIT` 描述法人治理与跨网输出审批，二者已在 `00-common.sql` 物理落地为 `sys_legal_entity`（`LE-` 前缀）与 `x_flow_audit`（`EXF-` 前缀），并含哈希链审计、`sys_admin_duty` 三员分离等横切能力。因此 `11-涉密管理与多法人治理-X.ddl.sql` **只定义 4 张 X 独有表**（`X_SECURITY_POLICY`／`X_ACCESS_GRANT`／`X_SEC_LOG`／`X_PERSONNEL_SEC`），不重复建法人表与输出审批表；阅读 PRD 逻辑名时按上表映射到 common 物理表。
+
 ---
 
 ## 六、模块产物索引
@@ -160,11 +198,17 @@ M1 核心模块范围：01 申报(P) · 02 过程(E) · 03 经费(F) · 04 成�
 | 02 项目过程管理 | E | [detail](./02-项目过程管理-E.detail.md) | [ddl](./02-项目过程管理-E.ddl.sql) | [api](./02-项目过程管理-E.openapi.yaml) |
 | 03 科研经费管理 | F | [detail](./03-科研经费管理-F.detail.md) | [ddl](./03-科研经费管理-F.ddl.sql) | [api](./03-科研经费管理-F.openapi.yaml) |
 | 04 科研成果管理 | R | [detail](./04-科研成果管理-R.detail.md) | [ddl](./04-科研成果管理-R.ddl.sql) | [api](./04-科研成果管理-R.openapi.yaml) |
+| 05 科技成果转化 | T | [detail](./05-科技成果转化-T.detail.md) | [ddl](./05-科技成果转化-T.ddl.sql) | [api](./05-科技成果转化-T.openapi.yaml) |
+| 06 科研诚信与伦理 | C | [detail](./06-科研诚信与伦理-C.detail.md) | [ddl](./06-科研诚信与伦理-C.ddl.sql) | [api](./06-科研诚信与伦理-C.openapi.yaml) |
 | 07 人员与团队 | S | [detail](./07-人员与团队-S.detail.md) | [ddl](./07-人员与团队-S.ddl.sql) | [api](./07-人员与团队-S.openapi.yaml) |
+| 08 数据分析与决策 | D | [detail](./08-数据分析与决策-D.detail.md) | [ddl](./08-数据分析与决策-D.ddl.sql) | [api](./08-数据分析与决策-D.openapi.yaml) |
 | 09 采购与合同管理 | G | [detail](./09-采购与合同管理-G.detail.md) | [ddl](./09-采购与合同管理-G.ddl.sql) | [api](./09-采购与合同管理-G.openapi.yaml) |
 | 10 资产与耗材管理 | A | [detail](./10-资产与耗材管理-A.detail.md) | [ddl](./10-资产与耗材管理-A.ddl.sql) | [api](./10-资产与耗材管理-A.openapi.yaml) |
+| 11 涉密管理与多法人治理 | X | [detail](./11-涉密管理与多法人治理-X.detail.md) | [ddl](./11-涉密管理与多法人治理-X.ddl.sql) | [api](./11-涉密管理与多法人治理-X.openapi.yaml) |
 
 横切平台表见 [00-common.sql](./00-common.sql)。
+
+> 08 数据分析（D）为**双引擎**：`D.ddl.sql` Part A 为 PostgreSQL OLTP（指标/报表/订阅/查询日志等配置表），Part B 为 ClickHouse OLAP 数仓分层（ODS→DWD→DWS→ADS）。11 涉密多法人（X）复用 common 的 `sys_legal_entity`/`x_flow_audit`，仅新增 4 张独有表（见 §五映射说明）。
 
 ---
 
@@ -173,3 +217,4 @@ M1 核心模块范围：01 申报(P) · 02 过程(E) · 03 经费(F) · 04 成�
 | 版本 | 日期 | 作者 | 说明 |
 |------|------|------|------|
 | v1.0 | 2026-10-13 | 研发组 | 首批交付 M1 七核心模块详细设计 + DDL + OpenAPI |
+| v1.1 | 2026-10-13 | 研发组 | 补齐 M2-M3 四模块（05 T / 06 C / 08 D / 11 X）三件套；§四追加 T/C/D/X 状态 token，§五登记跨模块共享实体并注明 X 逻辑名↔common 物理表映射，§六索引扩至 11 模块；08 D 双引擎（PG OLTP + ClickHouse 数仓），11 X 复用 common 仅新增 4 表 |

@@ -1,0 +1,969 @@
+openapi: 3.0.3
+info:
+  title: 数据分析与决策支持（D）API
+  version: "1.0"
+  description: >-
+    08 数据分析与决策支持模块对外 REST 契约（自包含 OpenAPI 3.0.3，可独立导入 Swagger Editor / Postman）。
+    覆盖指标字典 CRUD（口径唯一真源）、报表定义 CRUD 与实例生成/下钻、数据大屏配置 CRUD、
+    数据订阅管理、自然语言查询 NL2SQL、AI 政策问答、机构对标、上级报送生成、趋势预测查询。
+    数据双引擎：配置/元数据走 PostgreSQL 15，数仓 ODS/DWD/DWS/ADS 走 ClickHouse（../TECH_ARCHITECTURE.md §五）。
+    指标口径以 D_METRIC.formula_sql 为唯一真源；跨法人聚合带 legal_entity_id，多法人合并视图联动 X-10 并表口径。
+    字段名与 ../PRD/08-数据分析与决策.md §5.2 及 08-数据分析与决策-D.ddl.sql 对齐；
+    status/枚举取 ./README.md §4 与 PRD §5；金额 NUMERIC(18,2)、比例/置信度 NUMERIC(6,4)。
+    NL2SQL/政策问答为 AI 接口：限流 20 req/min（429），端到端 5s 超时（504 兜底"未理解请联系管理员"）。
+servers:
+  - url: https://{host}/api/v1
+    description: 科研管理系统网关（v1）
+    variables:
+      host:
+        default: api.institute.example.com
+        description: 部署主机名
+
+tags:
+  - name: metric
+    description: 指标体系与字典（D-01，口径唯一真源）
+  - name: report
+    description: 报表定义/实例/下钻（D-04/D-05/D-10）
+  - name: screen
+    description: 数据大屏配置（D-06）
+  - name: subscription
+    description: 数据订阅与推送（D-18）
+  - name: ai
+    description: NL2SQL 自然语言查询 / 政策问答（D-11/D-12，限流 20/min）
+  - name: benchmark
+    description: 机构间对标（D-14）
+  - name: export
+    description: 上级报送模板与导出（D-07）
+  - name: forecast
+    description: 趋势预测查询（D-16）
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "Authorization: Bearer <JWT>；刷新走 Refresh Token（./README.md §3）。开放数据 API 走 OAuth2 + Scope（PRD §10）。"
+
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      description: 页码，1-based
+      schema: { type: integer, minimum: 1, default: 1 }
+    SizeParam:
+      name: size
+      in: query
+      description: 每页条数，默认 20，上限 200
+      schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: 幂等键（UUID），POST/PUT/DELETE 服务端缓存去重（./README.md §3）
+      schema: { type: string }
+    MetricCode:
+      name: code
+      in: path
+      required: true
+      description: 指标编码 D_METRIC.code（口径唯一真源）
+      schema: { type: string }
+    MetricId:
+      name: id
+      in: path
+      required: true
+      description: 指标主键 D_METRIC.id
+      schema: { type: integer, format: int64 }
+    ReportId:
+      name: id
+      in: path
+      required: true
+      description: 报表定义主键 D_REPORT.id
+      schema: { type: integer, format: int64 }
+    InstanceId:
+      name: id
+      in: path
+      required: true
+      description: 报表实例主键 D_REPORT_INSTANCE.id
+      schema: { type: integer, format: int64 }
+    ScreenId:
+      name: id
+      in: path
+      required: true
+      description: 大屏配置主键 D_SCREEN.id
+      schema: { type: integer, format: int64 }
+    SubscriptionId:
+      name: id
+      in: path
+      required: true
+      description: 订阅主键 D_SUBSCRIPTION.id
+      schema: { type: integer, format: int64 }
+    TemplateCode:
+      name: templateCode
+      in: path
+      required: true
+      description: 报送模板编码 D_EXPORT.code
+      schema: { type: string }
+    LegalEntityId:
+      name: legal_entity_id
+      in: query
+      description: 法人过滤（0=总院合并视图；空=用户可见范围全部；非空=分法人下钻，联动 X-10）
+      schema: { type: integer, format: int64 }
+
+  schemas:
+    ApiResponse:
+      type: object
+      description: 统一响应包裹（./README.md §3）
+      properties:
+        code:      { type: integer, description: 0 为成功，非 0 为业务错误码 }
+        message:   { type: string }
+        data:      { type: object, nullable: true }
+        traceId:   { type: string }
+        timestamp: { type: integer, format: int64 }
+
+    PageResult:
+      type: object
+      description: 分页响应（data 内层）
+      properties:
+        list:  { type: array, items: { type: object } }
+        total: { type: integer, format: int64 }
+        page:  { type: integer }
+        size:  { type: integer }
+
+    # ---------------- 实体 schema（字段对齐 DDL）----------------
+    Metric:
+      type: object
+      description: 指标字典（D_METRIC，口径唯一真源）
+      properties:
+        id:            { type: integer, format: int64 }
+        code:          { type: string, description: 指标编码 }
+        name:          { type: string }
+        category:      { type: string, enum: [PROJECT, FUNDING, OUTPUT, TRANSFER, PEOPLE, RISK, COMPREHENSIVE] }
+        unit:          { type: string, nullable: true }
+        formula_sql:   { type: string, description: 口径 SQL 唯一真源 }
+        drill_dims:    { type: array, items: { type: object }, description: '下钻维度 [{dim,path}]' }
+        refresh_freq:  { type: string, enum: [REALTIME, HOURLY, DAILY, WEEKLY, MONTHLY] }
+        owner_role:    { type: string, nullable: true }
+        caliber_note:  { type: string, nullable: true }
+        version:       { type: integer }
+        effective_from: { type: string, format: date }
+        effective_to:   { type: string, format: date, nullable: true }
+        status:        { type: string, enum: [ACTIVE, DEPRECATED] }
+        legal_entity_id: { type: integer, format: int64, nullable: true }
+        security_level:  { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET] }
+        tenant_id:     { type: integer, format: int64 }
+        created_at:    { type: string, format: date-time }
+        updated_at:    { type: string, format: date-time }
+        remark:        { type: string, nullable: true }
+
+    MetricValue:
+      type: object
+      description: 指标查询结果（按 D_METRIC.formula_sql 在 ADS/DWS 计算）
+      properties:
+        code:          { type: string }
+        name:          { type: string }
+        unit:          { type: string }
+        version:       { type: integer, description: 实际计算所用口径版本 }
+        value:         { type: number, format: double }
+        dims:          { type: object, description: 维度切片回显 }
+        data_as_of:    { type: string, format: date, description: 数据截至日期（T+1） }
+        dq_flag:       { type: string, enum: [OK, PARTIAL_MISSING], description: 数据质量标注（部分缺失告警） }
+        drill_available: { type: boolean }
+
+    Report:
+      type: object
+      description: 报表定义（D_REPORT）
+      properties:
+        id:            { type: integer, format: int64 }
+        code:          { type: string }
+        name:          { type: string }
+        type:          { type: string, enum: [DASHBOARD, TABLE, CHART] }
+        schema_json:   { type: object }
+        data_source:   { type: string }
+        permission_scope: { type: string, enum: [SELF, DEPT, ALL_INSTITUTE, FINANCE, AUDIT] }
+        metric_refs:   { type: array, items: { type: string } }
+        schedule:      { type: string, nullable: true }
+        data_freshness: { type: string, enum: [REALTIME, T_PLUS_1, T_PLUS_7] }
+        status:        { type: string, enum: [DRAFT, PUBLISHED, OFFLINE] }
+        legal_entity_id: { type: integer, format: int64, nullable: true }
+        security_level:  { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET] }
+        created_at:    { type: string, format: date-time }
+
+    ReportInstance:
+      type: object
+      description: 报表实例（D_REPORT_INSTANCE，含快照与口径冻结）
+      properties:
+        id:            { type: integer, format: int64 }
+        report_id:     { type: integer, format: int64 }
+        params:        { type: object }
+        snapshot_url:  { type: string, nullable: true }
+        metric_version_snapshot: { type: object, description: "冻结口径版本 {code:version}（历史留旧口径）" }
+        dq_flag:       { type: string, enum: [OK, PARTIAL_MISSING] }
+        data_as_of:    { type: string, format: date, nullable: true }
+        generated_at:  { type: string, format: date-time }
+        generated_by:  { type: integer, format: int64 }
+        expires_at:    { type: string, format: date-time, nullable: true }
+        status:        { type: string, enum: [GENERATING, GENERATED, EXPIRED, FAILED] }
+
+    DrillResult:
+      type: object
+      description: 下钻结果（ADS→DWS→DWD→业务表，D-10）
+      properties:
+        instance_id:   { type: integer, format: int64 }
+        level:         { type: string, enum: [ADS, DWS, DWD, BIZ], description: 当前下钻层级 }
+        parent_ref:    { type: string, nullable: true, description: 上层锚点（如部门/项目） }
+        columns:       { type: array, items: { type: object, properties: { name: { type: string }, label: { type: string } } } }
+        rows:          { type: array, items: { type: object, additionalProperties: true } }
+        next_level:    { type: string, enum: [ADS, DWS, DWD, BIZ, null], nullable: true, description: 可继续下钻的下一层，业务表为明细/审批链 }
+        masked:        { type: boolean, description: 结果是否脱敏（非管理员掩码手机/身份证） }
+
+    Screen:
+      type: object
+      description: 数据大屏配置（D_SCREEN）
+      properties:
+        id:            { type: integer, format: int64 }
+        code:          { type: string }
+        name:          { type: string }
+        theme:         { type: string, nullable: true, enum: [OVERVIEW, FUNDING, TRANSFER, TALENT, DISCIPLINE] }
+        layout_json:   { type: object }
+        widgets:
+          type: array
+          items:
+            type: object
+            properties:
+              widgetId:    { type: string }
+              type:        { type: string }
+              dataMetricId: { type: string, description: 引用 D_METRIC.code }
+              vizConfig:   { type: object, description: ECharts 配置 }
+              drillPath:   { type: array, items: { type: string } }
+        rotation_seconds: { type: integer }
+        data_as_of_expr: { type: string, nullable: true }
+        status:        { type: string, enum: [DRAFT, PUBLISHED, OFFLINE] }
+        legal_entity_id: { type: integer, format: int64, nullable: true }
+        created_at:    { type: string, format: date-time }
+
+    Subscription:
+      type: object
+      description: 数据订阅（D_SUBSCRIPTION）
+      properties:
+        id:            { type: integer, format: int64 }
+        user_id:       { type: integer, format: int64 }
+        report_id:     { type: integer, format: int64 }
+        report_name:   { type: string, nullable: true }
+        frequency:     { type: string, enum: [DAILY, WEEKLY, MONTHLY] }
+        channel:       { type: string, enum: [EMAIL, WECHAT, INBOX] }
+        send_day:      { type: integer, nullable: true }
+        last_sent_at:  { type: string, format: date-time, nullable: true }
+        params_override: { type: object }
+        status:        { type: string, enum: [ACTIVE, PAUSED, CANCELLED] }
+
+    NLQueryResult:
+      type: object
+      description: NL2SQL 查询结果（D-11）：返回生成 SQL + 列 + 行 + 语义回读
+      properties:
+        sql:           { type: string, description: 权限改写层注入过滤后的最终执行 SQL（可校验） }
+        semantic_readback: { type: string, description: '"你是不是想问……"语义回读文本' }
+        matched_metrics: { type: array, items: { type: string } }
+        columns:       { type: array, items: { type: object, properties: { name: { type: string }, label: { type: string } } } }
+        rows:          { type: array, items: { type: object, additionalProperties: true } }
+        row_count:     { type: integer }
+        elapsed_ms:    { type: integer }
+        masked:        { type: boolean }
+        query_log_id:  { type: integer, format: int64 }
+
+    PolicyQAResult:
+      type: object
+      description: AI 政策问答结果（D-12）：答案 + 引用条款 + 置信度 + 金额确认标注
+      properties:
+        answer_text:   { type: string }
+        source_articles:
+          type: array
+          items:
+            type: object
+            properties:
+              pack:      { type: string }
+              article:   { type: string }
+              ref:       { type: string, description: 条款编号 }
+              url:       { type: string, description: 原文跳转 }
+        confidence:    { type: number, format: double }
+        amount_related: { type: boolean, description: 涉及金额/审批权限 → 标注请与科研办确认 }
+        disclaimer:    { type: string, nullable: true, description: '"涉及具体金额/审批权限请与科研办确认"' }
+        status:        { type: string, enum: [ANSWERED, FALLBACK, FAILED] }
+        qa_log_id:     { type: integer, format: int64 }
+
+    Benchmark:
+      type: object
+      description: 机构对标（D_BENCHMARK，雷达图数据）
+      properties:
+        id:            { type: integer, format: int64 }
+        peer_institute_id: { type: integer, format: int64 }
+        peer_name:     { type: string }
+        year:          { type: integer }
+        metric_code:   { type: string }
+        peer_value:    { type: number, format: double, nullable: true }
+        our_value:     { type: number, format: double, nullable: true }
+        rank:          { type: integer, nullable: true }
+        data_source:   { type: string, enum: [PUBLIC, ANNUAL_REPORT] }
+
+    Forecast:
+      type: object
+      description: 趋势预测快照（D_FORECAST）
+      properties:
+        id:            { type: integer, format: int64 }
+        target_metric: { type: string }
+        model_type:    { type: string, enum: [PROPHET, ARIMA, LTSM, LINEAR_REG] }
+        forecast_date: { type: string, format: date }
+        predicted_value: { type: number, format: double }
+        confidence_interval:
+          type: object
+          properties:
+            lower:   { type: number, format: double }
+            upper:   { type: number, format: double }
+            level:   { type: number, format: double, description: 置信水平 0-1 }
+        key_assumptions: { type: array, items: { type: object } }
+        generated_at:  { type: string, format: date-time }
+
+    ExportRecord:
+      type: object
+      description: 上级报送生成结果（D_EXPORT，D-07）
+      properties:
+        template_code: { type: string }
+        name:          { type: string }
+        target_org:    { type: string }
+        format:        { type: string, enum: [CSV, EXCEL, PDF, XML] }
+        version:       { type: integer }
+        output_url:    { type: string, description: 生成的报送文件（对象存储，留痕） }
+        generated_at:  { type: string, format: date-time }
+        generated_by:  { type: integer, format: int64 }
+        dq_flag:       { type: string, enum: [OK, PARTIAL_MISSING] }
+        metric_version_snapshot: { type: object, description: 报送口径版本快照（以 D_METRIC 为真源） }
+
+    # ---------------- 请求 DTO ----------------
+    MetricUpsertRequest:
+      type: object
+      description: 新建/更新指标（D-01）；更新口径需评审，version 自动递增并冻结旧版本
+      required: [code, name, category, formula_sql]
+      properties:
+        code:          { type: string }
+        name:          { type: string }
+        category:      { type: string, enum: [PROJECT, FUNDING, OUTPUT, TRANSFER, PEOPLE, RISK, COMPREHENSIVE] }
+        unit:          { type: string }
+        formula_sql:   { type: string }
+        drill_dims:    { type: array, items: { type: object } }
+        refresh_freq:  { type: string, enum: [REALTIME, HOURLY, DAILY, WEEKLY, MONTHLY], default: DAILY }
+        owner_role:    { type: string }
+        caliber_note:  { type: string, description: 口径变更理由（评审留痕） }
+        legal_entity_id: { type: integer, format: int64, nullable: true }
+        security_level:  { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET], default: INTERNAL }
+
+    ReportUpsertRequest:
+      type: object
+      description: 新建/更新报表定义（D-05 设计器保存/发布）
+      required: [code, name, type, schema_json, data_source]
+      properties:
+        code:          { type: string }
+        name:          { type: string }
+        type:          { type: string, enum: [DASHBOARD, TABLE, CHART] }
+        schema_json:   { type: object }
+        data_source:   { type: string }
+        permission_scope: { type: string, enum: [SELF, DEPT, ALL_INSTITUTE, FINANCE, AUDIT], default: DEPT }
+        metric_refs:   { type: array, items: { type: string } }
+        schedule:      { type: string }
+        data_freshness: { type: string, enum: [REALTIME, T_PLUS_1, T_PLUS_7], default: T_PLUS_1 }
+        publish:       { type: boolean, default: false, description: true=发布全院（DRAFT→PUBLISHED） }
+        legal_entity_id: { type: integer, format: int64, nullable: true }
+        security_level:  { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET], default: INTERNAL }
+
+    ReportGenerateRequest:
+      type: object
+      description: 生成报表实例（切片参数）
+      required: [params]
+      properties:
+        params:
+          type: object
+          description: 报表参数（start_date/end_date/department_id/project_type/fiscal_year 等）
+        persist_snapshot: { type: boolean, default: true, description: 是否落对象存储快照 }
+
+    ScreenUpsertRequest:
+      type: object
+      description: 新建/更新大屏配置（D-06）
+      required: [code, name, layout_json, widgets]
+      properties:
+        code:          { type: string }
+        name:          { type: string }
+        theme:         { type: string, enum: [OVERVIEW, FUNDING, TRANSFER, TALENT, DISCIPLINE] }
+        layout_json:   { type: object }
+        widgets:       { type: array, items: { type: object } }
+        rotation_seconds: { type: integer, default: 30 }
+        data_as_of_expr: { type: string }
+        publish:       { type: boolean, default: false }
+        legal_entity_id: { type: integer, format: int64, nullable: true }
+
+    SubscriptionRequest:
+      type: object
+      description: 创建/更新订阅（D-18）
+      required: [report_id, frequency, channel]
+      properties:
+        report_id:     { type: integer, format: int64 }
+        frequency:     { type: string, enum: [DAILY, WEEKLY, MONTHLY] }
+        channel:       { type: string, enum: [EMAIL, WECHAT, INBOX] }
+        send_day:      { type: integer, nullable: true }
+        params_override: { type: object }
+
+    NLQueryRequest:
+      type: object
+      description: 自然语言查询请求（D-11）；先语义回读，确认后带 confirmed=true 执行
+      required: [question]
+      properties:
+        question:      { type: string, description: 自然语言问题，如"去年到账经费最高的三个 PI 是谁？" }
+        confirmed:     { type: boolean, default: false, description: true=已确认语义回读，执行；false=仅返回回读不执行 }
+        readback_token: { type: string, nullable: true, description: 回读会话标识（确认时携带） }
+        legal_entity_id: { type: integer, format: int64, nullable: true }
+
+    PolicyQARequest:
+      type: object
+      description: 政策问答请求（D-12）
+      required: [question]
+      properties:
+        question:      { type: string }
+        file_url:      { type: string, nullable: true, description: 上传文件提问（如"这份合同有什么问题？"） }
+        top_k:         { type: integer, default: 5, description: RAG 检索条款数 }
+
+    ExportGenerateRequest:
+      type: object
+      description: 上级报送生成请求（D-07）
+      properties:
+        period:        { type: string, description: 报送期间，如 2026 或 2026-Q1 }
+        format:        { type: string, enum: [CSV, EXCEL, PDF, XML], nullable: true, description: 覆盖模板默认格式 }
+        legal_entity_id: { type: integer, format: int64, nullable: true, description: 报送主体（空=总院合并） }
+
+  responses:
+    Ok:
+      description: 成功
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    BadRequest:
+      description: 参数校验失败（code 非 0）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    Unauthorized:
+      description: 未认证（JWT 缺失/失效）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    Forbidden:
+      description: 越权（超出 permission_scope / 密级 / 法人可见范围，detail §7）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    Conflict:
+      description: 状态/业务冲突（口径版本冲突、报表已下线、订阅重复、报送口径不一致以字典为准）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    TooManyRequests:
+      description: 限流（普通 100/min，AI 接口 NL2SQL/政策问答 20/min，PRD §12）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    GatewayTimeout:
+      description: AI/查询超时（NL2SQL/政策问答 5s 未返回中断，兜底"未理解，请联系管理员"，PRD §11）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+
+paths:
+  # ============================ 指标（D-01）============================
+  /dash/metrics/{code}:
+    get:
+      tags: [metric]
+      operationId: getMetricValue
+      summary: 指标查询（按 code 计算最新值，D-01/D-03）
+      description: >-
+        读取 D_METRIC（口径唯一真源）在其 refresh_freq 对应的 ADS/DWS 层按 formula_sql 计算，
+        返回结果值 + 数据截至日期 + 数据质量标注。历史口径由 version 定位。
+      parameters:
+        - { $ref: '#/components/parameters/MetricCode' }
+        - { $ref: '#/components/parameters/LegalEntityId' }
+        - { name: fiscal_year, in: query, schema: { type: integer } }
+        - { name: department_id, in: query, schema: { type: integer, format: int64 } }
+      responses:
+        '200':
+          description: 指标值
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MetricValue' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /dash/metrics:
+    get:
+      tags: [metric]
+      operationId: listMetrics
+      summary: 指标字典列表 / 检索
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+        - { name: category, in: query, schema: { type: string, enum: [PROJECT, FUNDING, OUTPUT, TRANSFER, PEOPLE, RISK, COMPREHENSIVE] } }
+        - { name: status, in: query, schema: { type: string, enum: [ACTIVE, DEPRECATED] } }
+        - { name: keyword, in: query, description: 按编码/名称模糊, schema: { type: string } }
+      responses:
+        '200':
+          description: 分页指标列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list: { type: array, items: { $ref: '#/components/schemas/Metric' } }
+    post:
+      tags: [metric]
+      operationId: createMetric
+      summary: 新建指标（D-01，需指标变更评审）
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/MetricUpsertRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /dash/metrics/{id}:
+    put:
+      tags: [metric]
+      operationId: updateMetric
+      summary: 更新指标（口径变更 → version 递增，历史留旧口径）
+      description: 口径变化不原地覆盖：新值生成新版本 ACTIVE，旧版本置 DEPRECATED 并设 effective_to。
+      parameters:
+        - { $ref: '#/components/parameters/MetricId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/MetricUpsertRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [metric]
+      operationId: deprecateMetric
+      summary: 停用指标（软删/DEPRECATED，不物理删保历史报表可复算）
+      parameters:
+        - { $ref: '#/components/parameters/MetricId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ============================ 报表（D-04/05/10）============================
+  /dash/reports:
+    get:
+      tags: [report]
+      operationId: listReports
+      summary: 报表定义列表
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+        - { name: type, in: query, schema: { type: string, enum: [DASHBOARD, TABLE, CHART] } }
+        - { name: status, in: query, schema: { type: string, enum: [DRAFT, PUBLISHED, OFFLINE] } }
+        - { $ref: '#/components/parameters/LegalEntityId' }
+      responses:
+        '200':
+          description: 分页报表列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list: { type: array, items: { $ref: '#/components/schemas/Report' } }
+    post:
+      tags: [report]
+      operationId: createReport
+      summary: 新建报表定义（D-05 设计器保存/发布）
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/ReportUpsertRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /dash/reports/{id}:
+    put:
+      tags: [report]
+      operationId: updateReport
+      summary: 更新报表定义
+      parameters:
+        - { $ref: '#/components/parameters/ReportId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/ReportUpsertRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [report]
+      operationId: offlineReport
+      summary: 下线报表（PUBLISHED→OFFLINE，软删保实例可追溯）
+      parameters:
+        - { $ref: '#/components/parameters/ReportId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /dash/report/{id}/generate:
+    post:
+      tags: [report]
+      operationId: generateReport
+      summary: 生成报表实例（一键生成，D-04/D-05/D-09）
+      description: >-
+        按参数在 ADS/DWS 取数，冻结当前指标口径版本写入 metric_version_snapshot（历史留旧口径），
+        数据质量检查失败置 dq_flag=PARTIAL_MISSING 供顶部标注。PI"我的年度科研情况"、上级报送均走此生成。
+      parameters:
+        - { $ref: '#/components/parameters/ReportId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/ReportGenerateRequest' } }
+      responses:
+        '200':
+          description: 报表实例
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ReportInstance' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /dash/report/instance/{id}/drill:
+    get:
+      tags: [report]
+      operationId: drillInstance
+      summary: 报表实例下钻（ADS→DWS→DWD→业务表，D-10）
+      description: 审计员可对任一报表逐层下钻到明细→审批链→操作日志；结果按用户权限过滤并脱敏。
+      parameters:
+        - { $ref: '#/components/parameters/InstanceId' }
+        - { name: level, in: query, schema: { type: string, enum: [ADS, DWS, DWD, BIZ] } }
+        - { name: parent_ref, in: query, description: 上层锚点（如部门ID/项目ID）, schema: { type: string } }
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+      responses:
+        '200':
+          description: 下钻结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DrillResult' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ============================ 大屏（D-06）============================
+  /dash/screens:
+    get:
+      tags: [screen]
+      operationId: listScreens
+      summary: 大屏配置列表
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+        - { $ref: '#/components/parameters/LegalEntityId' }
+      responses:
+        '200':
+          description: 分页大屏列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list: { type: array, items: { $ref: '#/components/schemas/Screen' } }
+    post:
+      tags: [screen]
+      operationId: createScreen
+      summary: 新建大屏配置（D-06）
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/ScreenUpsertRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /dash/screens/{id}:
+    put:
+      tags: [screen]
+      operationId: updateScreen
+      summary: 更新大屏配置（布局/组件/轮播）
+      parameters:
+        - { $ref: '#/components/parameters/ScreenId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/ScreenUpsertRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [screen]
+      operationId: offlineScreen
+      summary: 下线大屏（软删）
+      parameters:
+        - { $ref: '#/components/parameters/ScreenId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ============================ 订阅（D-18）============================
+  /dash/subscribe:
+    get:
+      tags: [subscription]
+      operationId: listSubscriptions
+      summary: 我的订阅列表
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+      responses:
+        '200':
+          description: 分页订阅列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list: { type: array, items: { $ref: '#/components/schemas/Subscription' } }
+    post:
+      tags: [subscription]
+      operationId: createSubscription
+      summary: 新增订阅（邮件/企微/站内三通道，D-18）
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/SubscriptionRequest' } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /dash/subscribe/{id}:
+    delete:
+      tags: [subscription]
+      operationId: cancelSubscription
+      summary: 取消订阅（D-18）
+      parameters:
+        - { $ref: '#/components/parameters/SubscriptionId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ============================ AI：NL2SQL / 政策问答 ============================
+  /dash/nl-query:
+    post:
+      tags: [ai]
+      operationId: nlQuery
+      summary: 自然语言查询 NL2SQL（D-11，限流 20/min，端到端 <5s）
+      description: >-
+        用户输入→LLM 解析意图+匹配指标字典→生成 SQL→权限改写层强制注入 tenant_id/legal_entity_id/security_level 过滤→执行。
+        confirmed=false 时仅返回语义回读"你是不是想问…"不执行；无法映射指标时兜底"未理解，请联系管理员"（不瞎猜）。
+        非管理员访问他人数据结果对手机/身份证掩码。限流 20/min（429），5s 超时中断（504）。
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/NLQueryRequest' } }
+      responses:
+        '200':
+          description: "查询结果 {sql, columns, rows, semantic_readback}"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/NLQueryResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '504': { $ref: '#/components/responses/GatewayTimeout' }
+
+  /dash/policy-qa:
+    post:
+      tags: [ai]
+      operationId: policyQa
+      summary: AI 政策问答（D-12，限流 20/min，RAG Top-5 条款）
+      description: >-
+        问题→svc-rag 检索政策库 Top-5 条款（按 security_level+legal_entity 过滤）→LLM 组织回答+引用条款编号+原文跳转。
+        涉及具体金额/审批权限时强制标注"请与科研办确认"；置信度低于阈值回落人工。限流 20/min（429），5s 超时（504）。
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/PolicyQARequest' } }
+      responses:
+        '200':
+          description: 政策问答结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PolicyQAResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '504': { $ref: '#/components/responses/GatewayTimeout' }
+
+  # ============================ 对标 / 报送 / 预测 ============================
+  /dash/benchmark:
+    get:
+      tags: [benchmark]
+      operationId: queryBenchmark
+      summary: 机构对标（D-14，雷达图数据）
+      description: 本院 vs 选定 N 家同类院所多维度对比（项目/经费/成果/人才/转化）；数据源公开+上级年报，口径以 D_METRIC 为真源。
+      parameters:
+        - { name: peer, in: query, required: true, description: 对标院所标识/名称, schema: { type: string } }
+        - { name: year, in: query, required: true, schema: { type: integer } }
+        - { name: metric_code, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: 对标结果列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list: { type: array, items: { $ref: '#/components/schemas/Benchmark' } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /dash/export/{templateCode}/generate:
+    post:
+      tags: [export]
+      operationId: generateExport
+      summary: 上级报送生成（D-07，一键生成→审核→导出→留痕）
+      description: >-
+        按报送模板 schema_json 从库直接抽取生成（免表），口径以指标字典为唯一真源解决跨报表冲突；
+        生成 D_REPORT_INSTANCE + 导出文件（CSV/EXCEL/PDF/XML）落对象存储并留痕。
+      parameters:
+        - { $ref: '#/components/parameters/TemplateCode' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: false
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/ExportGenerateRequest' } }
+      responses:
+        '200':
+          description: 报送生成结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ExportRecord' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /dash/forecast:
+    get:
+      tags: [forecast]
+      operationId: queryForecast
+      summary: 趋势预测查询（D-16，预测曲线+置信区间+假设）
+      description: 返回目标指标的预测快照（经费到账/论文产出/立项数），含置信区间与关键假设；预测为参考不作决策唯一依据。
+      parameters:
+        - { name: target_metric, in: query, required: true, description: 目标指标 code, schema: { type: string } }
+        - { $ref: '#/components/parameters/LegalEntityId' }
+        - { name: from, in: query, description: 预测起始日期, schema: { type: string, format: date } }
+        - { name: to, in: query, description: 预测截止日期, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: 预测快照列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list: { type: array, items: { $ref: '#/components/schemas/Forecast' } }
+        '404': { $ref: '#/components/responses/NotFound' }
