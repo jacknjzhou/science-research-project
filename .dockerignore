@@ -1,0 +1,19 @@
+# 根 .dockerignore：作用于「构建上下文 = 仓库根」的后端镜像构建。
+# 目的：把发给 daemon 的上下文裁到最小，只保留 backend/ 与 design/ 所需内容。
+.git
+.gitattributes
+**/node_modules
+**/dist
+**/*.log
+npm-debug.log*
+
+# 与后端镜像无关的顶层目录（前端有独立构建上下文，不在此发送）
+/frontend
+/prototype
+/PRD
+*.md
+
+# 编辑器/系统噪声
+.vscode
+.idea
+.DS_Store

@@ -1,0 +1,64 @@
+# 科研管理系统 · 全套服务一键编排（Docker Compose）
+# 用法：docker compose up -d --build     然后浏览器访问 http://localhost:8080
+# 说明：当前为可运行的“契约驱动参考栈”（Node 参考后端 + nginx 托管 SPA）。
+#       生产目标 Java17 + Spring Cloud Alibaba 落地后，用同名 service 替换 backend 即可，前端与 nginx 反代不变。
+
+name: eplugger-ark
+
+services:
+  backend:
+    build:
+      context: .                 # 仓库根：镜像内需同时含 backend/ 源码与 design/ 契约
+      dockerfile: backend/Dockerfile
+    image: eplugger-backend:0.1.0
+    container_name: ark-backend
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "8787"
+    ports:
+      - "8787:8787"              # 便于宿主机直接调 API/看 _stats；仅经 nginx 访问前端时可删
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/healthz"]
+      interval: 15s
+      timeout: 3s
+      start_period: 5s
+      retries: 5
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend        # 前端构建上下文自包含（契约 yaml 已随 frontend/ 提交）
+      dockerfile: Dockerfile
+    image: eplugger-frontend:0.1.0
+    container_name: ark-frontend
+    depends_on:
+      backend:
+        condition: service_healthy   # 后端健康后再起 nginx，避免 upstream 解析失败
+    ports:
+      - "8080:80"                # 对外统一入口：http://localhost:8080
+    restart: unless-stopped
+
+  # 可选：为生产目标（Java/Spring + PostgreSQL）预留的数据库。
+  # 当前 Node 参考后端用进程内存储，默认不拉起；需要时：docker compose --profile db up -d
+  postgres:
+    image: postgres:15-alpine
+    container_name: ark-postgres
+    profiles: ["db"]
+    environment:
+      POSTGRES_USER: ark
+      POSTGRES_PASSWORD: ark
+      POSTGRES_DB: ark
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ark -d ark"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:

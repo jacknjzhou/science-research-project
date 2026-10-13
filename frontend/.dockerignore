@@ -1,0 +1,8 @@
+# 前端构建上下文（= frontend/）的 .dockerignore
+node_modules
+dist
+*.log
+npm-debug.log*
+.vscode
+.idea
+.DS_Store
