@@ -144,27 +144,25 @@ func (h *Handler) ListActivities(c *gin.Context) {
 		w := "%" + *v + "%"
 		kw = &w
 	}
-	var kwStr string
-	if kw != nil {
-		kwStr = *kw
-	}
-	var dept int64
-	if p := optInt64(c, "organizer_dept_id"); p != nil {
-		dept = *p
-	}
 	rows, err := h.q.ListActivities(c, vstore.ListActivitiesParams{
-		TenantID: d.TenantID, Column2: c.Query("status"), Column3: c.Query("activity_type"),
-		Column4: c.Query("level"), Column5: c.Query("host_mode"), Column6: dept,
-		Column7: tsOf(from), Column8: tsOf(to), Column9: kwStr, Offset: offset, Limit: limit,
+		TenantID: d.TenantID,
+		Status:   optQuery(c, "status"), ActivityType: optQuery(c, "activity_type"),
+		Level: optQuery(c, "level"), HostMode: optQuery(c, "host_mode"),
+		OrganizerDeptID: optInt64(c, "organizer_dept_id"),
+		FromAt:          tsOf(from), ToAt: tsOf(to),
+		Keyword: kw, Limit: limit, Offset: offset,
 	})
 	if err != nil {
 		httpx.WriteErr(c, 500, 50001, "查询失败")
 		return
 	}
 	total, _ := h.q.CountActivities(c, vstore.CountActivitiesParams{
-		TenantID: d.TenantID, Column2: c.Query("status"), Column3: c.Query("activity_type"),
-		Column4: c.Query("level"), Column5: c.Query("host_mode"), Column6: dept,
-		Column7: tsOf(from), Column8: tsOf(to), Column9: kwStr,
+		TenantID: d.TenantID,
+		Status:   optQuery(c, "status"), ActivityType: optQuery(c, "activity_type"),
+		Level: optQuery(c, "level"), HostMode: optQuery(c, "host_mode"),
+		OrganizerDeptID: optInt64(c, "organizer_dept_id"),
+		FromAt:          tsOf(from), ToAt: tsOf(to),
+		Keyword: kw,
 	})
 	list := make([]map[string]any, 0, len(rows))
 	for _, r := range rows {
