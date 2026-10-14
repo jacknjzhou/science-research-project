@@ -212,13 +212,13 @@ paths:
                       data: { $ref: '#/components/schemas/User' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /admin/users/{userId}/roles/{roleId}:
+  /admin/users/{id}/roles/{roleId}:
     delete:
       tags: [role]
       summary: 撤销用户的某角色
       operationId: revokeRole
       parameters:
-        - { name: userId, in: path, required: true, schema: { type: integer, format: int64 } }
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
         - { name: roleId, in: path, required: true, schema: { type: integer, format: int64 } }
         - { $ref: '#/components/parameters/IdempotencyKey' }
       responses:
