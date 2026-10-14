@@ -60,6 +60,7 @@ const groups: NavGroup[] = [
   ]},
   { t: '学 术 活 动', items: [
     { v: 'activity', ic: '✪', label: '学术活动管理', roles: ['R-STAFF', 'R-MANAGER', 'R-LEADER', 'R-AUDITOR'] },
+    { v: 'performance', ic: '★', label: '科研绩效评价', roles: ['R-STAFF', 'R-MANAGER', 'R-LEADER', 'R-FINANCE', 'R-AUDITOR'] },
   ]},
   { t: '人 员', items: [
     { v: 'portrait', ic: '◍', label: 'PI 画像', roles: ['R-LEADER', 'R-MANAGER', 'R-ADMIN'] },
