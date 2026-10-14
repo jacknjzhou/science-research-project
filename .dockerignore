@@ -17,3 +17,8 @@ npm-debug.log*
 .vscode
 .idea
 .DS_Store
+
+# Go 后端本地二进制与缓存（镜像内重新编译）
+/backend-go/ark-server
+/backend-go/tmp
+**/*.test
