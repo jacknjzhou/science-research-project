@@ -201,37 +201,6 @@ func (s *Spec) Find(method, path string) *Op {
 	return s.index[strings.ToUpper(method)+" "+path]
 }
 
-// Match 按实际请求路径匹配操作：先精确，再模板匹配（{var} 通配，字面量更长者优先，
-// 避免 /{id} 抢走 /{id}:score）。供 passthrough 生成器（任务 11/12）使用。
-func (s *Spec) Match(method, urlPath string) *Op {
-	p := urlPath
-	if i := strings.IndexByte(p, '?'); i >= 0 {
-		p = p[:i]
-	}
-	if !strings.HasPrefix(p, "/") {
-		p = "/" + p
-	}
-	mu := strings.ToUpper(method)
-	if op := s.index[mu+" "+p]; op != nil {
-		return op
-	}
-	var best *Op
-	bestLit := -1
-	for _, op := range s.ops {
-		if strings.ToUpper(op.method) != mu {
-			continue
-		}
-		if !op.rx.MatchString(p) {
-			continue
-		}
-		if op.lit > bestLit {
-			bestLit = op.lit
-			best = op
-		}
-	}
-	return best
-}
-
 // Ops 返回已索引的操作数。
 func (s *Spec) Ops() int { return len(s.ops) }
 
@@ -242,31 +211,6 @@ func (s *Spec) Paths() int {
 		set[op.path] = struct{}{}
 	}
 	return len(set)
-}
-
-var splitRe = regexp.MustCompile(`(\{[^/}]+\})`)
-var varRe = regexp.MustCompile(`^\{[^/}]+\}$`)
-
-// compileTemplate：OpenAPI 模板路径 -> 锚定正则。{var} 支持整段（如 /{id}:score 中的 {id}）。
-// 用 FindAllStringSubmatchIndex 保留 {var} 分隔符（Go 的 Regexp.Split 不会回带捕获组）。
-func compileTemplate(tpl string) *regexp.Regexp {
-	locs := splitRe.FindAllStringSubmatchIndex(tpl, -1)
-	var b strings.Builder
-	b.WriteString("^")
-	last := 0
-	for _, loc := range locs {
-		b.WriteString(regexp.QuoteMeta(tpl[last:loc[0]])) // {var} 之前的字面量段
-		b.WriteString(`([^/]+?)`)                         // {var} -> 单段通配
-		last = loc[1]
-	}
-	b.WriteString(regexp.QuoteMeta(tpl[last:])) // 尾随字面量段（如 ":score"）
-	b.WriteString("$")
-	return regexp.MustCompile(b.String())
-}
-
-// literalLen：去掉 {var} 后的字面量字符数，越大越"具体"。
-func literalLen(tpl string) int {
-	return len(varRe.ReplaceAllString(tpl, ""))
 }
 
 // LoadDir 读取 dir 下全部 *.openapi.yaml 并建索引。
