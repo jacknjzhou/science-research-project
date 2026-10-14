@@ -232,3 +232,64 @@ func (h *Handler) DeleteUser(c *gin.Context) {
 	}
 	httpx.WriteOK(c, gin.H{"id": id, "deleted": true})
 }
+
+// ListRoles 本租户角色目录。
+func (h *Handler) ListRoles(c *gin.Context) {
+	d := auth.DomainFrom(c)
+	rows, err := h.q.ListRoles(c, d.TenantID)
+	if err != nil {
+		httpx.WriteErr(c, 500, 50006, "查询失败")
+		return
+	}
+	list := make([]map[string]any, 0, len(rows))
+	for _, r := range rows {
+		list = append(list, ToAPIRole(r))
+	}
+	httpx.WriteOK(c, gin.H{"list": list})
+}
+
+// AssignRole 授予角色：校验角色与用户均属本租户，幂等绑定后回显用户。
+func (h *Handler) AssignRole(c *gin.Context) {
+	d := auth.DomainFrom(c)
+	userID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	var body struct {
+		RoleID int64 `json:"role_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		httpx.WriteErr(c, 400, 40001, "role_id 必填")
+		return
+	}
+	if _, err := h.q.GetRole(c, store.GetRoleParams{ID: body.RoleID, TenantID: d.TenantID}); err != nil {
+		httpx.WriteErr(c, 404, 40402, "角色不存在或跨租户")
+		return
+	}
+	u, err := h.q.GetUser(c, store.GetUserParams{ID: userID, TenantID: d.TenantID})
+	if err != nil {
+		httpx.WriteErr(c, 404, 40401, "用户不存在")
+		return
+	}
+	if err := h.q.AssignRole(c, store.AssignRoleParams{UserID: userID, RoleID: body.RoleID, TenantID: d.TenantID}); err != nil {
+		httpx.WriteErr(c, 500, 50007, "授权失败")
+		return
+	}
+	codes, _ := h.q.ListRoleCodesByUser(c, userID)
+	httpx.WriteOK(c, ToAPIUser(u, codes))
+}
+
+// RevokeRole 撤销角色（DELETE /admin/users/:id/roles/:roleId），回显撤销后的用户。
+func (h *Handler) RevokeRole(c *gin.Context) {
+	d := auth.DomainFrom(c)
+	userID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	roleID, _ := strconv.ParseInt(c.Param("roleId"), 10, 64)
+	u, err := h.q.GetUser(c, store.GetUserParams{ID: userID, TenantID: d.TenantID})
+	if err != nil {
+		httpx.WriteErr(c, 404, 40401, "用户不存在")
+		return
+	}
+	if err := h.q.RevokeRole(c, store.RevokeRoleParams{UserID: userID, RoleID: roleID, TenantID: d.TenantID}); err != nil {
+		httpx.WriteErr(c, 500, 50008, "撤销失败")
+		return
+	}
+	codes, _ := h.q.ListRoleCodesByUser(c, userID)
+	httpx.WriteOK(c, ToAPIUser(u, codes))
+}

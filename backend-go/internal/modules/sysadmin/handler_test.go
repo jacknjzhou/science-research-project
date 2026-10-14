@@ -136,3 +136,34 @@ func TestCreateUser_DuplicateUsername409(t *testing.T) {
 		}
 	}
 }
+
+func TestListRoles_ReturnsSeededEight(t *testing.T) {
+	e := newTestEngine(t)
+	w := httptest.NewRecorder()
+	e.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/admin/roles", nil))
+	if w.Code != 200 {
+		t.Fatalf("HTTP %d body=%s", w.Code, w.Body.String())
+	}
+	var env struct {
+		Data struct {
+			List []map[string]any `json:"list"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &env)
+	if len(env.Data.List) < 8 {
+		t.Fatalf("8 基础角色未返回: %d", len(env.Data.List))
+	}
+}
+
+func TestAssignRevokeRole(t *testing.T) {
+	e := newTestEngine(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/v1/admin/users/1/roles", nil)
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Idempotency-Key", "itest-assign-1")
+	r.Body = nopCloserString(`{"role_id":8}`)
+	e.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("幂等再授权应 200，实得 %d body=%s", w.Code, w.Body.String())
+	}
+}

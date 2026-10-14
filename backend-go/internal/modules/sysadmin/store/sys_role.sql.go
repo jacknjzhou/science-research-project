@@ -9,6 +9,31 @@ import (
 	"context"
 )
 
+const getRole = `-- name: GetRole :one
+SELECT id, code, name, is_builtin, tenant_id, created_at, updated_at
+FROM sys_role WHERE id = $1 AND tenant_id = $2
+`
+
+type GetRoleParams struct {
+	ID       int64 `json:"id"`
+	TenantID int64 `json:"tenant_id"`
+}
+
+func (q *Queries) GetRole(ctx context.Context, arg GetRoleParams) (SysRole, error) {
+	row := q.db.QueryRow(ctx, getRole, arg.ID, arg.TenantID)
+	var i SysRole
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.Name,
+		&i.IsBuiltin,
+		&i.TenantID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getRoleByCode = `-- name: GetRoleByCode :one
 SELECT id, code, name, is_builtin, tenant_id, created_at, updated_at
 FROM sys_role WHERE tenant_id = $1 AND code = $2
