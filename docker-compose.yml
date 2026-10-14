@@ -20,6 +20,10 @@ services:
       ARK_REDIS_ADDR: redis:6379
       ARK_REDIS_PASSWORD: ""
       ARK_JWT_SECRET: ${ARK_JWT_SECRET:-dev-secret-change-me}   # 生产用 .env 注入强随机
+      ARK_S3_ENDPOINT: minio:9000
+      ARK_S3_ACCESS_KEY: minioadmin
+      ARK_S3_SECRET_KEY: minioadmin
+      ARK_S3_BUCKET: ark-docs
       # DESIGN_DIR / ARK_MIGRATIONS_DIR / ARK_AUTH_* 已在镜像 ENV 内烘好，此处可覆盖
     ports:
       - "8787:8787"                  # 便于宿主机直调 API；仅经 nginx 访问前端时可删
@@ -27,6 +31,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/healthz"]
@@ -87,6 +93,26 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redisdata:
+  minio-data:

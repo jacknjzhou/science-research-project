@@ -13,6 +13,7 @@ import (
 	"github.com/eplugger/ark/internal/platform/db"
 	"github.com/eplugger/ark/internal/platform/migrate"
 	"github.com/eplugger/ark/internal/platform/oapi"
+	"github.com/eplugger/ark/internal/platform/storage"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
@@ -63,6 +64,19 @@ func main() {
 		loginReader = sysadmin.NewAuthReader(pool)
 	}
 
+	// 6.5) 对象存储（MinIO）：未配置 endpoint 或连接失败 → 置 nil，依赖它的端点返回 50301。
+	var store storage.Storage
+	if cfg.S3Endpoint != "" {
+		sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
+		mo, err := storage.NewMinIO(sctx, cfg.S3Endpoint, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3Bucket, cfg.S3UseSSL)
+		scancel()
+		if err != nil {
+			l.Warn("MinIO 初始化失败，文件端点将返回 50301", zap.Error(err))
+		} else {
+			store = mo
+		}
+	}
+
 	// 7) 装配 router 并监听
 	e := internal.Build(internal.RouterDeps{
 		Logger:      l,
@@ -72,6 +86,7 @@ func main() {
 		Enforcer:    enf,
 		Spec:        spec,
 		LoginReader: loginReader,
+		Storage:     store,
 	})
 	addr := ":" + strconv.Itoa(cfg.HTTPPort)
 	l.Info("ark-go 启动", zap.String("addr", addr), zap.String("env", cfg.Env))
