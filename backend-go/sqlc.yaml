@@ -74,3 +74,42 @@ sql:
             go_type:
               type: "time.Time"
               pointer: true
+  - engine: "postgresql"
+    # 第三生成块：V 仓储（学术活动）。独立 schema/queries/out；package=vstore。
+    schema: "db/schema/v_schema.sql"
+    queries: "db/query_v"
+    gen:
+      go:
+        package: "vstore"
+        out: "internal/modules/activity/store"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_pointers_for_null_types: true
+        rename:
+          v_activity: Activity
+          "@limit_": Limit
+          "@offset_": Offset
+        overrides:
+          # created_at/updated_at → time.Time；可空时间列 → *time.Time；NUMERIC budget_amount 保 string
+          - column: "v_activity.created_at"
+            go_type: "time.Time"
+          - column: "v_activity.updated_at"
+            go_type: "time.Time"
+          - column: "v_activity.start_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "v_activity.end_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "v_activity.submit_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "v_activity.approve_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "v_activity.archive_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "v_activity.cancel_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "v_activity.budget_amount"
+            go_type: "string"
+          - column: "v_activity_participant.created_at"
+            go_type: "time.Time"
+          - column: "v_activity_review.acted_at"
+            go_type: "time.Time"
