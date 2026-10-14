@@ -30,6 +30,7 @@ CREATE TABLE sys_user (
                   CHECK (security_level IN ('PUBLIC','INTERNAL','SECRET','TOP_SECRET')),
   status          VARCHAR(32)  NOT NULL DEFAULT 'ACTIVE'
                   CHECK (status IN ('ACTIVE','LOCKED','DISABLED')),
+  password_hash   VARCHAR(100),                -- bcrypt($2a$10$…) 定长60留裕度；NULL=无口令账号(dev/外联身份)，一律拒登
   tenant_id       BIGINT       NOT NULL,
   legal_entity_id BIGINT,
   deleted         SMALLINT     NOT NULL DEFAULT 0,

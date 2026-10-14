@@ -415,6 +415,22 @@ func TestGenerateUp_NoReservedIdentifiers(t *testing.T) {
 	}
 }
 
+// TestGenerateUp_HasPasswordHash 守卫用户口令哈希列进入迁移：bcrypt 真实登录（任务7）
+// 依赖 sys_user.password_hash；一旦 design 误删该列，compose 迁移后登录必 500。
+func TestGenerateUp_HasPasswordHash(t *testing.T) {
+	designDir := os.Getenv("DESIGN_DIR")
+	if designDir == "" {
+		designDir = "../../design"
+	}
+	up, err := GenerateUp(designDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.ToLower(up), "password_hash") {
+		t.Fatal("sys_user 缺 password_hash 列——bcrypt 登录无从存储口令哈希")
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
