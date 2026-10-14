@@ -453,7 +453,7 @@ git commit -m "feat(storage): MinIO 实现 + compose 服务 + Deps 接线"
 运行（提取语句，人工核对无遗漏）：
 
 ```bash
-cd backend-go && awk '/CREATE TABLE E_(PROJECT|TASK|MILESTONE|PROGRESS_REPORT|MID_CHECK|CHANGE_REQUEST|FINAL_ACCEPT|PROJECT_DOC|HEALTH_HISTORY|ARCHIVE_CHECKLIST) /{p=1} p{print} p&&/^\);/{p=0}' ../migrations/000001_init.up.sql > db/schema/e_schema.sql
+cd backend-go && awk '/CREATE TABLE E_(PROJECT|TASK|MILESTONE|PROGRESS_REPORT|MID_CHECK|CHANGE_REQUEST|FINAL_ACCEPT|PROJECT_DOC|HEALTH_HISTORY|ARCHIVE_CHECKLIST) /{p=1} p{print} p&&/^\);/{p=0}' migrations/000001_init.up.sql > db/schema/e_schema.sql
 grep -c 'CREATE TABLE' db/schema/e_schema.sql   # 预期 10
 ```
 
@@ -1187,7 +1187,7 @@ git add backend-go/Makefile && git commit -m "chore(E): drift 守卫纳入 proje
 - [ ] **步骤 1：生成裁剪 schema**
 
 ```bash
-cd backend-go && awk '/CREATE TABLE R_(OUTPUT|PAPER_EXT|PATENT_EXT|SOFTWARE_EXT|STANDARD_EXT|AWARD_EXT|BOOK_EXT|CLAIM_RECORD|OUTPUT_PROJECT|METRIC_SNAPSHOT|DATASET) /{p=1} p{print} p&&/^\);/{p=0}' ../migrations/000001_init.up.sql > db/schema/r_schema.sql
+cd backend-go && awk '/CREATE TABLE R_(OUTPUT|PAPER_EXT|PATENT_EXT|SOFTWARE_EXT|STANDARD_EXT|AWARD_EXT|BOOK_EXT|CLAIM_RECORD|OUTPUT_PROJECT|METRIC_SNAPSHOT|DATASET) /{p=1} p{print} p&&/^\);/{p=0}' migrations/000001_init.up.sql > db/schema/r_schema.sql
 grep -c 'CREATE TABLE' db/schema/r_schema.sql   # 预期 11
 ```
 
@@ -1849,7 +1849,7 @@ git commit -m "feat(N): OpenAPI 契约 + detail + 前端副本同步"
 - [ ] **步骤 1：n_schema.sql**
 
 ```bash
-cd backend-go && awk '/CREATE TABLE n_(expert|expert_group|review_task|review_invitation|review_score|review_fee) /{p=1} p{print} p&&/^\);/{p=0}' db/../migrations/000001_init.up.sql > db/schema/n_schema.sql
+cd backend-go && awk '/CREATE TABLE n_(expert|expert_group|review_task|review_invitation|review_score|review_fee) /{p=1} p{print} p&&/^\);/{p=0}' migrations/000001_init.up.sql > db/schema/n_schema.sql
 ```
 
 > 前提：任务 3.3 前须先 `cd backend-go && go generate ./migrations/...` 让新 DDL 进 `000001_init.up.sql`（见任务 3.3 步骤 4）。若尚未生成，直接从 `design/15-…-N.ddl.sql` 拷表定义到 `n_schema.sql`。
@@ -2698,7 +2698,7 @@ git commit -m "feat(O): OpenAPI 契约 + detail + 前端副本同步"
 - [ ] **步骤 1：o_schema.sql**
 
 ```bash
-cd backend-go && awk '/CREATE TABLE o_(document|archive|archive_item|archive_check|borrow) /{p=1} p{print} p&&/^\);/{p=0}' ../migrations/000001_init.up.sql > db/schema/o_schema.sql
+cd backend-go && awk '/CREATE TABLE o_(document|archive|archive_item|archive_check|borrow) /{p=1} p{print} p&&/^\);/{p=0}' migrations/000001_init.up.sql > db/schema/o_schema.sql
 ```
 
 > 前提：先 `cd backend-go && go generate ./migrations/...` 让新 O DDL 进 `000001_init.up.sql`（`migrations/gen.go` 按文件名排序、00-common 最先、剥离 ClickHouse OLAP 段）。若尚未生成，直接从 `design/16-…-O.ddl.sql` 拷五表定义到 `o_schema.sql`。**`to_tsvector`/`gin_trgm_ops` 表达式索引 sqlc 不解析其函数也无妨**——sqlc 只看列，索引行会被忽略；若 sqlc 对表达式索引报错，删除 `o_schema.sql` 中两条 `idx_o_doc_fts`/`idx_o_doc_trgm` 索引行（仅影响 sqlc 解析，不影响迁移真源）。
