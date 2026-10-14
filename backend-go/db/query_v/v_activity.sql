@@ -8,30 +8,30 @@ SELECT id, code, tenant_id, status, security_level, activity_type, level, host_m
 FROM v_activity
 WHERE deleted = 0
   AND tenant_id = $1
-  AND ($2::text   IS NULL OR status = $2::text)
-  AND ($3::text   IS NULL OR activity_type = $3::text)
-  AND ($4::text   IS NULL OR level = $4::text)
-  AND ($5::text   IS NULL OR host_mode = $5::text)
-  AND ($6::bigint IS NULL OR organizer_dept_id = $6::bigint)
-  AND ($7::timestamptz IS NULL OR start_at >= $7::timestamptz)
-  AND ($8::timestamptz IS NULL OR start_at <= $8::timestamptz)
-  AND ($9::text   IS NULL OR title ILIKE $9::text OR theme ILIKE $9::text)
+  AND (sqlc.narg('status')::text            IS NULL OR status = sqlc.narg('status')::text)
+  AND (sqlc.narg('activity_type')::text     IS NULL OR activity_type = sqlc.narg('activity_type')::text)
+  AND (sqlc.narg('level')::text             IS NULL OR level = sqlc.narg('level')::text)
+  AND (sqlc.narg('host_mode')::text         IS NULL OR host_mode = sqlc.narg('host_mode')::text)
+  AND (sqlc.narg('organizer_dept_id')::bigint IS NULL OR organizer_dept_id = sqlc.narg('organizer_dept_id')::bigint)
+  AND (sqlc.narg('from_at')::timestamptz    IS NULL OR start_at >= sqlc.narg('from_at')::timestamptz)
+  AND (sqlc.narg('to_at')::timestamptz      IS NULL OR start_at <= sqlc.narg('to_at')::timestamptz)
+  AND (sqlc.narg('keyword')::text           IS NULL OR title ILIKE sqlc.narg('keyword')::text OR theme ILIKE sqlc.narg('keyword')::text)
 ORDER BY id DESC
-LIMIT $11 OFFSET $10;
+LIMIT $2 OFFSET $3;
 
 -- name: CountActivities :one
 SELECT count(*)::int AS n
 FROM v_activity
 WHERE deleted = 0
   AND tenant_id = $1
-  AND ($2::text   IS NULL OR status = $2::text)
-  AND ($3::text   IS NULL OR activity_type = $3::text)
-  AND ($4::text   IS NULL OR level = $4::text)
-  AND ($5::text   IS NULL OR host_mode = $5::text)
-  AND ($6::bigint IS NULL OR organizer_dept_id = $6::bigint)
-  AND ($7::timestamptz IS NULL OR start_at >= $7::timestamptz)
-  AND ($8::timestamptz IS NULL OR start_at <= $8::timestamptz)
-  AND ($9::text   IS NULL OR title ILIKE $9::text OR theme ILIKE $9::text);
+  AND (sqlc.narg('status')::text            IS NULL OR status = sqlc.narg('status')::text)
+  AND (sqlc.narg('activity_type')::text     IS NULL OR activity_type = sqlc.narg('activity_type')::text)
+  AND (sqlc.narg('level')::text             IS NULL OR level = sqlc.narg('level')::text)
+  AND (sqlc.narg('host_mode')::text         IS NULL OR host_mode = sqlc.narg('host_mode')::text)
+  AND (sqlc.narg('organizer_dept_id')::bigint IS NULL OR organizer_dept_id = sqlc.narg('organizer_dept_id')::bigint)
+  AND (sqlc.narg('from_at')::timestamptz    IS NULL OR start_at >= sqlc.narg('from_at')::timestamptz)
+  AND (sqlc.narg('to_at')::timestamptz      IS NULL OR start_at <= sqlc.narg('to_at')::timestamptz)
+  AND (sqlc.narg('keyword')::text           IS NULL OR title ILIKE sqlc.narg('keyword')::text OR theme ILIKE sqlc.narg('keyword')::text);
 
 -- name: GetActivity :one
 SELECT id, code, tenant_id, status, security_level, activity_type, level, host_mode,

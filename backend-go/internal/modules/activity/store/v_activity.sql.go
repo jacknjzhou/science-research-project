@@ -17,39 +17,39 @@ SELECT count(*)::int AS n
 FROM v_activity
 WHERE deleted = 0
   AND tenant_id = $1
-  AND ($2::text   IS NULL OR status = $2::text)
-  AND ($3::text   IS NULL OR activity_type = $3::text)
-  AND ($4::text   IS NULL OR level = $4::text)
-  AND ($5::text   IS NULL OR host_mode = $5::text)
+  AND ($2::text            IS NULL OR status = $2::text)
+  AND ($3::text     IS NULL OR activity_type = $3::text)
+  AND ($4::text             IS NULL OR level = $4::text)
+  AND ($5::text         IS NULL OR host_mode = $5::text)
   AND ($6::bigint IS NULL OR organizer_dept_id = $6::bigint)
-  AND ($7::timestamptz IS NULL OR start_at >= $7::timestamptz)
-  AND ($8::timestamptz IS NULL OR start_at <= $8::timestamptz)
-  AND ($9::text   IS NULL OR title ILIKE $9::text OR theme ILIKE $9::text)
+  AND ($7::timestamptz    IS NULL OR start_at >= $7::timestamptz)
+  AND ($8::timestamptz      IS NULL OR start_at <= $8::timestamptz)
+  AND ($9::text           IS NULL OR title ILIKE $9::text OR theme ILIKE $9::text)
 `
 
 type CountActivitiesParams struct {
-	TenantID int64              `json:"tenant_id"`
-	Column2  string             `json:"column_2"`
-	Column3  string             `json:"column_3"`
-	Column4  string             `json:"column_4"`
-	Column5  string             `json:"column_5"`
-	Column6  int64              `json:"column_6"`
-	Column7  pgtype.Timestamptz `json:"column_7"`
-	Column8  pgtype.Timestamptz `json:"column_8"`
-	Column9  string             `json:"column_9"`
+	TenantID        int64              `json:"tenant_id"`
+	Status          *string            `json:"status"`
+	ActivityType    *string            `json:"activity_type"`
+	Level           *string            `json:"level"`
+	HostMode        *string            `json:"host_mode"`
+	OrganizerDeptID *int64             `json:"organizer_dept_id"`
+	FromAt          pgtype.Timestamptz `json:"from_at"`
+	ToAt            pgtype.Timestamptz `json:"to_at"`
+	Keyword         *string            `json:"keyword"`
 }
 
 func (q *Queries) CountActivities(ctx context.Context, arg CountActivitiesParams) (int32, error) {
 	row := q.db.QueryRow(ctx, countActivities,
 		arg.TenantID,
-		arg.Column2,
-		arg.Column3,
-		arg.Column4,
-		arg.Column5,
-		arg.Column6,
-		arg.Column7,
-		arg.Column8,
-		arg.Column9,
+		arg.Status,
+		arg.ActivityType,
+		arg.Level,
+		arg.HostMode,
+		arg.OrganizerDeptID,
+		arg.FromAt,
+		arg.ToAt,
+		arg.Keyword,
 	)
 	var n int32
 	err := row.Scan(&n)
@@ -324,30 +324,30 @@ SELECT id, code, tenant_id, status, security_level, activity_type, level, host_m
 FROM v_activity
 WHERE deleted = 0
   AND tenant_id = $1
-  AND ($2::text   IS NULL OR status = $2::text)
-  AND ($3::text   IS NULL OR activity_type = $3::text)
-  AND ($4::text   IS NULL OR level = $4::text)
-  AND ($5::text   IS NULL OR host_mode = $5::text)
-  AND ($6::bigint IS NULL OR organizer_dept_id = $6::bigint)
-  AND ($7::timestamptz IS NULL OR start_at >= $7::timestamptz)
-  AND ($8::timestamptz IS NULL OR start_at <= $8::timestamptz)
-  AND ($9::text   IS NULL OR title ILIKE $9::text OR theme ILIKE $9::text)
+  AND ($4::text            IS NULL OR status = $4::text)
+  AND ($5::text     IS NULL OR activity_type = $5::text)
+  AND ($6::text             IS NULL OR level = $6::text)
+  AND ($7::text         IS NULL OR host_mode = $7::text)
+  AND ($8::bigint IS NULL OR organizer_dept_id = $8::bigint)
+  AND ($9::timestamptz    IS NULL OR start_at >= $9::timestamptz)
+  AND ($10::timestamptz      IS NULL OR start_at <= $10::timestamptz)
+  AND ($11::text           IS NULL OR title ILIKE $11::text OR theme ILIKE $11::text)
 ORDER BY id DESC
-LIMIT $11 OFFSET $10
+LIMIT $2 OFFSET $3
 `
 
 type ListActivitiesParams struct {
-	TenantID int64              `json:"tenant_id"`
-	Column2  string             `json:"column_2"`
-	Column3  string             `json:"column_3"`
-	Column4  string             `json:"column_4"`
-	Column5  string             `json:"column_5"`
-	Column6  int64              `json:"column_6"`
-	Column7  pgtype.Timestamptz `json:"column_7"`
-	Column8  pgtype.Timestamptz `json:"column_8"`
-	Column9  string             `json:"column_9"`
-	Offset   int32              `json:"offset"`
-	Limit    int32              `json:"limit"`
+	TenantID        int64              `json:"tenant_id"`
+	Limit           int32              `json:"limit"`
+	Offset          int32              `json:"offset"`
+	Status          *string            `json:"status"`
+	ActivityType    *string            `json:"activity_type"`
+	Level           *string            `json:"level"`
+	HostMode        *string            `json:"host_mode"`
+	OrganizerDeptID *int64             `json:"organizer_dept_id"`
+	FromAt          pgtype.Timestamptz `json:"from_at"`
+	ToAt            pgtype.Timestamptz `json:"to_at"`
+	Keyword         *string            `json:"keyword"`
 }
 
 type ListActivitiesRow struct {
@@ -393,16 +393,16 @@ type ListActivitiesRow struct {
 func (q *Queries) ListActivities(ctx context.Context, arg ListActivitiesParams) ([]ListActivitiesRow, error) {
 	rows, err := q.db.Query(ctx, listActivities,
 		arg.TenantID,
-		arg.Column2,
-		arg.Column3,
-		arg.Column4,
-		arg.Column5,
-		arg.Column6,
-		arg.Column7,
-		arg.Column8,
-		arg.Column9,
-		arg.Offset,
 		arg.Limit,
+		arg.Offset,
+		arg.Status,
+		arg.ActivityType,
+		arg.Level,
+		arg.HostMode,
+		arg.OrganizerDeptID,
+		arg.FromAt,
+		arg.ToAt,
+		arg.Keyword,
 	)
 	if err != nil {
 		return nil, err
