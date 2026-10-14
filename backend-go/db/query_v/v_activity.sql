@@ -64,13 +64,13 @@ RETURNING id, code, tenant_id, status, security_level, activity_type, level, hos
 
 -- name: UpdateActivity :one
 UPDATE v_activity SET
-  activity_type = $4, level = $5, host_mode = $6, title = $7, theme = $8,
-  start_at = $9, end_at = $10, venue = $11, online_url = $12, host_unit = $13,
-  organizer_dept_id = $14, invited_experts = COALESCE($15::jsonb, '[]'::jsonb),
-  est_attendees = $16, project_id = $17, budget_subject_code = $18,
-  budget_amount = $19::numeric, agenda = COALESCE($20::jsonb, '[]'::jsonb),
-  attachment_ids = COALESCE($21::jsonb, '[]'::jsonb), security_level = $22, remark = $23,
-  modifier_id = $24, updated_at = now()
+  activity_type = $3, level = $4, host_mode = $5, title = $6, theme = $7,
+  start_at = $8, end_at = $9, venue = $10, online_url = $11, host_unit = $12,
+  organizer_dept_id = $13, invited_experts = COALESCE($14::jsonb, '[]'::jsonb),
+  est_attendees = $15, project_id = $16, budget_subject_code = $17,
+  budget_amount = $18::numeric, agenda = COALESCE($19::jsonb, '[]'::jsonb),
+  attachment_ids = COALESCE($20::jsonb, '[]'::jsonb), security_level = $21, remark = $22,
+  modifier_id = $23, updated_at = now()
 WHERE id = $1 AND tenant_id = $2 AND deleted = 0 AND status IN ('DRAFT','RETURNED')
 RETURNING id, code, tenant_id, status, security_level, activity_type, level, host_mode,
   title, theme, start_at, end_at, venue, online_url, host_unit, organizer_dept_id,
@@ -99,10 +99,10 @@ RETURNING id, code, tenant_id, status, security_level, activity_type, level, hos
 
 -- name: MarkHold :one
 UPDATE v_activity SET
-  status = 'HELD', sign_in_count = $4,
-  hold_proof_ids = COALESCE($5::jsonb, hold_proof_ids),
+  status = 'HELD', sign_in_count = $3,
+  hold_proof_ids = COALESCE($4::jsonb, hold_proof_ids),
   approve_at = CASE WHEN approve_at IS NULL THEN now() ELSE approve_at END,
-  modifier_id = $6, updated_at = now()
+  modifier_id = $5, updated_at = now()
 WHERE id = $1 AND tenant_id = $2 AND deleted = 0 AND status = 'APPROVED'
 RETURNING id, code, tenant_id, status, security_level, activity_type, level, host_mode,
   title, theme, start_at, end_at, venue, online_url, host_unit, organizer_dept_id,
@@ -113,7 +113,7 @@ RETURNING id, code, tenant_id, status, security_level, activity_type, level, hos
 
 -- name: MarkArchive :one
 UPDATE v_activity SET
-  status = 'ARCHIVED', minutes_rich = $4, archive_at = now(), modifier_id = $5, updated_at = now()
+  status = 'ARCHIVED', minutes_rich = $3, archive_at = now(), modifier_id = $4, updated_at = now()
 WHERE id = $1 AND tenant_id = $2 AND deleted = 0 AND status = 'HELD'
 RETURNING id, code, tenant_id, status, security_level, activity_type, level, host_mode,
   title, theme, start_at, end_at, venue, online_url, host_unit, organizer_dept_id,
@@ -124,7 +124,7 @@ RETURNING id, code, tenant_id, status, security_level, activity_type, level, hos
 
 -- name: MarkCancel :one
 UPDATE v_activity SET
-  status = 'CANCELLED', cancel_at = now(), cancel_reason = $4, modifier_id = $5, updated_at = now()
+  status = 'CANCELLED', cancel_at = now(), cancel_reason = $3, modifier_id = $4, updated_at = now()
 WHERE id = $1 AND tenant_id = $2 AND deleted = 0
   AND status NOT IN ('ARCHIVED','CANCELLED')
 RETURNING id, code, tenant_id, status, security_level, activity_type, level, host_mode,
