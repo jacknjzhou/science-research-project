@@ -178,32 +178,32 @@ sql:
         emit_json_tags: true
         emit_pointers_for_null_types: true
         rename:
-          E_PROJECT: Project
-          E_TASK: Task
-          E_MILESTONE: Milestone
-          E_PROGRESS_REPORT: ProgressReport
-          E_MID_CHECK: MidCheck
-          E_CHANGE_REQUEST: ChangeRequest
-          E_FINAL_ACCEPT: FinalAccept
-          E_HEALTH_HISTORY: HealthHistory
+          e_project: Project
+          e_task: Task
+          e_milestone: Milestone
+          e_progress_report: ProgressReport
+          e_mid_check: MidCheck
+          e_change_request: ChangeRequest
+          e_final_accept: FinalAccept
+          e_health_history: HealthHistory
           "@limit_": Limit
           "@offset_": Offset
         overrides:
-          - column: "E_PROJECT.created_at"
+          - column: "e_project.created_at"
             go_type: "time.Time"
-          - column: "E_PROJECT.updated_at"
+          - column: "e_project.updated_at"
             go_type: "time.Time"
-          - column: "E_PROGRESS_REPORT.submitted_at"
+          - column: "e_progress_report.submitted_at"
             go_type: { type: "time.Time", pointer: true }
-          - column: "E_PROGRESS_REPORT.created_at"
+          - column: "e_progress_report.created_at"
             go_type: "time.Time"
-          - column: "E_MID_CHECK.created_at"
+          - column: "e_mid_check.created_at"
             go_type: "time.Time"
-          - column: "E_CHANGE_REQUEST.created_at"
+          - column: "e_change_request.created_at"
             go_type: "time.Time"
-          - column: "E_FINAL_ACCEPT.created_at"
+          - column: "e_final_accept.created_at"
             go_type: "time.Time"
-          - column: "E_MILESTONE.due_date"
+          - column: "e_milestone.due_date"
             go_type: { type: "pgtype.Date" }
-          - column: "E_MILESTONE.actual_date"
+          - column: "e_milestone.actual_date"
             go_type: { type: "pgtype.Date" }
