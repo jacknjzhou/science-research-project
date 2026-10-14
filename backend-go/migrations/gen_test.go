@@ -146,3 +146,35 @@ func TestGenerateUp_InstallsPgTrgmBeforeUse(t *testing.T) {
 		t.Fatalf("CREATE EXTENSION pg_trgm 位置(%d)晚于首个 gin_trgm_ops 使用(%d)——扩展必须先于依赖它的索引建立", idxExt[0], idxUse)
 	}
 }
+
+// TestGenerateUp_UniqueIndexNames 守卫 up.sql 内 CREATE [UNIQUE] INDEX 名称全局唯一。
+// PostgreSQL 索引住在 schema namespace（非 per-table），两个模块用同名（例如历史 F 与 T
+// 都写 idx_approval_approver / uk_income_bankflow）会让第二个 CREATE INDEX 报
+// `relation "idx_approval_approver" already exists`，compose 首启动即挂。改名规范：加模块首字母前缀。
+func TestGenerateUp_UniqueIndexNames(t *testing.T) {
+	designDir := os.Getenv("DESIGN_DIR")
+	if designDir == "" {
+		designDir = "../../design"
+	}
+	up, err := GenerateUp(designDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reIdx := regexp.MustCompile(`(?i)CREATE\s+(?:UNIQUE\s+)?INDEX(?:\s+CONCURRENTLY)?\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][\w]*)`)
+	lines := strings.Split(up, "\n")
+	seen := map[string]int{} // lower(name) -> first line number (1-based)
+	for i, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "--") {
+			continue
+		}
+		for _, m := range reIdx.FindAllStringSubmatch(line, -1) {
+			name := strings.ToLower(m[1])
+			if prev, dup := seen[name]; dup {
+				t.Fatalf("重复索引名 %q：首次 up.sql:%d，重复 up.sql:%d —— 请为跨模块同名索引加模块首字母前缀(F_/T_/…)避免 schema namespace 冲突\n  A: %s\n  B: %s",
+					m[1], prev, i+1, strings.TrimSpace(lines[prev-1]), line)
+			}
+			seen[name] = i + 1
+		}
+	}
+}

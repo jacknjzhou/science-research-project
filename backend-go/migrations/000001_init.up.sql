@@ -1319,7 +1319,7 @@ CREATE TABLE F_INCOME (
   claimed_at      TIMESTAMPTZ,
   voucher_url     VARCHAR(512)                                   -- 到账凭证附件（对象存储）
 );
-CREATE UNIQUE INDEX uk_income_bankflow ON F_INCOME(tenant_id, bank_flow_no) WHERE deleted = 0 AND bank_flow_no IS NOT NULL;
+CREATE UNIQUE INDEX uk_f_income_bankflow ON F_INCOME(tenant_id, bank_flow_no) WHERE deleted = 0 AND bank_flow_no IS NOT NULL;
 CREATE INDEX idx_income_tenant_status ON F_INCOME(tenant_id, status);
 CREATE INDEX idx_income_claim_status ON F_INCOME(tenant_id, claim_status);
 CREATE INDEX idx_income_project ON F_INCOME(project_id);
@@ -1414,7 +1414,7 @@ CREATE TABLE F_EXPENSE_APPROVAL (
 );
 CREATE INDEX idx_approval_tenant_status ON F_EXPENSE_APPROVAL(tenant_id, status);
 CREATE INDEX idx_approval_expense ON F_EXPENSE_APPROVAL(expense_id, step_order);
-CREATE INDEX idx_approval_approver ON F_EXPENSE_APPROVAL(tenant_id, approver_user_id, status);
+CREATE INDEX idx_f_approval_approver ON F_EXPENSE_APPROVAL(tenant_id, approver_user_id, status);
 COMMENT ON TABLE  F_EXPENSE_APPROVAL IS '报销审批流水（F-09）：多级/串行/并行/加签/转办全量留痕';
 COMMENT ON COLUMN F_EXPENSE_APPROVAL.action IS 'APPROVE=同意/REJECT=拒绝/RETURN=退回补充/DELEGATE=转办';
 
@@ -2464,7 +2464,7 @@ CREATE UNIQUE INDEX uk_approval_code ON T_APPROVAL_CHAIN(tenant_id, code) WHERE 
 CREATE UNIQUE INDEX uk_approval_step ON T_APPROVAL_CHAIN(deal_id, step_order) WHERE deleted = 0;
 CREATE INDEX idx_approval_deal       ON T_APPROVAL_CHAIN(deal_id);
 CREATE INDEX idx_approval_main       ON T_APPROVAL_CHAIN(tenant_id, status);
-CREATE INDEX idx_approval_approver   ON T_APPROVAL_CHAIN(tenant_id, approver_id, acted_at);
+CREATE INDEX idx_t_approval_approver   ON T_APPROVAL_CHAIN(tenant_id, approver_id, acted_at);
 COMMENT ON TABLE  T_APPROVAL_CHAIN IS '多级审批链（T-09）：1:N 挂交易，每级审批留痕（谁在何时说了什么），支持顺序/并行';
 COMMENT ON COLUMN T_APPROVAL_CHAIN.approver_role IS '审批层级：LEGAL 法务/FINANCE 财务/INSTITUTE 院所/COMPETENT_DEPT 主管部门/BOARD 理事会（>500 万门槛）';
 COMMENT ON COLUMN T_APPROVAL_CHAIN.policy_pack_id IS 'T-08 审批权限门槛命中的制度包快照，配合 sys_rule_hit 可解释可复算';
@@ -2499,7 +2499,7 @@ CREATE TABLE T_INCOME (
   allocated            BOOLEAN      NOT NULL DEFAULT FALSE            -- 是否已分配（触发 income.received→分配计算）
 );
 CREATE UNIQUE INDEX uk_income_code     ON T_INCOME(tenant_id, code) WHERE deleted = 0 AND code IS NOT NULL;
-CREATE UNIQUE INDEX uk_income_bankflow ON T_INCOME(tenant_id, bank_flow_no) WHERE deleted = 0 AND bank_flow_no IS NOT NULL; -- 防重复登记
+CREATE UNIQUE INDEX uk_t_income_bankflow ON T_INCOME(tenant_id, bank_flow_no) WHERE deleted = 0 AND bank_flow_no IS NOT NULL; -- 防重复登记
 CREATE INDEX idx_income_deal           ON T_INCOME(deal_id);
 CREATE INDEX idx_income_main           ON T_INCOME(tenant_id, status);
 CREATE INDEX idx_income_received       ON T_INCOME(tenant_id, received_date);

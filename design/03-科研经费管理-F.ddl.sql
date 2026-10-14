@@ -179,7 +179,7 @@ CREATE TABLE F_INCOME (
   claimed_at      TIMESTAMPTZ,
   voucher_url     VARCHAR(512)                                   -- 到账凭证附件（对象存储）
 );
-CREATE UNIQUE INDEX uk_income_bankflow ON F_INCOME(tenant_id, bank_flow_no) WHERE deleted = 0 AND bank_flow_no IS NOT NULL;
+CREATE UNIQUE INDEX uk_f_income_bankflow ON F_INCOME(tenant_id, bank_flow_no) WHERE deleted = 0 AND bank_flow_no IS NOT NULL;
 CREATE INDEX idx_income_tenant_status ON F_INCOME(tenant_id, status);
 CREATE INDEX idx_income_claim_status ON F_INCOME(tenant_id, claim_status);
 CREATE INDEX idx_income_project ON F_INCOME(project_id);
@@ -274,7 +274,7 @@ CREATE TABLE F_EXPENSE_APPROVAL (
 );
 CREATE INDEX idx_approval_tenant_status ON F_EXPENSE_APPROVAL(tenant_id, status);
 CREATE INDEX idx_approval_expense ON F_EXPENSE_APPROVAL(expense_id, step_order);
-CREATE INDEX idx_approval_approver ON F_EXPENSE_APPROVAL(tenant_id, approver_user_id, status);
+CREATE INDEX idx_f_approval_approver ON F_EXPENSE_APPROVAL(tenant_id, approver_user_id, status);
 COMMENT ON TABLE  F_EXPENSE_APPROVAL IS '报销审批流水（F-09）：多级/串行/并行/加签/转办全量留痕';
 COMMENT ON COLUMN F_EXPENSE_APPROVAL.action IS 'APPROVE=同意/REJECT=拒绝/RETURN=退回补充/DELEGATE=转办';
 
