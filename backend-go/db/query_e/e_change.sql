@@ -1,0 +1,15 @@
+-- name: CreateChangeRequest :one
+INSERT INTO E_CHANGE_REQUEST
+  (code, tenant_id, status, creator_id, project_id, change_type, old_value, new_value, reason)
+VALUES
+  (sqlc.arg('code')::text, sqlc.arg('tenant_id')::bigint, 'DRAFT',
+   sqlc.arg('creator_id')::bigint, sqlc.arg('project_id')::bigint, sqlc.arg('change_type')::text,
+   sqlc.narg('old_value')::jsonb, sqlc.narg('new_value')::jsonb, sqlc.narg('reason')::text)
+RETURNING *;
+
+-- name: ApproveChangeRequest :execrows
+UPDATE E_CHANGE_REQUEST SET status='EFFECTIVE', updated_at=now()
+WHERE id=$1 AND project_id=$2 AND status IN ('SUBMITTED','APPROVING') AND deleted=0;
+
+-- name: GetChangeRequest :one
+SELECT * FROM E_CHANGE_REQUEST WHERE id=$1 AND deleted=0;
