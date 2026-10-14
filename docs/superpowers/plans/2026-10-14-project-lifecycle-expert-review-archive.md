@@ -671,7 +671,7 @@ WHERE id = sqlc.arg('id')::bigint AND deleted = 0;
 `compile_test.go`：
 
 ```go
-package store
+package estore
 
 import "testing"
 
@@ -1323,7 +1323,7 @@ SELECT project_id FROM R_OUTPUT_PROJECT WHERE output_id = $1 AND deleted = 0;
 - [ ] **步骤 1：compile_test.go**
 
 ```go
-package store
+package rstore
 
 import "testing"
 
