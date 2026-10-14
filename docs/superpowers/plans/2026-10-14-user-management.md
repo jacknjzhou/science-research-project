@@ -643,6 +643,15 @@ git add design/12-用户与权限-U.openapi.yaml frontend/src/api/schema/12-用�
 git commit -m "feat(contract): 新增模块 U 用户与权限契约并同步前端"
 ```
 
+- [ ] **步骤 7（执行期发现的计划缺口，必须补）：去硬编码 `TestSpec_LoadCounts` 的文档份数**
+
+新增第 12 份 `design/12-*.openapi.yaml` 会让既有 `backend-go/internal/platform/oapi/spec_test.go` 里 `if len(s.Docs) != 11` 的硬编码断言转红（实际 12）。修法＝不硬编码份数，改为按 design 目录里 `*.openapi.yaml` 的真实文件数断言（对未来再加模块也免疫）：给 `spec_test.go` 的 import 加 `"path/filepath"`，把 `TestSpec_LoadCounts` 内的 `len(s.Docs) != 11` 换成「`os.ReadDir(designDir())` 统计以 `.openapi.yaml` 结尾的文件数 `want`，断言 `len(s.Docs) == want` 且 `want>0`」。运行 `cd backend-go && go test ./internal/platform/oapi/ -run TestSpec_LoadCounts -v` → PASS（docs=12）。Commit：
+
+```bash
+git add backend-go/internal/platform/oapi/spec_test.go
+git commit -m "test(oapi): LoadCounts 去硬编码份数,按 design/*.openapi.yaml 实际数断言(容第12模块U)"
+```
+
 ---
 
 ## 任务 4：模块 U 契约的纯静态合规测试（无 DB）
