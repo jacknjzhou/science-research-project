@@ -286,7 +286,7 @@ CREATE TABLE E_FINAL_ACCEPT (
   conclusion       VARCHAR(32)
                    CHECK (conclusion IN ('PASS','PASS_WITH_CONDITIONS','FAIL')), -- 结题结论（README §4）
   attachment_ids   JSONB        NOT NULL DEFAULT '[]'::jsonb,       -- E_PROJECT_DOC.id 数组
-  archive_checklist_id BIGINT REFERENCES E_ARCHIVE_CHECKLIST(id)    -- 同模块物理外键：归档清单校验实例（E-15）
+  archive_checklist_id BIGINT                                       -- 同模块物理外键：归档清单校验实例（E-15）；FK 由文末 ALTER TABLE 后加，避免前向引用
 );
 COMMENT ON TABLE  E_FINAL_ACCEPT IS '结题申请与验收（E-08），技术验收与财务验收并行';
 COMMENT ON COLUMN E_FINAL_ACCEPT.conclusion IS 'PASS/PASS_WITH_CONDITIONS/FAIL（README §4 结题结论）';
@@ -409,6 +409,14 @@ COMMENT ON COLUMN E_ARCHIVE_CHECKLIST.completeness IS '必交项未齐则 status
 CREATE UNIQUE INDEX uk_e_arch_code ON E_ARCHIVE_CHECKLIST(tenant_id, code) WHERE deleted = 0;
 CREATE INDEX idx_e_arch_project ON E_ARCHIVE_CHECKLIST(project_id, stage);
 CREATE INDEX idx_e_arch_tpl     ON E_ARCHIVE_CHECKLIST(tenant_id, project_type, stage, status);
+
+
+-- -----------------------------------------------------------------------------
+-- 延迟外键（本模块内前向引用，建表顺序 E_FINAL_ACCEPT 早于 E_ARCHIVE_CHECKLIST）
+-- -----------------------------------------------------------------------------
+ALTER TABLE E_FINAL_ACCEPT
+  ADD CONSTRAINT fk_e_final_archive_checklist
+  FOREIGN KEY (archive_checklist_id) REFERENCES E_ARCHIVE_CHECKLIST(id);
 
 -- =============================================================================
 -- 引用说明（不在本文件建表）：
