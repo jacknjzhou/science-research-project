@@ -80,6 +80,29 @@ func TestGenerateUp_HasVActivity(t *testing.T) {
 	}
 }
 
+// TestGenerateUp_HasMScheme 守卫 M 模块建表进入迁移；一旦 design/14 被漏排/改名，compose 后无表可写。
+func TestGenerateUp_HasMScheme(t *testing.T) {
+	designDir := os.Getenv("DESIGN_DIR")
+	if designDir == "" {
+		designDir = "../../design"
+	}
+	up, err := GenerateUp(designDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tbl := range []string{"m_scheme", "m_scheme_factor", "m_record", "m_record_item", "m_payout"} {
+		if !strings.Contains(strings.ToLower(up), strings.ToLower("CREATE TABLE "+tbl)) {
+			t.Fatalf("迁移缺少 M 模块对象: CREATE TABLE %s", tbl)
+		}
+	}
+	if !strings.Contains(up, "'PERF'") {
+		t.Fatal("seq_prefix_registry 未登记 PERF 前缀")
+	}
+	if !strings.Contains(up, "'PAY'") {
+		t.Fatal("seq_prefix_registry 未登记 PAY 前缀")
+	}
+}
+
 // TestGenerateUp_NoForwardReferences 静态守卫：生成的 up.sql 里 CREATE TABLE 内联列
 // REFERENCES 的目标必须先前已由同文件（或前置 00-common.sql）里的 CREATE TABLE 建过；
 // 否则 PostgreSQL 会在 CREATE 阶段报 `relation "xxx" does not exist`——正是
