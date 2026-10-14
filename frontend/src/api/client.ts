@@ -4,6 +4,14 @@
  */
 export const API_PREFIX = '/api/v1'
 
+// —— 认证 provider（由 auth.init() 注册；避免 auth↔client 循环 import）——
+let tokenProvider: () => string = () => ''
+let onUnauthorized: () => void = () => {}
+export function setAuthProvider(getToken: () => string, handle401: () => void): void {
+  tokenProvider = getToken
+  onUnauthorized = handle401
+}
+
 export interface ApiEnvelope<T> {
   code: number
   message: string
@@ -64,9 +72,10 @@ function buildUrl(path: string, params?: RequestOptions['params']): string {
 async function request<T>(method: string, path: string, opts: RequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    Authorization: 'Bearer mock-jwt-dev',
     ...(opts.headers || {}),
   }
+  const t = tokenProvider()
+  if (t) headers['Authorization'] = 'Bearer ' + t
   if (opts.idempotency && (method === 'POST' || method === 'PUT' || method === 'DELETE')) {
     headers['Idempotency-Key'] = uuid()
   }
@@ -74,6 +83,10 @@ async function request<T>(method: string, path: string, opts: RequestOptions = {
   if (opts.body !== undefined) init.body = JSON.stringify(opts.body)
 
   const res = await fetch(buildUrl(path, opts.params), init)
+  if (res.status === 401) {
+    onUnauthorized()
+    throw new ApiError(40101, '未认证或令牌过期')
+  }
   if (!res.ok) {
     throw new ApiError(res.status, `HTTP ${res.status} ${res.statusText}`)
   }
