@@ -1,0 +1,763 @@
+openapi: 3.0.3
+info:
+  title: 科研管理系统 · 14 科研绩效评价 API（模块 M）
+  version: "1.0.0"
+  description: >-
+    绩效方案/因子配置、按方案从 R/F/E/T 真表聚合自动计分、记录确认-申诉-审批、在线发放审批、
+    个人绩效与排行。统一响应 ApiResponse{code,message,data,traceId,timestamp}；分页 PageResult{list,total,page,size}；
+    认证 Bearer JWT；写方法支持 Idempotency-Key。实体字段名与 DDL 列名一致（snake_case）。
+    授权 Casbin（RBAC）+ 数据域 ABAC（tenant_id；/perf/me 与个人记录强制 staff_user_id=当前用户）。
+servers:
+  - url: https://{host}/api/v1
+    variables:
+      host: { default: api.institute.example.com }
+tags:
+  - { name: performance, description: 科研绩效评价（方案·计分·记录·发放） }
+security:
+  - bearerAuth: []
+paths:
+  /perf/schemes:
+    get:
+      tags: [performance]
+      summary: 方案列表（租户隔离 + 筛选 + 分页）
+      operationId: listSchemes
+      parameters:
+        - { name: period_type, in: query, schema: { type: string, enum: [YEAR, QUARTER, MONTH] } }
+        - { name: effective_period, in: query, schema: { type: string } }
+        - { name: scope_dept_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: active, in: query, schema: { type: boolean } }
+        - { name: keyword, in: query, schema: { type: string } }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 分页方案列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list: { type: array, items: { $ref: '#/components/schemas/Scheme' } }
+    post:
+      tags: [performance]
+      summary: 新建方案（DRAFT，含 code=PERF 前缀由编号中心分配）
+      operationId: createScheme
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SchemeRequest' }
+      responses:
+        '200':
+          description: 创建后的方案
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Scheme' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /perf/schemes/{id}:
+    get:
+      tags: [performance]
+      summary: 方案详情（含 factors）
+      operationId: getScheme
+      parameters: [ { $ref: '#/components/parameters/PathId' } ]
+      responses:
+        '200':
+          description: 方案详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/SchemeDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [performance]
+      summary: 编辑方案（仅未生效可改）
+      operationId: updateScheme
+      parameters: [ { $ref: '#/components/parameters/PathId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SchemeRequest' }
+      responses:
+        '200':
+          description: 更新后的方案
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Scheme' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [performance]
+      summary: 软删方案（deleted=1）
+      operationId: deleteScheme
+      parameters: [ { $ref: '#/components/parameters/PathId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      responses:
+        '200':
+          description: 操作结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { type: object, properties: { id: { type: integer, format: int64 }, deleted: { type: boolean } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /perf/schemes/{id}/activate:
+    post:
+      tags: [performance]
+      summary: 启用方案（同 tenant+period_type+effective_period+scope 置唯一 active，旧 active 转 SUPERSEDED）
+      operationId: activateScheme
+      parameters: [ { $ref: '#/components/parameters/PathId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      responses:
+        '200':
+          description: 启用后的方案
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Scheme' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /perf/schemes/{id}/factors:
+    get:
+      tags: [performance]
+      summary: 方案因子列表
+      operationId: listFactors
+      parameters: [ { $ref: '#/components/parameters/PathId' } ]
+      responses:
+        '200':
+          description: 因子数组
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { type: object, properties: { list: { type: array, items: { $ref: '#/components/schemas/Factor' } } } }
+    post:
+      tags: [performance]
+      summary: 新增/覆盖方案因子（uk scheme_id+factor_code upsert）
+      operationId: upsertFactor
+      parameters: [ { $ref: '#/components/parameters/PathId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FactorRequest' }
+      responses:
+        '200':
+          description: 保存后的因子
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Factor' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /perf/schemes/{id}/factors/{factorId}:
+    put:
+      tags: [performance]
+      summary: 编辑因子
+      operationId: updateFactor
+      parameters:
+        - { $ref: '#/components/parameters/PathId' }
+        - { name: factorId, in: path, required: true, schema: { type: integer, format: int64 } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FactorRequest' }
+      responses:
+        '200':
+          description: 更新后的因子
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Factor' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [performance]
+      summary: 删除因子
+      operationId: deleteFactor
+      parameters:
+        - { $ref: '#/components/parameters/PathId' }
+        - { name: factorId, in: path, required: true, schema: { type: integer, format: int64 } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200':
+          description: 操作结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { type: object, properties: { factor_id: { type: integer, format: int64 }, deleted: { type: boolean } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /perf/schemes/{id}/calculate:
+    post:
+      tags: [performance]
+      summary: 触发计分（按方案因子从 R/F/E/T 真表聚合→算分→upsert 记录+明细，calc_batch 幂等）
+      operationId: calculatePerformance
+      parameters: [ { $ref: '#/components/parameters/PathId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CalculateRequest' }
+      responses:
+        '200':
+          description: 计算结果汇总
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CalculateResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /perf/records:
+    get:
+      tags: [performance]
+      summary: 绩效记录列表（筛选 scheme/period/dept/status/keyword，分页，ABAC）
+      operationId: listRecords
+      parameters:
+        - { name: scheme_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: period, in: query, schema: { type: string } }
+        - { name: dept_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: staff_user_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: status, in: query, schema: { type: string, enum: [CALCULATED, CONFIRMED, APPROVED, PAID, APPEAL, VOID] } }
+        - { name: keyword, in: query, schema: { type: string } }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 分页记录列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list: { type: array, items: { $ref: '#/components/schemas/Record' } }
+  /perf/records/{id}:
+    get:
+      tags: [performance]
+      summary: 记录详情（非管理角色强制 staff_user_id=本人）
+      operationId: getRecord
+      parameters: [ { $ref: '#/components/parameters/PathId' } ]
+      responses:
+        '200':
+          description: 绩效记录
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Record' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /perf/records/{id}/detail:
+    get:
+      tags: [performance]
+      summary: 记录明细（含 items + evidence）
+      operationId: getRecordDetail
+      parameters: [ { $ref: '#/components/parameters/PathId' } ]
+      responses:
+        '200':
+          description: 记录明细
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/RecordDetail' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /perf/records/{id}/confirm:
+    post:
+      tags: [performance]
+      summary: 本人/管理确认（CALCULATED → CONFIRMED）
+      operationId: confirmRecord
+      parameters: [ { $ref: '#/components/parameters/PathId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      responses:
+        '200':
+          description: 确认后的记录
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Record' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /perf/records/{id}/appeal:
+    post:
+      tags: [performance]
+      summary: 申诉（CALCULATED/CONFIRMED → APPEAL，body reason）
+      operationId: appealRecord
+      parameters: [ { $ref: '#/components/parameters/PathId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [reason], properties: { reason: { type: string } } }
+      responses:
+        '200':
+          description: 申诉后的记录
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Record' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /perf/records/{id}/approve:
+    post:
+      tags: [performance]
+      summary: 审批（CONFIRMED → APPROVED，管理角色）
+      operationId: approveRecord
+      parameters: [ { $ref: '#/components/parameters/PathId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      responses:
+        '200':
+          description: 审批后的记录
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Record' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /perf/records/{id}/void:
+    post:
+      tags: [performance]
+      summary: 作废（任意未发放态 → VOID，body reason）
+      operationId: voidRecord
+      parameters: [ { $ref: '#/components/parameters/PathId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, properties: { reason: { type: string } } }
+      responses:
+        '200':
+          description: 作废后的记录
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Record' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /perf/payouts:
+    get:
+      tags: [performance]
+      summary: 发放单列表（筛选 scheme/period/status，分页）
+      operationId: listPayouts
+      parameters:
+        - { name: period, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [DRAFT, APPROVING, APPROVED, PAID, REJECTED] } }
+        - { name: payee_user_id, in: query, schema: { type: integer, format: int64 } }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 分页发放单
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list: { type: array, items: { $ref: '#/components/schemas/Payout' } }
+    post:
+      tags: [performance]
+      summary: 从 APPROVED 记录发起发放（DRAFT，body record_id/amount/channel）
+      operationId: createPayout
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PayoutRequest' }
+      responses:
+        '200':
+          description: 创建后的发放单
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Payout' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /perf/payouts/{id}/approve:
+    post:
+      tags: [performance]
+      summary: 发放审批通过（DRAFT/APPROVING → APPROVED）
+      operationId: approvePayout
+      parameters: [ { $ref: '#/components/parameters/PathId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      responses:
+        '200':
+          description: 审批后的发放单
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Payout' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /perf/payouts/{id}/pay:
+    post:
+      tags: [performance]
+      summary: 标记发放完成（APPROVED → PAID，回填 voucher_code，记录联动 PAID）
+      operationId: payPayout
+      parameters: [ { $ref: '#/components/parameters/PathId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, properties: { voucher_code: { type: string } } }
+      responses:
+        '200':
+          description: 完成后的发放单
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Payout' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /perf/payouts/{id}/reject:
+    post:
+      tags: [performance]
+      summary: 驳回发放（DRAFT/APPROVING → REJECTED，body reason）
+      operationId: rejectPayout
+      parameters: [ { $ref: '#/components/parameters/PathId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, properties: { reason: { type: string } } }
+      responses:
+        '200':
+          description: 驳回后的发放单
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Payout' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /perf/me:
+    get:
+      tags: [performance]
+      summary: 我的绩效（ABAC 强制 staff_user_id=当前用户）
+      operationId: myPerformance
+      parameters:
+        - { name: period, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: 当前用户记录明细数组
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { type: object, properties: { list: { type: array, items: { $ref: '#/components/schemas/RecordDetail' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /perf/ranking:
+    get:
+      tags: [performance]
+      summary: 排行/分布（管理角色可见）
+      operationId: perfRanking
+      parameters:
+        - { name: scheme_id, in: query, required: true, schema: { type: integer, format: int64 } }
+        - { name: period, in: query, required: true, schema: { type: string } }
+        - { name: top, in: query, schema: { type: integer, default: 20 } }
+      responses:
+        '200':
+          description: 排行
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { type: object, properties: { list: { type: array, items: { $ref: '#/components/schemas/RankItem' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    Page:  { name: page,  in: query, schema: { type: integer, default: 1, minimum: 1 } }
+    Size:  { name: size,  in: query, schema: { type: integer, default: 20, minimum: 1, maximum: 200 } }
+    PathId: { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: false, schema: { type: string } }
+  responses:
+    BadRequest:
+      description: 参数错误
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    Unauthorized:
+      description: 未认证
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    Forbidden:
+      description: 无权限/越权
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    Conflict:
+      description: 状态冲突（非法流转/重复）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+  schemas:
+    ApiResponse:
+      type: object
+      properties:
+        code:      { type: integer }
+        message:   { type: string }
+        data:      { type: object }
+        traceId:   { type: string, nullable: true }
+        timestamp: { type: string, nullable: true }
+    PageResult:
+      type: object
+      properties:
+        total: { type: integer }
+        page:  { type: integer }
+        size:  { type: integer }
+    Scheme:
+      type: object
+      properties:
+        id:               { type: integer, format: int64 }
+        code:             { type: string, nullable: true }
+        name:             { type: string }
+        period_type:      { type: string, enum: [YEAR, QUARTER, MONTH] }
+        scope_dept_id:    { type: integer, format: int64, nullable: true }
+        scope_staff_type: { type: string, nullable: true }
+        effective_period: { type: string }
+        version:          { type: integer }
+        active:           { type: boolean }
+        status:           { type: string, enum: [DRAFT, ACTIVE, SUPERSEDED] }
+        created_at:       { type: string, format: date-time }
+        updated_at:       { type: string, format: date-time }
+    SchemeRequest:
+      type: object
+      required: [name, period_type, effective_period]
+      properties:
+        name:             { type: string }
+        period_type:      { type: string, enum: [YEAR, QUARTER, MONTH] }
+        scope_dept_id:    { type: integer, format: int64, nullable: true }
+        scope_staff_type: { type: string, nullable: true }
+        effective_period: { type: string }
+        remark:           { type: string, nullable: true }
+    Factor:
+      type: object
+      properties:
+        id:           { type: integer, format: int64 }
+        scheme_id:    { type: integer, format: int64 }
+        factor_code:  { type: string }
+        factor_name:  { type: string }
+        weight:       { type: string }
+        scoring_rule: { type: object }
+        max_score:    { type: string, nullable: true }
+        data_source:  { type: string, enum: [R_OUTPUT, F_INCOME, E_PROJECT, T_DEAL, MANUAL] }
+        clause_ref:   { type: string, nullable: true }
+        sort_no:      { type: integer }
+    FactorRequest:
+      type: object
+      required: [factor_code, data_source, scoring_rule]
+      properties:
+        factor_code:  { type: string }
+        factor_name:  { type: string }
+        weight:       { type: string }
+        scoring_rule: { type: object }
+        max_score:    { type: string, nullable: true }
+        data_source:  { type: string, enum: [R_OUTPUT, F_INCOME, E_PROJECT, T_DEAL, MANUAL] }
+        clause_ref:   { type: string, nullable: true }
+        sort_no:      { type: integer }
+    SchemeDetail:
+      allOf:
+        - $ref: '#/components/schemas/Scheme'
+        - type: object
+          properties:
+            factors: { type: array, items: { $ref: '#/components/schemas/Factor' } }
+    Record:
+      type: object
+      properties:
+        id:             { type: integer, format: int64 }
+        scheme_id:      { type: integer, format: int64 }
+        scheme_name:    { type: string, nullable: true }
+        staff_user_id:  { type: integer, format: int64 }
+        staff_name:     { type: string, nullable: true }
+        period:         { type: string }
+        dept_id:        { type: integer, format: int64, nullable: true }
+        total_score:    { type: string }
+        rank:           { type: integer, nullable: true }
+        status:         { type: string, enum: [CALCULATED, CONFIRMED, APPROVED, PAID, APPEAL, VOID] }
+        calc_batch:     { type: string, nullable: true }
+        calc_at:        { type: string, format: date-time, nullable: true }
+        confirmed_at:   { type: string, format: date-time, nullable: true }
+        approve_at:     { type: string, format: date-time, nullable: true }
+    RecordItem:
+      type: object
+      properties:
+        id:             { type: integer, format: int64 }
+        record_id:      { type: integer, format: int64 }
+        factor_code:    { type: string }
+        factor_name:    { type: string, nullable: true }
+        metric_value:   { type: string }
+        raw_score:      { type: string }
+        weighted_score: { type: string }
+        evidence:       { type: array, items: { type: object } }
+    RecordDetail:
+      allOf:
+        - $ref: '#/components/schemas/Record'
+        - type: object
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/RecordItem' } }
+    Payout:
+      type: object
+      properties:
+        id:            { type: integer, format: int64 }
+        code:          { type: string, nullable: true }
+        record_id:     { type: integer, format: int64 }
+        payee_user_id: { type: integer, format: int64 }
+        payee_name:    { type: string, nullable: true }
+        amount:        { type: string }
+        period:        { type: string, nullable: true }
+        pay_channel:   { type: string, nullable: true }
+        status:        { type: string, enum: [DRAFT, APPROVING, APPROVED, PAID, REJECTED] }
+        approved_at:   { type: string, format: date-time, nullable: true }
+        paid_at:       { type: string, format: date-time, nullable: true }
+        voucher_code:  { type: string, nullable: true }
+    PayoutRequest:
+      type: object
+      required: [record_id, amount]
+      properties:
+        record_id:   { type: integer, format: int64 }
+        amount:      { type: string }
+        pay_channel: { type: string, nullable: true }
+    CalculateRequest:
+      type: object
+      required: [period]
+      properties:
+        period:    { type: string, description: 计算周期，如 2026 / 2026Q1 / 2026-03 }
+        dept_ids:  { type: array, items: { type: integer, format: int64 } }
+        staff_ids: { type: array, items: { type: integer, format: int64 } }
+    CalculateResult:
+      type: object
+      properties:
+        calc_batch:  { type: string }
+        period:      { type: string }
+        computed:    { type: integer, description: 本次计算的人数 }
+        inserted:    { type: integer }
+        updated:     { type: integer }
+    RankItem:
+      type: object
+      properties:
+        rank:          { type: integer }
+        staff_user_id: { type: integer, format: int64 }
+        staff_name:    { type: string, nullable: true }
+        dept_id:       { type: integer, format: int64, nullable: true }
+        total_score:   { type: string }
