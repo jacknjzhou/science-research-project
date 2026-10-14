@@ -2,27 +2,45 @@
 import { ref, computed, onMounted } from 'vue'
 import type { CSSProperties } from 'vue'
 import { useRoute } from 'vue-router'
-import { api } from '@/api/client'
+import { api, list } from '@/api/client'
 import { toNum, toWan, toPct } from '@/utils/money'
 
-interface Kpi { budgetExecRate: string; milestoneCompletionRate: string; outputCount: number }
+// —— 详情基础字段对齐后端 mapper.go ToAPIProject（snake_case）；
+//    kpi / timeline / funding_lines / members / ethics 属视图扩展，仅 curated override（mock）提供，
+//    真后端走 passthrough/缺省，故设为可选并以 ?? 兜底。——
+interface Kpi { budget_exec_rate: string; milestone_completion_rate: string; output_count: number }
 interface FundingLine { subject: string; approved: string; used: string; frozen: string; rate: string; status: string }
 interface Member { name: string; role: string }
-interface TimelineNode { node: string; occurredAt: string; actor: number }
+interface TimelineNode { node: string; occurred_at: string; actor: number }
 interface EProjectDetail {
-  id: number; code: string; status: string; title: string; projectType: string
-  startDate: string; endDate: string; totalBudget: string; receivedAmount: string; spentAmount: string
-  healthScore: number; riskLevel: string; aiSummary: string; kpi: Kpi; timeline: TimelineNode[]
-  fundingLines?: FundingLine[]; members?: Member[]; ethics?: { caseId: string; status: string }
+  id: number; code: string | null; status: string; title: string; project_type: string | null
+  start_date?: string | null; end_date?: string | null; actual_end_date?: string | null
+  total_budget: string; received_amount: string; spent_amount: string
+  health_score: number; risk_level: string; security_level: string
+  ai_summary?: string; kpi?: Kpi; timeline?: TimelineNode[]
+  funding_lines?: FundingLine[]; members?: Member[]; ethics?: { case_id: string; status: string }
+  [k: string]: any
 }
-interface ETask { id: number; name: string; plannedStart: string; plannedEnd: string; progressPercent: number; status: string }
-interface EMilestone { id: number; name: string; dueDate: string; actualDate: string | null; weight: string; status: string; deliverableType: string }
+// 任务/里程碑字段对齐 ToAPITask / ToAPIMilestone（snake_case）。
+interface ETask {
+  id: number; code?: string | null; project_id: number; status: string; name: string
+  owner_user_id?: number | null; planned_start?: string | null; planned_end?: string | null
+  actual_start?: string | null; actual_end?: string | null; progress_percent: number; weight?: string | null
+  [k: string]: any
+}
+interface EMilestone {
+  id: number; code?: string | null; project_id: number; status: string; name: string
+  due_date?: string | null; actual_date?: string | null; weight?: string | null
+  deliverable_type?: string | null; [k: string]: any
+}
+// risk-warnings / archive-checklist 真后端尚未实现（passthrough），字段名沿用 schema 契约（camelCase）。
 interface ERiskWarning { warningId: number; level: string; source: string; title: string; suggestion: string; disposition: string }
 interface ChecklistItem { item: string; required: boolean; mime: string; docId: number | null; uploaded: boolean }
 interface EArchiveChecklist { checklistJson: ChecklistItem[]; requiredCount: number; completedCount: number; completeness: string; status: string; blockedItems: string[] }
 
 const toast = (m: string) => (window as any).toast?.(m)
 const route = useRoute()
+// :id? 可选参数缺省时是空串，用 || 回落演示英雄项目
 const id = String(route.params.id || '90001')
 
 type TabKey = 'info' | 'mile' | 'fund' | 'member' | 'doc'
@@ -47,33 +65,33 @@ const num = (s?: string | number | null) => toNum(s)
 const wan = (s?: string | number | null) => toWan(s)
 const pct = (r?: string | number | null) => toPct(r)
 
-const execPct = computed(() => pct(detail.value?.kpi?.budgetExecRate))
-const msRatePct = computed(() => pct(detail.value?.kpi?.milestoneCompletionRate))
+const execPct = computed(() => pct(detail.value?.kpi?.budget_exec_rate))
+const msRatePct = computed(() => pct(detail.value?.kpi?.milestone_completion_rate))
 const remainMonths = computed(() => {
-  if (!detail.value) return 0
-  const end = new Date(detail.value.endDate).getTime()
+  if (!detail.value?.end_date) return 0
+  const end = new Date(detail.value.end_date).getTime()
   return Math.max(0, Math.round((end - Date.now()) / (1000 * 3600 * 24 * 30.4)))
 })
 const healthBand = computed(() => {
-  const h = detail.value?.healthScore ?? 0
+  const h = detail.value?.health_score ?? 0
   return h >= 80 ? 'var(--ok)' : h >= 60 ? 'var(--warn)' : 'var(--bad)'
 })
 const gaugeBg = computed(() => {
-  const h = detail.value?.healthScore ?? 0
+  const h = detail.value?.health_score ?? 0
   return `conic-gradient(${healthBand.value} 0 ${h}%, var(--paper-deep) ${h}% 100%)`
 })
 
 // —— 甘特条定位（相对项目起止）——
 const MS_DAY = 1000 * 3600 * 24
 function span(): { s: number; days: number } {
-  const s = detail.value ? new Date(detail.value.startDate).getTime() : Date.now()
-  const e = detail.value ? new Date(detail.value.endDate).getTime() : Date.now()
+  const s = detail.value?.start_date ? new Date(detail.value.start_date).getTime() : Date.now()
+  const e = detail.value?.end_date ? new Date(detail.value.end_date).getTime() : Date.now()
   return { s, days: Math.max(1, (e - s) / MS_DAY) }
 }
 function barStyle(t: ETask): CSSProperties {
   const { s, days } = span()
-  const start = (new Date(t.plannedStart).getTime() - s) / MS_DAY
-  const end = (new Date(t.plannedEnd).getTime() - s) / MS_DAY
+  const start = (new Date(t.planned_start || '').getTime() - s) / MS_DAY
+  const end = (new Date(t.planned_end || '').getTime() - s) / MS_DAY
   const left = Math.min(96, Math.max(0, (start / days) * 100))
   const width = Math.min(100 - left, Math.max(6, ((end - start) / days) * 100))
   return { left: left + '%', width: width + '%' }
@@ -92,7 +110,7 @@ const TASK_TEXT: Record<string, string> = {
 }
 function taskLabel(t: ETask) {
   const base = TASK_TEXT[t.status] || t.status
-  return base.replace('{p}', String(t.progressPercent))
+  return base.replace('{p}', String(t.progress_percent))
 }
 function msColor(m: EMilestone) {
   if (m.status === 'ACHIEVED') return 'var(--ok)'
@@ -129,9 +147,14 @@ async function ensureTab(key: TabKey) {
   if (key === 'mile' && !mileLoaded) {
     tabLoading.value.mile = true
     try {
-      const data = await api.get<{ tasks?: ETask[]; milestones?: EMilestone[] }>(`/project/${id}/tasks`, { view: 'GANTT' })
-      tasks.value = data?.tasks ?? []
-      milestones.value = data?.milestones ?? []
+      // 任务：契约 GET /project/{id}/tasks 后端返回 {list}；兼容旧 {tasks,milestones} 结构。
+      // 里程碑：新增契约 GET /project/{id}/milestones 返回 {list}。
+      const [tk, ms] = await Promise.all([
+        api.get<{ list?: ETask[]; tasks?: ETask[]; milestones?: EMilestone[] }>(`/project/${id}/tasks`, { view: 'GANTT' }),
+        list<EMilestone>(`/project/${id}/milestones`).catch(() => ({ rows: [] as EMilestone[], total: 0 })),
+      ])
+      tasks.value = tk?.list ?? tk?.tasks ?? []
+      milestones.value = ms?.rows ?? tk?.milestones ?? []
       mileLoaded = true
     } catch (e: any) { toast('里程碑加载失败：' + (e?.message || e)) }
     finally { tabLoading.value.mile = false }
@@ -161,7 +184,7 @@ onMounted(async () => {
       <div>
         <div class="page-title" style="font-size:21px">{{ detail.title }}</div>
         <div class="page-sub mono">
-          {{ detail.code }} · {{ detail.projectType }} · PI 周明远 · {{ detail.startDate }} → {{ detail.endDate }} ·
+          {{ detail.code }} · {{ detail.project_type }} · PI 周明远 · {{ detail.start_date }} → {{ detail.end_date }} ·
           剩余 <b style="color:var(--seal)">{{ remainMonths }} 个月</b>
         </div>
       </div>
@@ -181,8 +204,8 @@ onMounted(async () => {
         <div class="card">
           <div class="card-h"><h4>项目健康度</h4><span class="tag ai">AI 归因</span></div>
           <div class="card-b">
-            <div class="gauge" :style="{ background: gaugeBg }"><div class="in"><b :style="{ color: healthBand }">{{ detail.healthScore }}</b><span>{{ detail.riskLevel }}</span></div></div>
-            <div style="margin-top:14px;font-size:12px;line-height:1.9">{{ detail.aiSummary }}</div>
+            <div class="gauge" :style="{ background: gaugeBg }"><div class="in"><b :style="{ color: healthBand }">{{ detail.health_score }}</b><span>{{ detail.risk_level }}</span></div></div>
+            <div style="margin-top:14px;font-size:12px;line-height:1.9">{{ detail.ai_summary }}</div>
             <div class="alert-line b-add" style="margin-top:12px" v-for="r in risks" :key="r.warningId">
               ⚠ <b>{{ r.title }}：</b>{{ r.suggestion }}
             </div>
@@ -192,14 +215,14 @@ onMounted(async () => {
           <div class="card-h"><h4>经费概览</h4><a class="mono" style="font-size:11px;color:var(--ai);cursor:pointer" @click="switchTab('fund')">明细 →</a></div>
           <div class="card-b" style="display:flex;flex-direction:column;gap:14px">
             <div style="display:flex;justify-content:space-between">
-              <div><div class="lbl" style="font-size:11px;color:var(--ink-mute)">总批复</div><div style="font-family:var(--serif);font-size:22px;font-weight:900">¥{{ wan(detail.totalBudget) }}<small style="font-size:12px">万</small></div></div>
-              <div style="text-align:right"><div style="font-size:11px;color:var(--ink-mute)">已到账</div><div style="font-family:var(--serif);font-size:22px;font-weight:900">¥{{ wan(detail.receivedAmount) }}<small style="font-size:12px">万</small></div></div>
+              <div><div class="lbl" style="font-size:11px;color:var(--ink-mute)">总批复</div><div style="font-family:var(--serif);font-size:22px;font-weight:900">¥{{ wan(detail.total_budget) }}<small style="font-size:12px">万</small></div></div>
+              <div style="text-align:right"><div style="font-size:11px;color:var(--ink-mute)">已到账</div><div style="font-family:var(--serif);font-size:22px;font-weight:900">¥{{ wan(detail.received_amount) }}<small style="font-size:12px">万</small></div></div>
             </div>
             <div>
-              <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:5px"><span>执行 {{ execPct }}%</span><span class="mono">已用 ¥{{ wan(detail.spentAmount) }}万</span></div>
-              <div class="bar" :class="detail.riskLevel === 'LOW' ? 'b-ok' : 'b-warn'"><i :style="{ width: execPct + '%' }"></i></div>
+              <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:5px"><span>执行 {{ execPct }}%</span><span class="mono">已用 ¥{{ wan(detail.spent_amount) }}万</span></div>
+              <div class="bar" :class="detail.risk_level === 'LOW' ? 'b-ok' : 'b-warn'"><i :style="{ width: execPct + '%' }"></i></div>
             </div>
-            <div style="font-size:11px;color:var(--ink-mute)" class="mono">成果 {{ detail.kpi?.outputCount ?? 0 }} 项 · 里程碑完成 {{ msRatePct }}%</div>
+            <div style="font-size:11px;color:var(--ink-mute)" class="mono">成果 {{ detail.kpi?.output_count ?? 0 }} 项 · 里程碑完成 {{ msRatePct }}%</div>
           </div>
         </div>
         <div class="card">
@@ -212,7 +235,7 @@ onMounted(async () => {
               <span class="p-avatar" :style="{ width:'32px', height:'32px', fontSize:'13px', borderWidth:'2px', marginLeft: idx ? '-8px' : '0', background: MEMBER_COLORS[idx % MEMBER_COLORS.length] }" v-for="(m, idx) in (detail.members || []).slice(0, 8)" :key="idx">{{ m.name[0] }}</span>
               <span style="margin-left:12px;font-size:12px;color:var(--ink-soft)">课题组 {{ (detail.members || []).length }} 人</span>
             </div>
-            <span class="tag info" v-if="detail.ethics">关联伦理批件 {{ detail.ethics?.caseId }} ✓ {{ detail.ethics?.status }}</span>
+            <span class="tag info" v-if="detail.ethics">关联伦理批件 {{ detail.ethics?.case_id }} ✓ {{ detail.ethics?.status }}</span>
           </div>
         </div>
       </div>
@@ -221,7 +244,7 @@ onMounted(async () => {
         <div class="card-h"><h4>关键节点时间线</h4></div>
         <div class="card-b"><div class="timeline">
           <div class="tl-item" v-for="(n, i) in detail.timeline" :key="i">
-            <div class="t">{{ n.occurredAt.slice(0, 10) }}</div>{{ n.node }}
+            <div class="t">{{ n.occurred_at.slice(0, 10) }}</div>{{ n.node }}
           </div>
         </div></div>
       </div>
@@ -253,8 +276,8 @@ onMounted(async () => {
             <div v-else-if="!milestones.length" style="color:var(--ink-mute)">暂无里程碑</div>
             <div v-else class="timeline">
               <div class="tl-item" :class="{ red: m.status === 'OVERDUE' }" v-for="m in milestones" :key="m.id">
-                <div class="t">{{ m.dueDate }} · {{ MS_LABEL[m.status] || m.status }}</div>
-                <b>{{ m.name }}</b> · {{ m.deliverableType }}
+                <div class="t">{{ m.due_date }} · {{ MS_LABEL[m.status] || m.status }}</div>
+                <b>{{ m.name }}</b> · {{ m.deliverable_type }}
                 <div class="hbar" style="margin-top:6px"><div class="track"><i :style="{ width: msWidth(m), background: msColor(m) }"></i></div></div>
               </div>
             </div>
@@ -268,11 +291,11 @@ onMounted(async () => {
       <div class="card">
         <div class="card-h"><h4>预算执行表</h4><button class="btn sm" @click="$router.push({ name: 'expense' })">＋ 报销</button></div>
         <div class="card-b" style="padding:0">
-          <div v-if="!(detail.fundingLines && detail.fundingLines.length)" style="padding:24px;color:var(--ink-mute)">暂无经费明细</div>
+          <div v-if="!(detail.funding_lines && detail.funding_lines.length)" style="padding:24px;color:var(--ink-mute)">暂无经费明细</div>
           <table v-else class="tbl">
             <thead><tr><th>科目</th><th>批复</th><th>已用</th><th>冻结</th><th>执行率</th><th>状态</th></tr></thead>
             <tbody>
-              <tr v-for="(f, i) in detail.fundingLines" :key="i">
+              <tr v-for="(f, i) in detail.funding_lines" :key="i">
                 <td>{{ f.subject }}</td>
                 <td class="mono">{{ f.approved }}</td>
                 <td class="mono">{{ f.used }}</td>

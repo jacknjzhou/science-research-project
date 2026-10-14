@@ -435,6 +435,32 @@ paths:
                             type: array
                             items: { $ref: '#/components/schemas/EMilestone' }
 
+  /project/{id}/milestones:
+    get:
+      tags: [Task]
+      summary: 项目里程碑列表（甘特视图数据源）
+      description: 独立返回 E_MILESTONE 列表，供前端内联甘特与里程碑清单渲染；分页由 handler 收敛为 {list}。
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdPath'
+      responses:
+        '200':
+          description: 里程碑列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/EMilestone' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
 components:
   securitySchemes:
     bearerAuth:
