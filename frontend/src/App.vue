@@ -58,6 +58,9 @@ const groups: NavGroup[] = [
     { v: 'procurement', ic: '⧉', label: '采购与合同', badge: 5, roles: ['R-MANAGER', 'R-FINANCE', 'R-ADMIN'] },
     { v: 'asset', ic: '▤', label: '资产与耗材台账', roles: ['R-MANAGER', 'R-FINANCE', 'R-ADMIN'] },
   ]},
+  { t: '学 术 活 动', items: [
+    { v: 'activity', ic: '✪', label: '学术活动管理', roles: ['R-STAFF', 'R-MANAGER', 'R-LEADER', 'R-AUDITOR'] },
+  ]},
   { t: '人 员', items: [
     { v: 'portrait', ic: '◍', label: 'PI 画像', roles: ['R-LEADER', 'R-MANAGER', 'R-ADMIN'] },
   ]},

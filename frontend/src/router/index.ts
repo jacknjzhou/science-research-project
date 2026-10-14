@@ -27,6 +27,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/procurement', name: 'procurement', meta: { zh: '采购与合同', en: 'PROCUREMENT & CONTRACT', roles: ['R-MANAGER', 'R-FINANCE', 'R-ADMIN'] }, component: () => import('@/views/ProcurementView.vue') },
   { path: '/asset', name: 'asset', meta: { zh: '资产与耗材台账', en: 'ASSET & CONSUMABLE', roles: ['R-MANAGER', 'R-FINANCE', 'R-ADMIN'] }, component: () => import('@/views/AssetView.vue') },
   { path: '/portrait', name: 'portrait', meta: { zh: 'PI 画像', en: 'RESEARCHER PORTRAIT', roles: ['R-LEADER', 'R-MANAGER', 'R-ADMIN'] }, component: () => import('@/views/PortraitView.vue') },
+  { path: '/activity', name: 'activity', meta: { zh: '学术活动', en: 'ACADEMIC ACTIVITIES', roles: ['R-STAFF', 'R-MANAGER', 'R-LEADER', 'R-AUDITOR'] }, component: () => import('@/views/ActivityView.vue') },
   // —— 模块 U 管理页（新）——
   { path: '/admin/users', name: 'admin-users', meta: { zh: '用户管理', en: 'USER ADMIN', roles: ['R-ADMIN'] }, component: () => import('@/views/admin/UsersView.vue') },
   { path: '/admin/roles', name: 'admin-roles', meta: { zh: '角色与权限', en: 'ROLES & PERMISSIONS', roles: ['R-ADMIN', 'R-AUDITOR'] }, component: () => import('@/views/admin/RolesView.vue') },
