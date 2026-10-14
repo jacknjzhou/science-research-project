@@ -2,6 +2,7 @@ import { createApp } from 'vue'
 import App from './App.vue'
 import router from './router'
 import { auth } from './api/auth'
+import { perm } from './directives/perm'
 import './styles/prototype.css'
 import './styles/app.css'
 
@@ -15,7 +16,7 @@ async function bootstrap() {
     const { installMock } = await import('./api/mock')
     installMock()   // 必须在挂载前安装，确保首屏请求已被拦截
   }
-  createApp(App).use(router).mount('#app')
+  createApp(App).use(router).directive('perm', perm).mount('#app')
 }
 
 bootstrap()
