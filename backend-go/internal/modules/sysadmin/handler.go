@@ -4,11 +4,13 @@ import (
 	"strconv"
 
 	"github.com/casbin/casbin/v2"
+	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
+
 	store "github.com/eplugger/ark/internal/modules/sysadmin/store"
 	"github.com/eplugger/ark/internal/platform/auth"
 	"github.com/eplugger/ark/internal/platform/httpx"
-	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Handler struct {
@@ -98,4 +100,135 @@ func (h *Handler) GetMe(c *gin.Context) {
 		user = map[string]any{"id": d.UserID, "security_level": d.SecurityLevel, "roles": roles}
 	}
 	httpx.WriteOK(c, gin.H{"user": user, "roles": roles, "caps": caps})
+}
+
+// hashPassword 生成 bcrypt(cost 默认) 哈希，供新用户/改密落库。
+func hashPassword(plain string) (string, error) {
+	b, err := bcrypt.GenerateFromPassword([]byte(plain), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func strPtr(s *string) *string { return s }
+
+// CreateUser 建用户：username 租户内唯一（409），口令 bcrypt 入库，roles 逐条绑定。
+func (h *Handler) CreateUser(c *gin.Context) {
+	d := auth.DomainFrom(c)
+	var body struct {
+		Username         string   `json:"username" binding:"required"`
+		RealName         string   `json:"real_name" binding:"required"`
+		Password         string   `json:"password" binding:"required"`
+		Email            *string  `json:"email"`
+		Phone            *string  `json:"phone"`
+		StaffNo          *string  `json:"staff_no"`
+		SecurityLevel    string   `json:"security_level"`
+		EmploymentStatus string   `json:"employment_status"`
+		Roles            []string `json:"roles"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		httpx.WriteErr(c, 400, 40001, "请求参数错误")
+		return
+	}
+	ph, err := hashPassword(body.Password)
+	if err != nil {
+		httpx.WriteErr(c, 500, 50003, "口令加密失败")
+		return
+	}
+	sl := body.SecurityLevel
+	if sl == "" {
+		sl = "INTERNAL"
+	}
+	es := body.EmploymentStatus
+	if es == "" {
+		es = "ONBOARD"
+	}
+	u, err := h.q.CreateUser(c, store.CreateUserParams{
+		Username: body.Username, RealName: body.RealName, PasswordHash: &ph,
+		Email: strPtr(body.Email), Phone: strPtr(body.Phone), StaffNo: strPtr(body.StaffNo),
+		EmploymentStatus: es, SecurityLevel: sl, Status: "ACTIVE",
+		TenantID: d.TenantID, LegalEntityID: nil, CreatorID: d.UserID,
+	})
+	if err != nil {
+		// 23505 = unique_violation（uk_user_username）
+		httpx.WriteErr(c, 409, 40901, "用户名已存在或写入冲突")
+		return
+	}
+	for _, code := range body.Roles {
+		role, err := h.q.GetRoleByCode(c, store.GetRoleByCodeParams{TenantID: d.TenantID, Code: code})
+		if err != nil {
+			continue // 未知角色码忽略
+		}
+		_ = h.q.AssignRole(c, store.AssignRoleParams{UserID: u.ID, RoleID: role.ID, TenantID: d.TenantID})
+	}
+	codes, _ := h.q.ListRoleCodesByUser(c, u.ID)
+	httpx.WriteOK(c, ToAPIUser(u, codes))
+}
+
+// UpdateUser 读旧行→合并可变列→落库；password 给出则重设。
+func (h *Handler) UpdateUser(c *gin.Context) {
+	d := auth.DomainFrom(c)
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	cur, err := h.q.GetUser(c, store.GetUserParams{ID: id, TenantID: d.TenantID})
+	if err != nil {
+		httpx.WriteErr(c, 404, 40401, "用户不存在")
+		return
+	}
+	var body struct {
+		RealName      *string `json:"real_name"`
+		Email         *string `json:"email"`
+		Phone         *string `json:"phone"`
+		SecurityLevel *string `json:"security_level"`
+		Status        *string `json:"status"`
+		Password      *string `json:"password"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		httpx.WriteErr(c, 400, 40001, "请求参数错误")
+		return
+	}
+	realName := cur.RealName
+	if body.RealName != nil {
+		realName = *body.RealName
+	}
+	sl := cur.SecurityLevel
+	if body.SecurityLevel != nil {
+		sl = *body.SecurityLevel
+	}
+	st := cur.Status
+	if body.Status != nil {
+		st = *body.Status
+	}
+	updated, err := h.q.UpdateUser(c, store.UpdateUserParams{
+		ID: id, TenantID: d.TenantID, RealName: realName,
+		Email: body.Email, Phone: body.Phone, SecurityLevel: sl, Status: st,
+	})
+	if err != nil {
+		httpx.WriteErr(c, 500, 50004, "更新失败")
+		return
+	}
+	if body.Password != nil && *body.Password != "" {
+		ph, err := hashPassword(*body.Password)
+		if err == nil {
+			_ = h.q.UpdateUserPassword(c, store.UpdateUserPasswordParams{ID: id, TenantID: d.TenantID, PasswordHash: &ph})
+			updated.PasswordHash = &ph
+		}
+	}
+	codes, _ := h.q.ListRoleCodesByUser(c, id)
+	httpx.WriteOK(c, ToAPIUser(updated, codes))
+}
+
+// DeleteUser 软删（deleted=1 + status=DISABLED）。
+func (h *Handler) DeleteUser(c *gin.Context) {
+	d := auth.DomainFrom(c)
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	if _, err := h.q.GetUser(c, store.GetUserParams{ID: id, TenantID: d.TenantID}); err != nil {
+		httpx.WriteErr(c, 404, 40401, "用户不存在")
+		return
+	}
+	if err := h.q.SoftDeleteUser(c, store.SoftDeleteUserParams{ID: id, TenantID: d.TenantID}); err != nil {
+		httpx.WriteErr(c, 500, 50005, "停用失败")
+		return
+	}
+	httpx.WriteOK(c, gin.H{"id": id, "deleted": true})
 }

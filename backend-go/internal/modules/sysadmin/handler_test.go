@@ -3,15 +3,18 @@ package sysadmin
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/eplugger/ark/internal/platform/auth"
 	"github.com/eplugger/ark/internal/platform/db"
 	"github.com/eplugger/ark/internal/platform/httpx"
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func injectAdmin(c *gin.Context) {
@@ -94,5 +97,42 @@ func TestGetMe_ReturnsCaps(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &env)
 	if len(env.Data.Caps) == 0 {
 		t.Fatalf("R-ADMIN 应有非空 caps: %v", env.Data)
+	}
+}
+
+func TestHashPassword_Verifiable(t *testing.T) {
+	h, err := hashPassword("Admin@123456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h == "Admin@123456" || len(h) < 50 {
+		t.Fatalf("哈希异常: %q", h)
+	}
+	if bcrypt.CompareHashAndPassword([]byte(h), []byte("Admin@123456")) != nil {
+		t.Fatal("bcrypt 往返校验失败")
+	}
+	if bcrypt.CompareHashAndPassword([]byte(h), []byte("wrong")) == nil {
+		t.Fatal("错误口令竟通过")
+	}
+}
+
+func nopCloserString(s string) io.ReadCloser { return io.NopCloser(strings.NewReader(s)) }
+
+func TestCreateUser_DuplicateUsername409(t *testing.T) {
+	e := newTestEngine(t)
+	body := `{"username":"tester1","real_name":"测试员","password":"Test@123456","security_level":"INTERNAL","roles":["R-STAFF"]}`
+	for i := 0; i < 2; i++ {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/api/v1/admin/users", nil)
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Idempotency-Key", "itest-create-1")
+		r.Body = nopCloserString(body)
+		e.ServeHTTP(w, r)
+		if i == 0 && w.Code != 200 {
+			t.Fatalf("首次创建应 200，实得 %d body=%s", w.Code, w.Body.String())
+		}
+		if i == 1 && w.Code != http.StatusConflict {
+			t.Fatalf("重复用户名应 409，实得 %d", w.Code)
+		}
 	}
 }

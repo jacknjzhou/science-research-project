@@ -10,3 +10,7 @@ WHERE ur.user_id = $1
 
 -- name: ListRoleIDsByUser :many
 SELECT ur.role_id FROM sys_user_role ur WHERE ur.user_id = $1;
+
+-- name: GetRoleByCode :one
+SELECT id, code, name, is_builtin, tenant_id, created_at, updated_at
+FROM sys_role WHERE tenant_id = $1 AND code = $2;
