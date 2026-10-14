@@ -73,6 +73,28 @@ func TestAuthMatrix_TransportLayer(t *testing.T) {
 		{"R-AUDITOR", "/api/v1/activities", "GET", true},               // 审计只读（列表）
 		{"R-AUDITOR", "/api/v1/activities/1", "POST", false},           // 审计无写
 		{"R-FINANCE", "/api/v1/activities", "GET", false},              // 财务未获 V 域授权
+		// —— 绩效评价域 M：按动作收敛 ——
+		{"R-MANAGER", "/api/v1/perf/schemes",              "POST", true},  // 建方案
+		{"R-MANAGER", "/api/v1/perf/schemes/1/calculate",  "POST", true},  // 触发计算
+		{"R-MANAGER", "/api/v1/perf/records/1/approve",    "POST", true},  // 审批记录
+		{"R-STAFF",   "/api/v1/perf/me",                   "GET", true},   // 个人视图
+		{"R-STAFF",   "/api/v1/perf/schemes",              "GET", true},   // 读方案
+		{"R-STAFF",   "/api/v1/perf/schemes",              "POST", false}, // 越权建方案→拒
+		{"R-STAFF",   "/api/v1/perf/schemes/1/calculate",  "POST", false}, // 越权计算→拒
+		{"R-STAFF",   "/api/v1/perf/records/1/confirm",    "POST", true},  // 确认本人记录
+		{"R-STAFF",   "/api/v1/perf/records/1/appeal",     "POST", true},  // 申诉
+		{"R-STAFF",   "/api/v1/perf/records/1/approve",    "POST", false}, // 越权审批→拒
+		{"R-LEADER",  "/api/v1/perf/records/1/approve",    "POST", true},  // 领导审批
+		{"R-LEADER",  "/api/v1/perf/records/1/void",       "POST", true},  // 领导作废
+		{"R-LEADER",  "/api/v1/perf/schemes/1/calculate",  "POST", false}, // 领导无 calculate
+		{"R-FINANCE", "/api/v1/perf/payouts",              "POST", true},  // 建发放单
+		{"R-FINANCE", "/api/v1/perf/payouts/1/pay",        "POST", true},  // 打款
+		{"R-FINANCE", "/api/v1/perf/payouts/1/reject",     "POST", true},  // 驳回
+		{"R-FINANCE", "/api/v1/perf/records/1/approve",    "POST", false}, // 财务无记录审批
+		{"R-FINANCE", "/api/v1/perf/schemes/1",            "DELETE", false}, // 财务无方案删除
+		{"R-AUDITOR", "/api/v1/perf/records",              "GET", true},   // 审计只读（全局 GET 覆盖）
+		{"R-AUDITOR", "/api/v1/perf/payouts/1",            "POST", false}, // 审计无写
+		{"R-ADMIN",   "/api/v1/perf/schemes",              "POST", true},  // 超管全局兜底
 		// —— 未知角色：一律拒 ——
 		{"R-NOPE", "/api/v1/auth/me", "GET", false},
 	}

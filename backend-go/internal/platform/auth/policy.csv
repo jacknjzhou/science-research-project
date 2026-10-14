@@ -61,6 +61,28 @@ p, R-LEADER,  /api/v1/activities/*/hold,             POST
 p, R-AUDITOR, /api/v1/activities,                    GET
 p, R-AUDITOR, /api/v1/activities/*,                  GET
 
+# ---- 科研绩效评价域（M）：主管全权、领导审批结果、研究员读写自身、财务发放 ----
+# （R-ADMIN 全局读写、R-AUDITOR 全局只读已由上方通用规则覆盖，此处不重复）
+# 主管：本域全量读写（方案/因子/calculate/activate/记录审批作废/发放/排行）
+p, R-MANAGER, /api/v1/perf/*, GET
+p, R-MANAGER, /api/v1/perf/*, POST
+p, R-MANAGER, /api/v1/perf/*, PUT
+p, R-MANAGER, /api/v1/perf/*, DELETE
+# 领导：读 + 记录审批/作废（结果裁定，不建方案/不触发计算）
+p, R-LEADER,  /api/v1/perf/*, GET
+p, R-LEADER,  /api/v1/perf/records/*/approve, POST
+p, R-LEADER,  /api/v1/perf/records/*/void,    POST
+# 研究员：读本域（数据经 handler 收敛到本人/本租户）+ 确认/申诉本人记录
+p, R-STAFF,   /api/v1/perf/*, GET
+p, R-STAFF,   /api/v1/perf/records/*/confirm, POST
+p, R-STAFF,   /api/v1/perf/records/*/appeal,   POST
+# 财务：读记录/发放 + 建发放单 + approve/pay/reject
+p, R-FINANCE, /api/v1/perf/*, GET
+p, R-FINANCE, /api/v1/perf/payouts,           POST
+p, R-FINANCE, /api/v1/perf/payouts/*/approve, POST
+p, R-FINANCE, /api/v1/perf/payouts/*/pay,     POST
+p, R-FINANCE, /api/v1/perf/payouts/*/reject,  POST
+
 # ---- 每个已认证角色都能读自身身份/能力（前端登录后引导依赖）----
 p, R-STAFF,   /api/v1/auth/me, GET
 p, R-MANAGER, /api/v1/auth/me, GET
