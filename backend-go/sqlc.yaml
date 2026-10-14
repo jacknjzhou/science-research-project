@@ -167,3 +167,43 @@ sql:
             go_type: { type: "time.Time", pointer: true }
           - column: "m_payout.paid_at"
             go_type: { type: "time.Time", pointer: true }
+  - engine: "postgresql"
+    schema: "db/schema/e_schema.sql"
+    queries: "db/query_e"
+    gen:
+      go:
+        package: "estore"
+        out: "internal/modules/project/store"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_pointers_for_null_types: true
+        rename:
+          E_PROJECT: Project
+          E_TASK: Task
+          E_MILESTONE: Milestone
+          E_PROGRESS_REPORT: ProgressReport
+          E_MID_CHECK: MidCheck
+          E_CHANGE_REQUEST: ChangeRequest
+          E_FINAL_ACCEPT: FinalAccept
+          E_HEALTH_HISTORY: HealthHistory
+          "@limit_": Limit
+          "@offset_": Offset
+        overrides:
+          - column: "E_PROJECT.created_at"
+            go_type: "time.Time"
+          - column: "E_PROJECT.updated_at"
+            go_type: "time.Time"
+          - column: "E_PROGRESS_REPORT.submitted_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "E_PROGRESS_REPORT.created_at"
+            go_type: "time.Time"
+          - column: "E_MID_CHECK.created_at"
+            go_type: "time.Time"
+          - column: "E_CHANGE_REQUEST.created_at"
+            go_type: "time.Time"
+          - column: "E_FINAL_ACCEPT.created_at"
+            go_type: "time.Time"
+          - column: "E_MILESTONE.due_date"
+            go_type: { type: "pgtype.Date" }
+          - column: "E_MILESTONE.actual_date"
+            go_type: { type: "pgtype.Date" }
