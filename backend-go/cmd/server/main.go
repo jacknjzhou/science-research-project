@@ -8,6 +8,7 @@ import (
 
 	"github.com/eplugger/ark/internal"
 	"github.com/eplugger/ark/internal/config"
+	"github.com/eplugger/ark/internal/modules/sysadmin"
 	"github.com/eplugger/ark/internal/platform/auth"
 	"github.com/eplugger/ark/internal/platform/db"
 	"github.com/eplugger/ark/internal/platform/migrate"
@@ -56,14 +57,21 @@ func main() {
 	rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr, Password: cfg.RedisPassword})
 	defer rdb.Close()
 
-	// 6) 装配 router 并监听
+	// 6) 登录身份读取器：接库后经 bcrypt 校验真实账号；pool==nil 时留空走 dev 回退。
+	var loginReader auth.UserReader
+	if pool != nil {
+		loginReader = sysadmin.NewAuthReader(pool)
+	}
+
+	// 7) 装配 router 并监听
 	e := internal.Build(internal.RouterDeps{
-		Logger:   l,
-		Cfg:      cfg,
-		Pool:     pool,
-		Redis:    rdb,
-		Enforcer: enf,
-		Spec:     spec,
+		Logger:      l,
+		Cfg:         cfg,
+		Pool:        pool,
+		Redis:       rdb,
+		Enforcer:    enf,
+		Spec:        spec,
+		LoginReader: loginReader,
 	})
 	addr := ":" + strconv.Itoa(cfg.HTTPPort)
 	l.Info("ark-go 启动", zap.String("addr", addr), zap.String("env", cfg.Env))

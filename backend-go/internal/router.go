@@ -25,6 +25,9 @@ type RouterDeps struct {
 	Redis    *redis.Client
 	Enforcer *casbin.Enforcer
 	Spec     *oapi.Spec
+	// LoginReader 为 nil 时登录走内置 ark/ark dev 回退（未接库的单测/冒烟零回归）；
+	// 非 nil 时经 bcrypt 校验真实账号并签发真实数据域 JWT。
+	LoginReader auth.UserReader
 }
 
 // Build 组装 Gin 引擎：横切中间件 + 公开路由 + 受保护 /api/v1（鉴权/幂等/P 竖切）+ passthrough 兜底。
@@ -36,7 +39,7 @@ func Build(d RouterDeps) *gin.Engine {
 	e.GET("/healthz", func(c *gin.Context) {
 		httpx.WriteOK(c, gin.H{"ok": true, "env": d.Cfg.Env})
 	})
-	e.POST("/api/v1/auth/login", auth.HandleLogin(d.Cfg.JWTSecret, d.Cfg.JWTTTLSec))
+	e.POST("/api/v1/auth/login", auth.NewLoginHandler(d.Cfg.JWTSecret, d.Cfg.JWTTTLSec, d.LoginReader))
 
 	// 受保护分组：JWT+Casbin 鉴权 → 写方法幂等
 	api := e.Group("/api/v1")
