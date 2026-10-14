@@ -60,7 +60,7 @@ gen-migrations: ## 由 design/*.sql 生成 golang-migrate 脚本
 
 drift: codegen ## 漂移守卫：重跑生成后若与已提交产物不一致则失败
 	@$(GO) build ./... # 确保生成物可编译
-	git diff --exit-code -- internal/modules/p/store internal/modules/sysadmin/store internal/modules/activity/store internal/modules/performance/store api/gen migrations/000001_init.up.sql migrations/000001_init.down.sql \
+	git diff --exit-code -- internal/modules/p/store internal/modules/sysadmin/store internal/modules/activity/store internal/modules/performance/store internal/modules/project/store api/gen migrations/000001_init.up.sql migrations/000001_init.down.sql \
 	  || (echo "codegen 产物与源不一致：请 make codegen 后提交"; exit 1)
 
 lint: ## golangci-lint（govet/staticcheck/errcheck/ineffassign/unused + goimports）
