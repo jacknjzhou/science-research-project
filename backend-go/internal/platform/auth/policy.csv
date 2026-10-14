@@ -1,4 +1,46 @@
+# 传输层 API 鉴权策略（Casbin；model=keyMatch2，obj 为完整请求路径含 /api/v1 前缀）。
+# 公开：POST /api/v1/auth/login —— 不进受保护组、不在此表。
+# 铁律：U 管理写路由仅 R-ADMIN；R-AUDITOR 全量只读；每个已认证角色都能 GET /auth/me。
+
+# ---- 超级管理员：全域读写（含 U 管理、状态变更）----
 p, R-ADMIN, /api/v1/*, GET
 p, R-ADMIN, /api/v1/*, POST
-p, R-STAFF, /api/v1/apply/*, GET
-p, R-STAFF, /api/v1/apply/*, POST
+p, R-ADMIN, /api/v1/*, PUT
+p, R-ADMIN, /api/v1/*, DELETE
+
+# ---- 审计员：只读（业务 + 管理均不可变更）----
+p, R-AUDITOR, /api/v1/*, GET
+
+# ---- 申报域：研究员读写、主管可改、领导审批 ----
+p, R-STAFF,   /api/v1/apply/*, GET
+p, R-STAFF,   /api/v1/apply/*, POST
+p, R-MANAGER, /api/v1/apply/*, GET
+p, R-MANAGER, /api/v1/apply/*, POST
+p, R-MANAGER, /api/v1/apply/*, PUT
+p, R-LEADER,  /api/v1/apply/*, GET
+p, R-LEADER,  /api/v1/apply/*, PUT
+
+# ---- 经费/报销：财务读写 ----
+p, R-FINANCE, /api/v1/expense/*, GET
+p, R-FINANCE, /api/v1/expense/*, POST
+p, R-FINANCE, /api/v1/expense/*, PUT
+p, R-FINANCE, /api/v1/apply/*, GET
+
+# ---- 评审专家：读申报 + 提交评审结论 ----
+p, R-EXPERT,  /api/v1/apply/*, GET
+p, R-EXPERT,  /api/v1/review/*, GET
+p, R-EXPERT,  /api/v1/review/*, POST
+
+# ---- 伦理委员会：读申报 + 伦理批复 ----
+p, R-ETHICS,  /api/v1/apply/*, GET
+p, R-ETHICS,  /api/v1/ethics/*, GET
+p, R-ETHICS,  /api/v1/ethics/*, POST
+
+# ---- 每个已认证角色都能读自身身份/能力（前端登录后引导依赖）----
+p, R-STAFF,   /api/v1/auth/me, GET
+p, R-MANAGER, /api/v1/auth/me, GET
+p, R-LEADER,  /api/v1/auth/me, GET
+p, R-FINANCE, /api/v1/auth/me, GET
+p, R-AUDITOR, /api/v1/auth/me, GET
+p, R-EXPERT,  /api/v1/auth/me, GET
+p, R-ETHICS,  /api/v1/auth/me, GET
