@@ -58,6 +58,21 @@ func TestAuthMatrix_TransportLayer(t *testing.T) {
 		{"R-EXPERT", "/api/v1/review/tasks/3", "POST", true},
 		{"R-EXPERT", "/api/v1/expense/claims", "POST", false},
 		{"R-ETHICS", "/api/v1/ethics/reviews", "POST", true},
+		// —— 学术活动域 V：按角色收敛 ——
+		{"R-STAFF", "/api/v1/activities", "POST", true},                // 建活动
+		{"R-STAFF", "/api/v1/activities/1/submit", "POST", true},       // 提交
+		{"R-STAFF", "/api/v1/activities/1/participants", "POST", true}, // 加参与人
+		{"R-STAFF", "/api/v1/activities/1/approve", "POST", false},     // 越权审批→拒
+		{"R-STAFF", "/api/v1/activities/1/hold", "POST", false},        // 越权挂起→拒
+		{"R-STAFF", "/api/v1/activities/1", "DELETE", false},           // 越权删除→拒
+		{"R-MANAGER", "/api/v1/activities/1/approve", "POST", true},    // 主管审批
+		{"R-MANAGER", "/api/v1/activities/1", "DELETE", true},          // 主管删除
+		{"R-LEADER", "/api/v1/activities/1/approve", "POST", true},     // 领导审批
+		{"R-LEADER", "/api/v1/activities/1", "DELETE", false},          // 领导不可删
+		{"R-LEADER", "/api/v1/activities/1/cancel", "POST", false},     // 领导无 cancel
+		{"R-AUDITOR", "/api/v1/activities", "GET", true},               // 审计只读（列表）
+		{"R-AUDITOR", "/api/v1/activities/1", "POST", false},           // 审计无写
+		{"R-FINANCE", "/api/v1/activities", "GET", false},              // 财务未获 V 域授权
 		// —— 未知角色：一律拒 ——
 		{"R-NOPE", "/api/v1/auth/me", "GET", false},
 	}

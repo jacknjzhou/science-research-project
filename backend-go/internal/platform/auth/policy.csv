@@ -36,6 +36,31 @@ p, R-ETHICS,  /api/v1/apply/*, GET
 p, R-ETHICS,  /api/v1/ethics/*, GET
 p, R-ETHICS,  /api/v1/ethics/*, POST
 
+# ---- 学术活动域（V）：研究员建/编/提交、主管全权、领导审批、审计只读 ----
+# 研究员：读列表/详情、创建、编辑、参与人维护、提交（submit）；不得 approve/hold/archive/cancel/delete
+p, R-STAFF,   /api/v1/activities,                    GET
+p, R-STAFF,   /api/v1/activities,                    POST
+p, R-STAFF,   /api/v1/activities/*,                  GET
+p, R-STAFF,   /api/v1/activities/*,                  PUT
+p, R-STAFF,   /api/v1/activities/*/submit,           POST
+p, R-STAFF,   /api/v1/activities/*/participants,     POST
+p, R-STAFF,   /api/v1/activities/*/participants/*,   DELETE
+# 主管：本域全量读写（含 approve/hold/archive/cancel、删除）
+p, R-MANAGER, /api/v1/activities,                    GET
+p, R-MANAGER, /api/v1/activities,                    POST
+p, R-MANAGER, /api/v1/activities/*,                  GET
+p, R-MANAGER, /api/v1/activities/*,                  POST
+p, R-MANAGER, /api/v1/activities/*,                  PUT
+p, R-MANAGER, /api/v1/activities/*,                  DELETE
+# 领导：读 + 审批类动作（approve / hold）
+p, R-LEADER,  /api/v1/activities,                    GET
+p, R-LEADER,  /api/v1/activities/*,                  GET
+p, R-LEADER,  /api/v1/activities/*/approve,          POST
+p, R-LEADER,  /api/v1/activities/*/hold,             POST
+# 审计员：本域只读
+p, R-AUDITOR, /api/v1/activities,                    GET
+p, R-AUDITOR, /api/v1/activities/*,                  GET
+
 # ---- 每个已认证角色都能读自身身份/能力（前端登录后引导依赖）----
 p, R-STAFF,   /api/v1/auth/me, GET
 p, R-MANAGER, /api/v1/auth/me, GET
