@@ -119,3 +119,30 @@ func TestGenerateUp_NoForwardReferences(t *testing.T) {
 		}
 	}
 }
+
+// TestGenerateUp_InstallsPgTrgmBeforeUse 守卫 pg_trgm 扩展在 gin_trgm_ops 索引之前建。
+// postgres:15 镜像已带 contrib 但扩展需显式 CREATE；一旦 design 加了 trigram 索引忘配扩展，
+// docker compose 迁移会报 `operator class "gin_trgm_ops" does not exist for access method "gin"`。
+// 只要 up.sql 里 `CREATE EXTENSION ... pg_trgm` 首次出现位置早于 `gin_trgm_ops` 首次出现即安全。
+func TestGenerateUp_InstallsPgTrgmBeforeUse(t *testing.T) {
+	designDir := os.Getenv("DESIGN_DIR")
+	if designDir == "" {
+		designDir = "../../design"
+	}
+	up, err := GenerateUp(designDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reExt := regexp.MustCompile(`(?i)CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?pg_trgm`)
+	idxExt := reExt.FindStringIndex(up)
+	idxUse := strings.Index(up, "gin_trgm_ops")
+	if idxUse < 0 {
+		return // 本版本 design 暂未用 trigram，视为通过；未来加了会由下面分支拦
+	}
+	if idxExt == nil {
+		t.Fatalf("up.sql 出现 gin_trgm_ops 索引却无 `CREATE EXTENSION pg_trgm`——docker compose 首启动必报 operator class not exist")
+	}
+	if idxExt[0] > idxUse {
+		t.Fatalf("CREATE EXTENSION pg_trgm 位置(%d)晚于首个 gin_trgm_ops 使用(%d)——扩展必须先于依赖它的索引建立", idxExt[0], idxUse)
+	}
+}
