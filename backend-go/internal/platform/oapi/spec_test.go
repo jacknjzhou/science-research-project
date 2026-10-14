@@ -2,6 +2,7 @@ package oapi
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -73,8 +74,23 @@ func TestSpec_LoadCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(s.Docs) != 11 {
-		t.Fatalf("期望加载 11 份 *.openapi.yaml，实际 %d", len(s.Docs))
+	// 不变量：LoadDir 应加载 design/ 下所有 *.openapi.yaml（不硬编码份数，避免新增模块时误红）。
+	entries, err := os.ReadDir(designDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := 0
+	for _, e := range entries {
+		if !e.IsDir() && filepath.Ext(e.Name()) == ".yaml" && len(e.Name()) >= len(".openapi.yaml") &&
+			e.Name()[len(e.Name())-len(".openapi.yaml"):] == ".openapi.yaml" {
+			want++
+		}
+	}
+	if want == 0 {
+		t.Fatal("design 目录未发现任何 *.openapi.yaml")
+	}
+	if len(s.Docs) != want {
+		t.Fatalf("期望加载 %d 份 *.openapi.yaml，实际 %d", want, len(s.Docs))
 	}
 	t.Logf("LoadDir: docs=%d paths=%d operations=%d", len(s.Docs), s.Paths(), s.Ops())
 	if s.Ops() == 0 {
