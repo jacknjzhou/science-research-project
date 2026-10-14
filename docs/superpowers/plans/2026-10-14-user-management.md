@@ -989,6 +989,8 @@ cd backend-go && GOTOOLCHAIN=go1.23.4 go run github.com/sqlc-dev/sqlc/cmd/sqlc@v
 ```
 预期：无输出/无报错即成功；`ls internal/modules/sysadmin/store/` 见生成文件。
 
+> **执行期实测坑（Windows）**：本仓库现有**两个** engine 块（P 的 `store` + `sysstore`），sqlc v1.27 用 errgroup 并发为每块各实例化 go-pgquery 的 wazero 模块、每块预留约 4 GiB 线性内存，双开≈8 GiB。空闲虚拟提交不足时其中一个 `VirtualAlloc` 被拒 → `fatal error: out of memory (errno=1455)`（非语法问题）。规避：串行化实例化 `GOTOOLCHAIN=go1.23.4 GOMAXPROCS=1 go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.27.0 generate`（同时只存在一个 4 GiB 预留）。生成结果与并发一致，不改 schema/queries 语义。
+
 - [ ] **步骤 2：校验产物可编译**
 
 运行：`cd backend-go && go build ./internal/modules/sysadmin/store/`
