@@ -5,6 +5,7 @@ import (
 
 	"github.com/casbin/casbin/v2"
 	"github.com/eplugger/ark/internal/config"
+	"github.com/eplugger/ark/internal/modules/activity"
 	"github.com/eplugger/ark/internal/modules/p"
 	"github.com/eplugger/ark/internal/modules/sysadmin"
 	"github.com/eplugger/ark/internal/platform/auth"
@@ -51,6 +52,7 @@ func Build(d RouterDeps) *gin.Engine {
 	if d.Pool != nil {
 		p.Register(api, p.NewHandler(d.Pool))
 		sysadmin.Register(api, sysadmin.NewHandler(d.Pool, d.Enforcer))
+		activity.Register(api, activity.NewHandler(d.Pool))
 	}
 
 	// 兜底：命中契约但未手工实现的路由 → passthrough（NoRoute 不经分组中间件，M0 可接受）
