@@ -34,3 +34,43 @@ sql:
               pointer: true
           - column: "p_application.total_budget"
             go_type: "string"
+  - engine: "postgresql"
+    # 第二生成块：U 仓储。独立 schema/queries/out，与 P 块并存；package=sysstore。
+    schema: "db/schema/sys_schema.sql"
+    queries: "db/query_sys"
+    gen:
+      go:
+        package: "sysstore"
+        out: "internal/modules/sysadmin/store"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_pointers_for_null_types: true
+        rename:
+          sys_user: SysUser
+          sys_role: SysRole
+          sys_user_role: SysUserRole
+          "@limit_": Limit
+          "@offset_": Offset
+        overrides:
+          - column: "sys_user.created_at"
+            go_type: "time.Time"
+          - column: "sys_user.updated_at"
+            go_type: "time.Time"
+          - column: "sys_user.legal_entity_id"
+            go_type:
+              type: "int64"
+              pointer: true
+          - column: "sys_user.modifier_id"
+            go_type:
+              type: "int64"
+              pointer: true
+          - column: "sys_role.created_at"
+            go_type: "time.Time"
+          - column: "sys_role.updated_at"
+            go_type: "time.Time"
+          - column: "sys_user_role.granted_at"
+            go_type: "time.Time"
+          - column: "sys_user_role.expires_at"
+            go_type:
+              type: "time.Time"
+              pointer: true
