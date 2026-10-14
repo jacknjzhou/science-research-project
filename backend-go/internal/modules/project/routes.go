@@ -11,7 +11,6 @@ func Register(r gin.IRoutes, h *Handler) {
 	r.GET("/project/:id", h.GetProject)
 	r.GET("/project/:id/tasks", h.ListTasks)
 	r.PUT("/project/:id/tasks/:taskId", h.UpdateTask)
-	r.GET("/project/:id/milestones", h.ListMilestones)
 	r.POST("/project/:id/progress-report", h.CreateProgressReport)
 	r.POST("/project/:id/mid-check", h.CreateMidCheck)
 	r.POST("/project/:id/change-request", h.CreateChangeRequest)
