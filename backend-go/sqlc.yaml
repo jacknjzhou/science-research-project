@@ -113,3 +113,57 @@ sql:
             go_type: "time.Time"
           - column: "v_activity_review.acted_at"
             go_type: "time.Time"
+  - engine: "postgresql"
+    # 第四生成块：M 仓储（绩效评价）。独立 schema/queries/out；package=mstore。
+    # 跨读 R/F/E/T 的最小列已并入 m_schema.sql（仅编译期解析用，运行时打真库）。
+    schema: "db/schema/m_schema.sql"
+    queries: "db/query_m"
+    gen:
+      go:
+        package: "mstore"
+        out: "internal/modules/performance/store"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_pointers_for_null_types: true
+        rename:
+          m_scheme: Scheme
+          m_scheme_factor: SchemeFactor
+          m_record: Record
+          m_record_item: RecordItem
+          m_payout: Payout
+          "@limit_": Limit
+          "@offset_": Offset
+        overrides:
+          # 时间戳 → time.Time/*time.Time（供 mapper fmtTime/fmtTimePtr 直接吃）。
+          # 关键：NUMERIC 列**不做** →string override——保持 sqlc/pgx 原生 pgtype.Numeric。
+          # 原因见下注：entity 查询用 SELECT */RETURNING *（返回 model），若把 NUMERIC 钉成
+          # string 会让 model 字段变 string，而 `SELECT *` 回传 numeric OID，pgx 向 string 扫描未经验证；
+          # 保持 pgtype.Numeric（原生可空类型，扫描恒安全），金额→契约 string 在 mapper 用 numDec() 格式化。
+          - column: "m_scheme.created_at"
+            go_type: "time.Time"
+          - column: "m_scheme.updated_at"
+            go_type: "time.Time"
+          - column: "m_scheme_factor.created_at"
+            go_type: "time.Time"
+          - column: "m_scheme_factor.updated_at"
+            go_type: "time.Time"
+          - column: "m_record.created_at"
+            go_type: "time.Time"
+          - column: "m_record.updated_at"
+            go_type: "time.Time"
+          - column: "m_record.calc_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "m_record.confirmed_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "m_record.approve_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "m_record_item.created_at"
+            go_type: "time.Time"
+          - column: "m_payout.created_at"
+            go_type: "time.Time"
+          - column: "m_payout.updated_at"
+            go_type: "time.Time"
+          - column: "m_payout.approved_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "m_payout.paid_at"
+            go_type: { type: "time.Time", pointer: true }
