@@ -1,0 +1,4 @@
+p, R-ADMIN, /api/v1/*, GET
+p, R-ADMIN, /api/v1/*, POST
+p, R-STAFF, /api/v1/apply/*, GET
+p, R-STAFF, /api/v1/apply/*, POST
