@@ -207,3 +207,38 @@ sql:
             go_type: { type: "pgtype.Date" }
           - column: "e_milestone.actual_date"
             go_type: { type: "pgtype.Date" }
+  - engine: "postgresql"
+    # 第五生成块：R 仓储（科研成果）。独立 schema/queries/out；package=rstore。
+    # 铁律（Phase 1 血泪教训）：DDL 里 CREATE TABLE R_OUTPUT 未加引号，sqlc 解析时折成小写存内部标识符，
+    # 故 rename/overrides 的 key 必须小写；大写 key 静默 no-op，model 会落到默认驼峰 ROutput 而非 Output。
+    schema: "db/schema/r_schema.sql"
+    queries: "db/query_r"
+    gen:
+      go:
+        package: "rstore"
+        out: "internal/modules/output/store"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_pointers_for_null_types: true
+        rename:
+          r_output: Output
+          r_claim_record: ClaimRecord
+          r_output_project: OutputProject
+          r_metric_snapshot: MetricSnapshot
+          "@limit_": Limit
+          "@offset_": Offset
+        overrides:
+          # created_at/updated_at → time.Time（供 mapper fmtTime 直接吃）；action_at 同理。
+          # NUMERIC（match_confidence/contribution_pct/impact_factor/confidence）保持原生 pgtype.Numeric，
+          # 金额/置信度→契约 string 在 mapper 用 numStrOrNil() 处理（勿在 sqlc 层钉 string）。
+          # DATE（publish_date）保持 pgtype.Date（mapper dateStr）。
+          - column: "r_output.created_at"
+            go_type: "time.Time"
+          - column: "r_output.updated_at"
+            go_type: "time.Time"
+          - column: "r_claim_record.created_at"
+            go_type: "time.Time"
+          - column: "r_claim_record.updated_at"
+            go_type: "time.Time"
+          - column: "r_claim_record.action_at"
+            go_type: "time.Time"
