@@ -26,3 +26,12 @@ func TestLoad_DefaultsAndEnv(t *testing.T) {
 		t.Fatal("JWTTTLSec 应有默认值")
 	}
 }
+
+func TestLoad_AuthPaths(t *testing.T) {
+	t.Setenv("ARK_AUTH_MODEL_PATH", "")
+	t.Setenv("ARK_AUTH_POLICY_PATH", "")
+	c := Load()
+	if c.AuthModelPath == "" || c.AuthPolicyPath == "" {
+		t.Fatalf("auth 路径应有默认值: model=%q policy=%q", c.AuthModelPath, c.AuthPolicyPath)
+	}
+}

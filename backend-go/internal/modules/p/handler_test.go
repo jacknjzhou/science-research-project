@@ -32,7 +32,9 @@ func newTestEngine(t *testing.T) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	e := gin.New()
 	e.Use(httpx.TraceID(), injectDomain)
-	Register(e, NewHandler(pool))
+	// Task 12 起 Register 不再自带 /api/v1 前缀，改由调用方分组提供，整路径仍为 /api/v1/apply/...
+	api := e.Group("/api/v1")
+	Register(api, NewHandler(pool))
 	return e
 }
 

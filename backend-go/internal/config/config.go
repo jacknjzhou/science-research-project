@@ -6,15 +6,17 @@ import (
 )
 
 type Config struct {
-	Env           string
-	HTTPPort      int
-	DatabaseURL   string
-	RedisAddr     string
-	RedisPassword string
-	JWTSecret     string
-	JWTTTLSec     int64
-	MigrationsDir string
-	DesignDir     string
+	Env            string
+	HTTPPort       int
+	DatabaseURL    string
+	RedisAddr      string
+	RedisPassword  string
+	JWTSecret      string
+	JWTTTLSec      int64
+	MigrationsDir  string
+	DesignDir      string
+	AuthModelPath  string
+	AuthPolicyPath string
 }
 
 func get(key, def string) string {
@@ -35,14 +37,16 @@ func getInt(key string, def int) int {
 
 func Load() *Config {
 	return &Config{
-		Env:           get("ARK_ENV", "dev"),
-		HTTPPort:      getInt("ARK_HTTP_PORT", 8787),
-		DatabaseURL:   os.Getenv("ARK_DATABASE_URL"),
-		RedisAddr:     get("ARK_REDIS_ADDR", "127.0.0.1:6379"),
-		RedisPassword: get("ARK_REDIS_PASSWORD", ""),
-		JWTSecret:     get("ARK_JWT_SECRET", "dev-secret-change-me"),
-		JWTTTLSec:     int64(getInt("ARK_JWT_TTL_SEC", 7200)),
-		MigrationsDir: get("ARK_MIGRATIONS_DIR", "./migrations"),
-		DesignDir:     get("DESIGN_DIR", "../design"),
+		Env:            get("ARK_ENV", "dev"),
+		HTTPPort:       getInt("ARK_HTTP_PORT", 8787),
+		DatabaseURL:    os.Getenv("ARK_DATABASE_URL"),
+		RedisAddr:      get("ARK_REDIS_ADDR", "127.0.0.1:6379"),
+		RedisPassword:  get("ARK_REDIS_PASSWORD", ""),
+		JWTSecret:      get("ARK_JWT_SECRET", "dev-secret-change-me"),
+		JWTTTLSec:      int64(getInt("ARK_JWT_TTL_SEC", 7200)),
+		MigrationsDir:  get("ARK_MIGRATIONS_DIR", "./migrations"),
+		DesignDir:      get("DESIGN_DIR", "../design"),
+		AuthModelPath:  get("ARK_AUTH_MODEL_PATH", "./internal/platform/auth/model.conf"),
+		AuthPolicyPath: get("ARK_AUTH_POLICY_PATH", "./internal/platform/auth/policy.csv"),
 	}
 }
