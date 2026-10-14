@@ -83,6 +83,27 @@ p, R-FINANCE, /api/v1/perf/payouts/*/approve, POST
 p, R-FINANCE, /api/v1/perf/payouts/*/pay,     POST
 p, R-FINANCE, /api/v1/perf/payouts/*/reject,  POST
 
+# ---- 项目过程管理域（E）：PI/成员读写自身项目、主管/领导审批变更、领导/财务/审计只读 ----
+# R-ADMIN 通配 + R-AUDITOR 全局只读沿用既有规则；此处仅列 E 域独立动作。
+# PI/研究员：本项目分页/详情/任务/里程碑读 + 进度上报 + 中检申请 + 变更申请 + 结题申请 + 任务更新
+p, R-STAFF,   /api/v1/project/mine,                            GET
+p, R-STAFF,   /api/v1/project/*,                               GET
+p, R-STAFF,   /api/v1/project/*/tasks/*,                       PUT
+p, R-STAFF,   /api/v1/project/*/progress-report,               POST
+p, R-STAFF,   /api/v1/project/*/mid-check,                     POST
+p, R-STAFF,   /api/v1/project/*/change-request,                POST
+p, R-STAFF,   /api/v1/project/*/final-accept,                  POST
+# 主管：全域读 + 变更审批 + 建中检（可跨 PI 视角）
+p, R-MANAGER, /api/v1/project/*,                               GET
+p, R-MANAGER, /api/v1/project/*/change-request/*/approve,      POST
+p, R-MANAGER, /api/v1/project/*/mid-check,                     POST
+# 领导：读 + 变更审批
+p, R-LEADER,  /api/v1/project/*,                               GET
+p, R-LEADER,  /api/v1/project/*/change-request/*/approve,      POST
+# 财务：读项目摘要（预算执行/决算对齐）
+p, R-FINANCE, /api/v1/project/*,                               GET
+# 审计：读全（既有通用规则 R-AUDITOR /api/v1/* GET 已覆盖，此处不重复）
+
 # ---- 每个已认证角色都能读自身身份/能力（前端登录后引导依赖）----
 p, R-STAFF,   /api/v1/auth/me, GET
 p, R-MANAGER, /api/v1/auth/me, GET
