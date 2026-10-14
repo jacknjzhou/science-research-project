@@ -160,7 +160,7 @@ func TestGenerateUp_UniqueIndexNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reIdx := regexp.MustCompile(`(?i)CREATE\s+(?:UNIQUE\s+)?INDEX(?:\s+CONCURRENTLY)?\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][\w]*)`)
+	reIdx := regexp.MustCompile(`(?i)CREATE\s+(?:UNIQUE\s+)?INDEX(?:\s+CONCURRENTLY)?\s+(?:IF\s+NOT\s+EXISTS)?\s+([A-Za-z_][\w]*)`)
 	lines := strings.Split(up, "\n")
 	seen := map[string]int{} // lower(name) -> first line number (1-based)
 	for i, raw := range lines {
@@ -177,4 +177,247 @@ func TestGenerateUp_UniqueIndexNames(t *testing.T) {
 			seen[name] = i + 1
 		}
 	}
+}
+
+// splitStatements 按 `;` 结束符把 up.sql 切成一条条语句；跳过纯注释与空行。
+// 简化：不处理 $$ 里的函数体（design 无 PL/pgSQL）与字符串里的分号。够 DDL 场景。
+func splitStatements(up string) []struct {
+	start int // 1-based 行号
+	sql   string
+} {
+	var out []struct {
+		start int
+		sql   string
+	}
+	lines := strings.Split(up, "\n")
+	var buf []string
+	start := 0
+	for i, raw := range lines {
+		s := strings.TrimSpace(raw)
+		// 去行内 -- 之后
+		if idx := strings.Index(s, "--"); idx >= 0 {
+			s = strings.TrimSpace(s[:idx])
+		}
+		if s == "" {
+			continue
+		}
+		if len(buf) == 0 {
+			start = i + 1
+		}
+		buf = append(buf, s)
+		if strings.HasSuffix(s, ";") {
+			out = append(out, struct {
+				start int
+				sql   string
+			}{start, strings.Join(buf, " ")})
+			buf = nil
+		}
+	}
+	if len(buf) > 0 {
+		out = append(out, struct {
+			start int
+			sql   string
+		}{start, strings.Join(buf, " ")})
+	}
+	return out
+}
+
+// TestGenerateUp_UniqueRelationNames 守卫 up.sql 内 pg_class/pg_namespace 全局对象名唯一：
+// TABLE / VIEW / MATERIALIZED VIEW / SEQUENCE / TYPE / DOMAIN / FUNCTION / SCHEMA。
+// PostgreSQL 这些对象都住在 schema namespace，同名第二次 CREATE 报 `relation "x" already exists`。
+func TestGenerateUp_UniqueRelationNames(t *testing.T) {
+	designDir := os.Getenv("DESIGN_DIR")
+	if designDir == "" {
+		designDir = "../../design"
+	}
+	up, err := GenerateUp(designDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 顺序敏感：先长句避免 "MATERIALIZED VIEW" 被 "VIEW" 抢匹配
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)^CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+([A-Za-z_][\w\.]*)`),
+		regexp.MustCompile(`(?i)^CREATE\s+(?:UNIQUE\s+)?TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+([A-Za-z_][\w\.]*)`),
+		regexp.MustCompile(`(?i)^CREATE\s+MATERIALIZED\s+VIEW(?:\s+IF\s+NOT\s+EXISTS)?\s+([A-Za-z_][\w\.]*)`),
+		regexp.MustCompile(`(?i)^CREATE\s+(?:OR\s+REPLACE\s+)?VIEW(?:\s+IF\s+NOT\s+EXISTS)?\s+([A-Za-z_][\w\.]*)`),
+		regexp.MustCompile(`(?i)^CREATE\s+SEQUENCE(?:\s+IF\s+NOT\s+EXISTS)?\s+([A-Za-z_][\w\.]*)`),
+		regexp.MustCompile(`(?i)^CREATE\s+TYPE(?:\s+IF\s+NOT\s+EXISTS)?\s+([A-Za-z_][\w\.]*)`),
+		regexp.MustCompile(`(?i)^CREATE\s+DOMAIN(?:\s+IF\s+NOT\s+EXISTS)?\s+([A-Za-z_][\w\.]*)`),
+		regexp.MustCompile(`(?i)^CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+([A-Za-z_][\w\.]*)`),
+		regexp.MustCompile(`(?i)^CREATE\s+SCHEMA(?:\s+IF\s+NOT\s+EXISTS)?\s+([A-Za-z_][\w\.]*)`),
+	}
+	seen := map[string]int{}
+	for _, st := range splitStatements(up) {
+		head := strings.TrimSpace(st.sql)
+		for _, rx := range patterns {
+			m := rx.FindStringSubmatch(head)
+			if m == nil {
+				continue
+			}
+			name := strings.ToLower(m[1])
+			if prev, dup := seen[name]; dup {
+				t.Fatalf("重复对象名 %q：首次 up.sql:%d，重复 up.sql:%d —— schema namespace 冲突\n  A: %s\n  B: %s",
+					m[1], prev, st.start, head[:80], head[:80])
+			}
+			seen[name] = st.start
+			break
+		}
+	}
+}
+
+// splitTopLevelCommas 按顶层逗号切分 CREATE TABLE 括号内的列/约束定义。
+func splitTopLevelCommas(s string) []string {
+	depth := 0
+	var parts []string
+	var cur strings.Builder
+	for _, ch := range s {
+		switch ch {
+		case '(':
+			depth++
+			cur.WriteRune(ch)
+		case ')':
+			depth--
+			cur.WriteRune(ch)
+		case ',':
+			if depth == 0 {
+				parts = append(parts, cur.String())
+				cur.Reset()
+			} else {
+				cur.WriteRune(ch)
+			}
+		default:
+			cur.WriteRune(ch)
+		}
+	}
+	if strings.TrimSpace(cur.String()) != "" {
+		parts = append(parts, cur.String())
+	}
+	return parts
+}
+
+// 常见 PG 类型前缀（用于判定一行是否是 "colname <TYPE> ..." 形式的列定义）。
+var typePrefix = regexp.MustCompile(`(?i)^(VARCHAR|CHAR|CHARACTER|INT|INTEGER|BIGINT|SMALLINT|SERIAL|BIGSERIAL|NUMERIC|DECIMAL|REAL|DOUBLE|FLOAT|TEXT|DATE|TIME|TIMESTAMP|TIMESTAMPTZ|INTERVAL|MONEY|XML|JSON|JSONB|BYTEA|UUID|BOOLEAN|INET|CIDR|MACADDR|TSVECTOR|TSQUERY|POINT|LINE|LSEG|BOX|PATH|POLYGON|CIRCLE)\b`)
+
+// tableLevelStarters 是 CREATE TABLE 内以关键字起头的表级子句（非列）。
+var tableLevelStarters = map[string]bool{
+	"CHECK": true, "CONSTRAINT": true, "UNIQUE": true, "PRIMARY": true,
+	"FOREIGN": true, "EXCLUDE": true, "LIKE": true, "INDEX": true,
+}
+
+// TestGenerateUp_NoDuplicateColumns 守卫同一 CREATE TABLE 内列名不重复。
+// PG 报 `column "x" specified more than once`。
+func TestGenerateUp_NoDuplicateColumns(t *testing.T) {
+	designDir := os.Getenv("DESIGN_DIR")
+	if designDir == "" {
+		designDir = "../../design"
+	}
+	up, err := GenerateUp(designDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reCreateTblBody := regexp.MustCompile(`(?is)^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][\w\.]*)\s*\((.*)\)\s*;?\s*$`)
+	for _, st := range splitStatements(up) {
+		m := reCreateTblBody.FindStringSubmatch(strings.TrimSpace(st.sql))
+		if m == nil {
+			continue
+		}
+		tbl := m[1]
+		body := m[2]
+		seen := map[string]int{}
+		for _, part := range splitTopLevelCommas(body) {
+			s := strings.TrimSpace(part)
+			if s == "" {
+				continue
+			}
+			first := regexp.MustCompile(`^([A-Za-z_][\w]*)`).FindStringSubmatch(s)
+			if first == nil {
+				continue
+			}
+			tok := first[1]
+			if tableLevelStarters[strings.ToUpper(tok)] {
+				continue
+			}
+			// 判定为列定义：token 后必须紧跟类型前缀
+			rest := strings.TrimSpace(s[len(tok):])
+			if !typePrefix.MatchString(rest) {
+				continue
+			}
+			key := strings.ToLower(tok)
+			if prev, dup := seen[key]; dup {
+				t.Fatalf("表 %s 内列名 %q 重复出现（首次位置 %d 段，再遇）——PG 会报 column specified more than once\n  body片段: %s",
+					tbl, tok, prev, s[:min(80, len(s))])
+			}
+			seen[key] = len(seen) + 1
+		}
+	}
+}
+
+// TestGenerateUp_NoReservedIdentifiers 守卫 CREATE TABLE 的表名与列名不裸用 PG 保留字。
+// PG 报 `syntax error at or near "order"` 或列名歧义。
+func TestGenerateUp_NoReservedIdentifiers(t *testing.T) {
+	designDir := os.Getenv("DESIGN_DIR")
+	if designDir == "" {
+		designDir = "../../design"
+	}
+	up, err := GenerateUp(designDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved := map[string]bool{}
+	for _, w := range []string{
+		"order", "user", "group", "table", "check", "view", "index", "function",
+		"trigger", "constraint", "primary", "unique", "references", "default",
+		"select", "from", "where", "all", "and", "or", "not", "in", "is", "as", "on",
+		"limit", "offset", "fetch", "only", "column", "into", "update", "delete", "insert",
+	} {
+		reserved[w] = true
+	}
+	reCreateTblBody := regexp.MustCompile(`(?is)^CREATE\s+TABLE\s+([A-Za-z_][\w\.]*)\s*\((.*)\)\s*;?\s*$`)
+	for _, st := range splitStatements(up) {
+		head := strings.TrimSpace(st.sql)
+		m := reCreateTblBody.FindStringSubmatch(head)
+		if m == nil {
+			continue
+		}
+		tbl := m[1]
+		// 表名保留字（末段 leaf）
+		leaf := strings.ToLower(tbl)
+		if i := strings.LastIndex(leaf, "."); i >= 0 {
+			leaf = leaf[i+1:]
+		}
+		if reserved[leaf] {
+			t.Fatalf("表名裸用保留字 %q (up.sql:%d) —— 需加双引号或改名", tbl, st.start)
+		}
+		body := m[2]
+		for _, part := range splitTopLevelCommas(body) {
+			s := strings.TrimSpace(part)
+			if s == "" {
+				continue
+			}
+			first := regexp.MustCompile(`^([A-Za-z_][\w]*)`).FindStringSubmatch(s)
+			if first == nil {
+				continue
+			}
+			tok := first[1]
+			if tableLevelStarters[strings.ToUpper(tok)] {
+				continue
+			}
+			if !reserved[strings.ToLower(tok)] {
+				continue
+			}
+			rest := strings.TrimSpace(s[len(tok):])
+			if !typePrefix.MatchString(rest) {
+				continue
+			}
+			t.Fatalf("表 %s 内列名裸用保留字 %q (up.sql:%d) —— 需加双引号或改名\n  %s",
+				tbl, tok, st.start, s[:min(80, len(s))])
+		}
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
