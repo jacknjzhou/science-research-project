@@ -17,6 +17,11 @@ type Config struct {
 	DesignDir      string
 	AuthModelPath  string
 	AuthPolicyPath string
+	S3Endpoint     string
+	S3AccessKey    string
+	S3SecretKey    string
+	S3Bucket       string
+	S3UseSSL       bool
 }
 
 func get(key, def string) string {
@@ -48,5 +53,10 @@ func Load() *Config {
 		DesignDir:      get("DESIGN_DIR", "../design"),
 		AuthModelPath:  get("ARK_AUTH_MODEL_PATH", "./internal/platform/auth/model.conf"),
 		AuthPolicyPath: get("ARK_AUTH_POLICY_PATH", "./internal/platform/auth/policy.csv"),
+		S3Endpoint:     get("ARK_S3_ENDPOINT", ""),
+		S3AccessKey:    get("ARK_S3_ACCESS_KEY", "minioadmin"),
+		S3SecretKey:    get("ARK_S3_SECRET_KEY", "minioadmin"),
+		S3Bucket:       get("ARK_S3_BUCKET", "ark-docs"),
+		S3UseSSL:       get("ARK_S3_USE_SSL", "false") == "true",
 	}
 }
