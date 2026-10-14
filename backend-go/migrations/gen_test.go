@@ -49,7 +49,7 @@ func TestGenerateFromDesign(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"CREATE TABLE sys_user", "CREATE TABLE p_application", "CREATE TABLE seq_prefix_registry"} {
+	for _, want := range []string{"CREATE TABLE sys_user", "CREATE TABLE p_application", "CREATE TABLE seq_prefix_registry", "CREATE TABLE v_activity"} {
 		if !strings.Contains(strings.ToLower(up), strings.ToLower(want)) {
 			t.Fatalf("生成的 up.sql 缺少: %s", want)
 		}
@@ -57,6 +57,26 @@ func TestGenerateFromDesign(t *testing.T) {
 	// common 必须先于模块：sys_user 出现在 p_application 之前
 	if strings.Index(strings.ToLower(up), "sys_user") > strings.Index(strings.ToLower(up), "p_application") {
 		t.Fatal("00-common.sql 应最先拼接")
+	}
+}
+
+// TestGenerateUp_HasVActivity 守卫 V 模块建表进入迁移；一旦 design/13 被漏排/改名，compose 后无表可写。
+func TestGenerateUp_HasVActivity(t *testing.T) {
+	designDir := os.Getenv("DESIGN_DIR")
+	if designDir == "" {
+		designDir = "../../design"
+	}
+	up, err := GenerateUp(designDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"CREATE TABLE v_activity", "CREATE TABLE v_activity_participant", "CREATE TABLE v_activity_review"} {
+		if !strings.Contains(strings.ToLower(up), strings.ToLower(want)) {
+			t.Fatalf("迁移缺少 V 模块对象: %s", want)
+		}
+	}
+	if !strings.Contains(up, "'ACT'") {
+		t.Fatal("seq_prefix_registry 未登记 ACT 前缀")
 	}
 }
 
