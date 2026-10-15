@@ -287,3 +287,58 @@ sql:
             go_type: { type: "pgtype.Numeric" }
           - column: "n_review_fee.amount"
             go_type: { type: "pgtype.Numeric" }
+  - engine: "postgresql"
+    # 第七生成块：O 仓储（科研档案）。独立 schema/queries/out；package=ostore。
+    # 铁律（Phase 1 血泪教训）：DDL 里 CREATE TABLE o_document 未加引号，sqlc 解析折小写，
+    # 故 rename/overrides 的 key 必须小写（o_document/o_archive...）；大写 key 静默 no-op。
+    # o_schema.sql 由 awk 从迁移抽出（仅 5 张表定义，CREATE INDEX 行被丢弃，避免
+    # to_tsvector/gin_trgm_ops 表达式索引令 sqlc 解析报错；表达式索引仍保留在迁移真源）。
+    schema: "db/schema/o_schema.sql"
+    queries: "db/query_o"
+    gen:
+      go:
+        package: "ostore"
+        out: "internal/modules/archive/store"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_pointers_for_null_types: true
+        rename:
+          o_document: Document
+          o_archive: Archive
+          o_archive_item: ArchiveItem
+          o_archive_check: ArchiveCheck
+          o_borrow: Borrow
+          "@limit_": Limit
+          "@offset_": Offset
+        overrides:
+          # 时间戳 → time.Time/*time.Time（供 mapper fmtTime/timePtrStr 直接吃）；
+          # size_bytes BIGINT 可空 → *int64。detail JSONB 无需 override——sqlc 默认映射 []byte
+          # （同 E/M/N 块其它 jsonb 列），且 go_type: "[]byte" 会被 sqlc 当 import 路径拒绝。
+          - column: "o_document.created_at"
+            go_type: "time.Time"
+          - column: "o_document.updated_at"
+            go_type: "time.Time"
+          - column: "o_document.uploaded_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "o_document.size_bytes"
+            go_type: { type: "int64", pointer: true }
+          - column: "o_archive.created_at"
+            go_type: "time.Time"
+          - column: "o_archive.updated_at"
+            go_type: "time.Time"
+          - column: "o_archive.submit_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "o_archive.filed_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "o_borrow.created_at"
+            go_type: "time.Time"
+          - column: "o_borrow.updated_at"
+            go_type: "time.Time"
+          - column: "o_borrow.approved_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "o_borrow.due_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "o_borrow.returned_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "o_archive_check.checked_at"
+            go_type: { type: "time.Time", pointer: true }
