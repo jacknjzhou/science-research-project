@@ -18,10 +18,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func newPerfEngine(t *testing.T, pool *pgxpool.Pool) *gin.Engine {
+func newPerfEngine(t *testing.T, pool *pgxpool.Pool, mw ...gin.HandlerFunc) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
+	// 中间件必须先于 Register 挂载，否则 Gin 已冻结路由、domain 不生效。
+	r.Use(mw...)
 	api := r.Group("/api/v1")
 	Register(api, NewHandler(pool))
 	return r
@@ -47,6 +49,7 @@ func runSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 		`DELETE FROM m_scheme_factor WHERE tenant_id=1`,
 		`DELETE FROM m_scheme WHERE tenant_id=1`,
 		`DELETE FROM t_deal WHERE tenant_id=1`,
+		`DELETE FROM t_disclosure WHERE tenant_id=1`,
 		`DELETE FROM f_income WHERE tenant_id=1`,
 		`DELETE FROM e_project WHERE tenant_id=1`,
 		`DELETE FROM r_output WHERE tenant_id=1`,
@@ -83,8 +86,7 @@ func TestCalculateEndToEnd(t *testing.T) {
 	ctx, pool := poolForTest(t)
 	runSeed(t, ctx, pool)
 
-	r := newPerfEngine(t, pool)
-	r.Use(injectPerfDomain([]string{"R-MANAGER"}, 1, 1)) // 主管触发
+	r := newPerfEngine(t, pool, injectPerfDomain([]string{"R-MANAGER"}, 1, 1)) // 主管触发
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/v1/perf/schemes/1/calculate",
@@ -134,8 +136,7 @@ func TestReadRecordForABAC_StaffCrossUser(t *testing.T) {
 	runSeed(t, ctx, pool)
 
 	// 主管先 calculate 造一条 staff=100 的记录
-	rc := newPerfEngine(t, pool)
-	rc.Use(injectPerfDomain([]string{"R-MANAGER"}, 1, 1))
+	rc := newPerfEngine(t, pool, injectPerfDomain([]string{"R-MANAGER"}, 1, 1))
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/v1/perf/schemes/1/calculate",
 		bytes.NewBufferString(`{"period":"2026Q3","staff_ids":[100]}`))
@@ -156,8 +157,7 @@ func TestReadRecordForABAC_StaffCrossUser(t *testing.T) {
 	recID := strconv.FormatInt(lr[0].ID, 10)
 
 	// 另一 staff=200 的 R-STAFF 请求该记录 → handler ABAC 应 403
-	r2 := newPerfEngine(t, pool)
-	r2.Use(injectPerfDomain([]string{"R-STAFF"}, 200, 1))
+	r2 := newPerfEngine(t, pool, injectPerfDomain([]string{"R-STAFF"}, 200, 1))
 	w2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest("GET", "/api/v1/perf/records/"+recID, nil)
 	r2.ServeHTTP(w2, req2)
