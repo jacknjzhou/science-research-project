@@ -324,4 +324,6 @@ INSERT INTO seq_prefix_registry (prefix, biz_object, owner_module, introduced_ve
   ('EXF','涉密外传/输出审计','X','v1.1',TRUE),
   ('ACT','学术活动','V','v1.0',TRUE),
   ('PERF','绩效记录','M','v1.0',TRUE),
-  ('PAY','绩效发放','M','v1.0',TRUE);
+  ('PAY','绩效发放','M','v1.0',TRUE),
+  ('EXR','专家','N','v1.0',TRUE),
+  ('RVW','评审任务','N','v1.0',TRUE);
