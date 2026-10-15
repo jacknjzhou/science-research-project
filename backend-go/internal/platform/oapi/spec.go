@@ -133,6 +133,13 @@ func (d *Doc) flatten(s map[string]any) map[string]any {
 	}
 	all, ok := s["allOf"].([]any)
 	if !ok {
+		// 裸 $ref（无 allOf）：解引用后再展平。否则 Validate 会把 {"$ref":...} 当宽松节点，
+		// 令形如 `data: { $ref: PageResult }` 的列表 schema 静默失去类型约束（R GET /output 踩此坑）。
+		if ref, isRef := s["$ref"].(string); isRef {
+			if t := d.deref(ref); t != nil {
+				return d.flatten(t)
+			}
+		}
 		return s
 	}
 	out := map[string]any{}
