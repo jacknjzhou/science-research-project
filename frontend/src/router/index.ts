@@ -47,9 +47,14 @@ const router = createRouter({
 })
 
 // 路由/菜单级守卫（粒度①）：未登录→触发登录浮层(重定向到 /dash?needLogin)；越权→/forbidden。
+// 注意：未登录时目标已经是 /dash?needLogin=1 必须直接放行，否则守卫返回相同重定向
+// 会造成 vue-router 无限导航循环（主线程被微任务链占满 → 页面永久空白）。
 router.beforeEach(async (to) => {
   if (to.meta.public) return true
-  if (!auth.isAuthed) return { path: '/dash', query: { needLogin: '1' } }
+  if (!auth.isAuthed) {
+    if (to.path === '/dash' && to.query.needLogin === '1') return true
+    return { path: '/dash', query: { needLogin: '1' } }
+  }
   if (!auth.isReady) {
     try {
       await auth.loadMe()
