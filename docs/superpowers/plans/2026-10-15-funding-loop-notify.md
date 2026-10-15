@@ -3,7 +3,7 @@
 **规格真源**：`docs/superpowers/specs/2026-10-15-funding-loop-notify-design.md`
 **分支**：全程 `develop`，逐任务 commit，逐文件 `git add`，禁止推送。
 **sqlc 生成命令**：`cd backend-go && GOTOOLCHAIN=go1.23.4 GOMAXPROCS=1 go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.27.0 generate`
-**测试**：`cd backend-go && ARK_TEST_DATABASE_URL=postgres://ark:ark@127.0.0.1:5432/ark?sslmode=disable go test -race -count=1 ./...`；前端 `cd frontend && npx vue-tsc --noEmit && npm run build`
+**测试**：`cd backend-go && ARK_TEST_DATABASE_URL=postgres://ark:ark@127.0.0.1:5432/ark?sslmode=disable go test -p 1 -count=1 ./...`（-p 1 串行化：多包共享测试库，并行会互踩 fixture）；前端 `cd frontend && npx vue-tsc --noEmit && npm run build`
 **TDD 铁律**：每任务先写失败测试（RED）→ 最少实现（GREEN）→ 重构 → commit。无 DB 环境时 DB 测试自动 SKIP（沿用 poolForTest 约定），纯逻辑测必须全绿。
 
 ---
