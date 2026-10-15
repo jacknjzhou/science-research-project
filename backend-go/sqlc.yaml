@@ -342,3 +342,70 @@ sql:
             go_type: { type: "time.Time", pointer: true }
           - column: "o_archive_check.checked_at"
             go_type: { type: "time.Time", pointer: true }
+  - engine: "postgresql"
+    # F 仓储（科研经费）。schema 为迁移内 F 域表 + E_PROJECT 最小定义（仅编译期解析用，运行时打真库）。
+    schema: "db/schema/f_schema.sql"
+    queries: "db/query_f"
+    gen:
+      go:
+        package: "fstore"
+        out: "internal/modules/funding/store"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_pointers_for_null_types: true
+        rename:
+          "@limit_": Limit
+          "@offset_": Offset
+        overrides:
+          - column: "f_subject.effective_from"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "f_subject.effective_to"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "f_subject.created_at"
+            go_type: "time.Time"
+          - column: "f_subject.updated_at"
+            go_type: "time.Time"
+          - column: "f_budget.approved_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "f_budget.created_at"
+            go_type: "time.Time"
+          - column: "f_budget.updated_at"
+            go_type: "time.Time"
+          - column: "f_budget_line.created_at"
+            go_type: "time.Time"
+          - column: "f_budget_line.updated_at"
+            go_type: "time.Time"
+          - column: "f_income.receipt_date"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "f_income.claimed_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "f_income.created_at"
+            go_type: "time.Time"
+          - column: "f_income.updated_at"
+            go_type: "time.Time"
+          - column: "f_expense.fingerprint_invoice_date"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "f_expense.submitted_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "f_expense.paid_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "f_expense.frozen_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "f_expense.created_at"
+            go_type: "time.Time"
+          - column: "f_expense.updated_at"
+            go_type: "time.Time"
+          - column: "f_expense_approval.acted_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "f_expense_approval.created_at"
+            go_type: "time.Time"
+          - column: "f_expense_approval.updated_at"
+            go_type: "time.Time"
+          - column: "f_indirect_fee.created_at"
+            go_type: "time.Time"
+          - column: "f_indirect_fee.updated_at"
+            go_type: "time.Time"
+          - column: "e_project.end_date"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "e_project.actual_end_date"
+            go_type: { type: "time.Time", pointer: true }
