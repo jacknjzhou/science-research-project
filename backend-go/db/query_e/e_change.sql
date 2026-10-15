@@ -11,5 +11,10 @@ RETURNING *;
 UPDATE E_CHANGE_REQUEST SET status='EFFECTIVE', updated_at=now()
 WHERE id=$1 AND project_id=$2 AND status IN ('SUBMITTED','APPROVING') AND deleted=0;
 
+-- name: AdvanceChangeRequest :execrows
+-- T19 两级审核推进：SUBMITTED→APPROVING（首审）→EFFECTIVE（终审）
+UPDATE E_CHANGE_REQUEST SET status=sqlc.arg('to_status')::text, updated_at=now()
+WHERE id=$1 AND project_id=$2 AND status=sqlc.arg('from_status')::text AND deleted=0;
+
 -- name: GetChangeRequest :one
 SELECT * FROM E_CHANGE_REQUEST WHERE id=$1 AND deleted=0;

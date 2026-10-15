@@ -30,6 +30,7 @@ func Register(r gin.IRoutes, h *Handler) {
 	r.GET("/expenses/:id", h.GetExpense)
 	r.POST("/expenses/:id/submit", h.SubmitExpense)
 	r.POST("/expenses/:id/approval", h.ApprovalAction)
+	r.POST("/expenses/approval-batch", h.ApprovalBatch)
 	// 执行率 / 预警 / 计提
 	r.GET("/funding/execution", h.FundingExecution)
 	r.GET("/funding/warnings", h.FundingWarnings)

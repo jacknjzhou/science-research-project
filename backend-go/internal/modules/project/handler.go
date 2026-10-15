@@ -6,6 +6,7 @@ import (
 	"time"
 
 	estore "github.com/eplugger/ark/internal/modules/project/store"
+	"github.com/eplugger/ark/internal/platform/approval"
 	"github.com/eplugger/ark/internal/platform/auth"
 	"github.com/eplugger/ark/internal/platform/httpx"
 	"github.com/gin-gonic/gin"
@@ -15,10 +16,13 @@ import (
 
 // Handler 承载 E 竖切所有 HTTP 端点。store 层由 sqlc 生成的 estore.Queries 提供，
 // pool 传入即开即用（NoRoute passthrough 负责未实现端点兜底，见 router.go）。
-type Handler struct{ q *estore.Queries }
+type Handler struct {
+	q    *estore.Queries
+	pool *pgxpool.Pool
+}
 
 // NewHandler 用 pgxpool 构造 Handler；pool 由 router.RouterDeps 注入。
-func NewHandler(pool *pgxpool.Pool) *Handler { return &Handler{q: estore.New(pool)} }
+func NewHandler(pool *pgxpool.Pool) *Handler { return &Handler{q: estore.New(pool), pool: pool} }
 
 // ---------- 请求/分页 helper（逐字拷自 activity/handler.go） ----------
 
@@ -276,13 +280,14 @@ func (h *Handler) CreateChangeRequest(c *gin.Context) {
 func (h *Handler) ApproveChangeRequest(c *gin.Context) {
 	projectID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	changeID, _ := strconv.ParseInt(c.Param("changeId"), 10, 64)
-	rows, err := h.q.ApproveChangeRequest(c, estore.ApproveChangeRequestParams{ID: changeID, ProjectID: projectID})
-	if err != nil {
-		httpx.WriteErr(c, 500, 50002, "审批失败")
-		return
+	d := auth.DomainFrom(c)
+	var b struct {
+		Comment string `json:"comment"`
 	}
-	if rows == 0 {
-		httpx.WriteErr(c, 409, 40901, "状态不允许或变更单不存在")
+	_ = c.ShouldBindJSON(&b)
+	code, msg := h.approveChangeOne(c, d, projectID, changeID, b.Comment)
+	if code != 0 {
+		httpx.WriteErr(c, code, errCodeOf(code), msg)
 		return
 	}
 	r, err := h.q.GetChangeRequest(c, changeID)
@@ -291,6 +296,154 @@ func (h *Handler) ApproveChangeRequest(c *gin.Context) {
 		return
 	}
 	httpx.WriteOK(c, ToAPIChangeRequest(r))
+}
+
+// approveChangeOne 单条变更审批核心（T19 两级可配）：
+//   - 两级开关 off（默认）：SUBMITTED/APPROVING → EFFECTIVE（单步，行为不变）
+//   - on：首审 R-MANAGER SUBMITTED→APPROVING；终审 R-LEADER APPROVING→EFFECTIVE（R-ADMIN 直通）
+//
+// 全部动作写 sys_approval_log（biz_type=CHANGE_REQUEST）。
+// 返回 (httpCode, errInfo)；成功 httpCode=0。
+func (h *Handler) approveChangeOne(c *gin.Context, d auth.Domain, projectID, changeID int64, comment string) (int, string) {
+	row, err := h.q.GetChangeRequest(c, changeID)
+	if err != nil {
+		return 404, "变更单不存在"
+	}
+	if row.ProjectID != projectID {
+		return 404, "变更单不存在"
+	}
+	twoStep := approval.Enabled()
+	isAdmin := approval.HasRole(d.Roles, "R-ADMIN")
+	// 角色/状态校验
+	if twoStep {
+		switch row.Status {
+		case "SUBMITTED":
+			if !isAdmin && !approval.HasRole(d.Roles, approval.TwoStep{FirstRole: "R-MANAGER", SecondRole: "R-LEADER"}.FirstRole) {
+				return 403, "首审需要 R-MANAGER 角色"
+			}
+		case "APPROVING":
+			if !isAdmin && !approval.HasRole(d.Roles, approval.TwoStep{FirstRole: "R-MANAGER", SecondRole: "R-LEADER"}.SecondRole) {
+				return 403, "终审需要 R-LEADER 角色"
+			}
+		default:
+			return 409, "状态不允许审批"
+		}
+	} else if row.Status != "SUBMITTED" && row.Status != "APPROVING" {
+		return 409, "状态不允许或变更单不存在"
+	}
+	// 推进
+	var toStatus string
+	var step int
+	if twoStep && row.Status == "SUBMITTED" {
+		toStatus, step = "APPROVING", 1
+	} else {
+		toStatus, step = "EFFECTIVE", 2
+		if !twoStep {
+			step = 1
+		}
+	}
+	n, err := h.q.AdvanceChangeRequest(c, estore.AdvanceChangeRequestParams{
+		ID: changeID, ProjectID: projectID, ToStatus: toStatus, FromStatus: row.Status,
+	})
+	if err != nil {
+		return 500, "审批失败"
+	}
+	if n == 0 {
+		return 409, "状态不允许或变更单不存在"
+	}
+	// 审核流水（best-effort）
+	_ = approval.Log(c, h.pool, approval.LogParam{
+		TenantID: d.TenantID, BizType: "CHANGE_REQUEST", BizID: changeID,
+		Step: step, ActorID: d.UserID, ActorRole: firstRoleOf(d.Roles), Action: "APPROVE", Comment: comment,
+	})
+	return 0, ""
+}
+
+// ApproveChangeBatch POST /projects/approve-batch {ids:[], action, comment}
+// 批量变更单审批（ids 为变更单 id）：逐条事务、逐条结果 {id, ok, err}。
+func (h *Handler) ApproveChangeBatch(c *gin.Context) {
+	d := auth.DomainFrom(c)
+	var b struct {
+		IDs     []int64 `json:"ids" binding:"required,min=1"`
+		Action  string  `json:"action" binding:"required"`
+		Comment string  `json:"comment"`
+	}
+	if err := c.ShouldBindJSON(&b); err != nil {
+		httpx.WriteErr(c, 400, 40001, "参数错误："+err.Error())
+		return
+	}
+	if b.Action != "APPROVE" && b.Action != "REJECT" {
+		httpx.WriteErr(c, 400, 40001, "action 仅支持 APPROVE/REJECT")
+		return
+	}
+	results := make([]gin.H, 0, len(b.IDs))
+	okN := 0
+	for _, id := range b.IDs {
+		// 变更单归属项目未知 → 先查再以 projectID 审批
+		row, err := h.q.GetChangeRequest(c, id)
+		if err != nil {
+			results = append(results, gin.H{"id": id, "ok": false, "err": "变更单不存在"})
+			continue
+		}
+		var code int
+		var msg string
+		if b.Action == "REJECT" {
+			code, msg = h.rejectChangeOne(c, d, row.ProjectID, id, b.Comment)
+		} else {
+			code, msg = h.approveChangeOne(c, d, row.ProjectID, id, b.Comment)
+		}
+		if code == 0 {
+			okN++
+			results = append(results, gin.H{"id": id, "ok": true})
+		} else {
+			results = append(results, gin.H{"id": id, "ok": false, "err": msg})
+		}
+	}
+	httpx.WriteOK(c, gin.H{"total": len(b.IDs), "ok": okN, "results": results})
+}
+
+// rejectChangeOne 变更单驳回：SUBMITTED/APPROVING → REJECTED + 流水。
+func (h *Handler) rejectChangeOne(c *gin.Context, d auth.Domain, projectID, changeID int64, comment string) (int, string) {
+	row, err := h.q.GetChangeRequest(c, changeID)
+	if err != nil {
+		return 404, "变更单不存在"
+	}
+	if row.ProjectID != projectID || (row.Status != "SUBMITTED" && row.Status != "APPROVING") {
+		return 409, "状态不允许驳回"
+	}
+	n, err := h.q.AdvanceChangeRequest(c, estore.AdvanceChangeRequestParams{
+		ID: changeID, ProjectID: projectID, ToStatus: "REJECTED", FromStatus: row.Status,
+	})
+	if err != nil || n == 0 {
+		return 500, "驳回失败"
+	}
+	_ = approval.Log(c, h.pool, approval.LogParam{
+		TenantID: d.TenantID, BizType: "CHANGE_REQUEST", BizID: changeID,
+		Step: 1, ActorID: d.UserID, ActorRole: firstRoleOf(d.Roles), Action: "REJECT", Comment: comment,
+	})
+	return 0, ""
+}
+
+// firstRoleOf 取第一个角色（流水展示用；无角色返回空）。
+func firstRoleOf(roles []string) string {
+	if len(roles) > 0 {
+		return roles[0]
+	}
+	return ""
+}
+
+// errCodeOf http 状态码 → 业务错误码。
+func errCodeOf(httpCode int) int {
+	switch httpCode {
+	case 404:
+		return 40401
+	case 403:
+		return 40301
+	case 409:
+		return 40901
+	default:
+		return 50001
+	}
 }
 
 type finalAcceptBody struct {

@@ -16,5 +16,7 @@ func Register(r gin.IRoutes, h *Handler) {
 	r.POST("/project/:id/mid-check", h.CreateMidCheck)
 	r.POST("/project/:id/change-request", h.CreateChangeRequest)
 	r.POST("/project/:id/change-request/:changeId/approve", h.ApproveChangeRequest)
+	// T19 两级审核 + 批量
+	r.POST("/projects/approve-batch", h.ApproveChangeBatch)
 	r.POST("/project/:id/final-accept", h.CreateFinalAccept)
 }

@@ -9,6 +9,32 @@ import (
 	"context"
 )
 
+const advanceChangeRequest = `-- name: AdvanceChangeRequest :execrows
+UPDATE E_CHANGE_REQUEST SET status=$3::text, updated_at=now()
+WHERE id=$1 AND project_id=$2 AND status=$4::text AND deleted=0
+`
+
+type AdvanceChangeRequestParams struct {
+	ID         int64  `json:"id"`
+	ProjectID  int64  `json:"project_id"`
+	ToStatus   string `json:"to_status"`
+	FromStatus string `json:"from_status"`
+}
+
+// T19 两级审核推进：SUBMITTED→APPROVING（首审）→EFFECTIVE（终审）
+func (q *Queries) AdvanceChangeRequest(ctx context.Context, arg AdvanceChangeRequestParams) (int64, error) {
+	result, err := q.db.Exec(ctx, advanceChangeRequest,
+		arg.ID,
+		arg.ProjectID,
+		arg.ToStatus,
+		arg.FromStatus,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const approveChangeRequest = `-- name: ApproveChangeRequest :execrows
 UPDATE E_CHANGE_REQUEST SET status='EFFECTIVE', updated_at=now()
 WHERE id=$1 AND project_id=$2 AND status IN ('SUBMITTED','APPROVING') AND deleted=0

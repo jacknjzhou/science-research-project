@@ -261,6 +261,12 @@ p, R-MANAGER, /api/v1/funding/*,                    GET
 p, R-MANAGER, /api/v1/indirect-fees,                GET
 p, R-MANAGER, /api/v1/indirect-fees,                POST
 p, R-MANAGER, /api/v1/expense/ai-invoice-review,    POST
+# T19 批量审批（逐条事务、逐条结果；角色校验 handler 内兜底）
+p, R-MANAGER, /api/v1/expenses/approval-batch,      POST
+p, R-LEADER,  /api/v1/expenses/approval-batch,      POST
+p, R-FINANCE, /api/v1/expenses/approval-batch,      POST
+p, R-MANAGER, /api/v1/projects/approve-batch,       POST
+p, R-LEADER,  /api/v1/projects/approve-batch,       POST
 # 领导：读 + 批复/大额审批（审批角色校验在 handler 内兜底）
 p, R-LEADER,  /api/v1/subjects,                     GET
 p, R-LEADER,  /api/v1/budgets,                      GET
