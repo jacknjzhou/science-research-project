@@ -32,6 +32,8 @@ const routes: RouteRecordRaw[] = [
   { path: '/performance', name: 'performance', meta: { zh: '科研绩效评价', en: 'PERFORMANCE', roles: ['R-STAFF', 'R-MANAGER', 'R-LEADER', 'R-FINANCE', 'R-AUDITOR'] }, component: () => import('@/views/PerformanceView.vue') },
   // —— 模块 N 专家与评审（域 N，勿复用 /review 名）——
   { path: '/expert-review', name: 'expert-review', meta: { zh: '专家与评审', en: 'EXPERT REVIEW', roles: ['R-EXPERT', 'R-MANAGER', 'R-LEADER', 'R-AUDITOR'] }, component: () => import('@/views/ExpertReviewView.vue') },
+  // —— 模块 O 科研档案管理（域 O）——
+  { path: '/archive', name: 'archive', meta: { zh: '科研档案', en: 'ARCHIVE', roles: ['R-ADMIN', 'R-MANAGER', 'R-AUDITOR'] }, component: () => import('@/views/ArchiveView.vue') },
   // —— 模块 U 管理页（新）——
   { path: '/admin/users', name: 'admin-users', meta: { zh: '用户管理', en: 'USER ADMIN', roles: ['R-ADMIN'] }, component: () => import('@/views/admin/UsersView.vue') },
   { path: '/admin/roles', name: 'admin-roles', meta: { zh: '角色与权限', en: 'ROLES & PERMISSIONS', roles: ['R-ADMIN', 'R-AUDITOR'] }, component: () => import('@/views/admin/RolesView.vue') },
