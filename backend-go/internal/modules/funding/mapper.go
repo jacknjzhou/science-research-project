@@ -152,3 +152,11 @@ func fmtTz(t pgtype.Timestamptz) string {
 	}
 	return t.Time.Format(time.RFC3339)
 }
+
+// optI64I32 *int32 → any（JSON 可空整数）。
+func optI64I32(p *int32) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}

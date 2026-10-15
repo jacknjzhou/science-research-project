@@ -282,3 +282,24 @@ CREATE TABLE F_CARRYOVER (
     amount       NUMERIC(18,2) NOT NULL,
     income_id    BIGINT
 );
+
+-- T15 经费预警配置（规则引擎数据源）
+CREATE TABLE F_WARN_CONFIG (
+    id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    tenant_id           BIGINT NOT NULL,
+    status              VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
+    deleted             SMALLINT NOT NULL DEFAULT 0,
+    creator_id          BIGINT NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    remark              TEXT,
+    project_category_id BIGINT,
+    warn_kind           VARCHAR(32) NOT NULL,
+    threshold_pct       NUMERIC(6,4),
+    ahead_days          INT,
+    level               VARCHAR(8) NOT NULL DEFAULT 'P2',
+    channel             VARCHAR(16) NOT NULL DEFAULT 'INBOX',
+    cron_expr           VARCHAR(64),
+    template            TEXT,
+    enabled             BOOLEAN NOT NULL DEFAULT TRUE
+);

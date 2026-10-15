@@ -323,3 +323,13 @@ p, R-FINANCE, /api/v1/carryovers,                    GET
 p, R-FINANCE, /api/v1/carryovers/*,                  GET
 p, R-LEADER,  /api/v1/budgets/*/append,              POST
 p, R-LEADER,  /api/v1/budgets/*/append/approve,      POST
+
+# ---- T15 科目管理 + 预警配置（管理/领导读写） ----
+p, R-MANAGER, /api/v1/subjects,                      POST
+p, R-MANAGER, /api/v1/subjects/*,                    PUT
+p, R-MANAGER, /api/v1/subjects/*,                    DELETE
+p, R-LEADER,  /api/v1/funding/warn-configs,          GET
+p, R-LEADER,  /api/v1/funding/warn-configs,          POST
+p, R-LEADER,  /api/v1/funding/warn-configs/*,        PUT
+p, R-FINANCE, /api/v1/funding/warn-configs,          GET
+p, R-STAFF,   /api/v1/funding/warn-configs,          GET

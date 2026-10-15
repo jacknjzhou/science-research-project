@@ -78,3 +78,17 @@ func doPost(r *gin.Engine, path, body string) *httptest.ResponseRecorder {
 	r.ServeHTTP(w, req)
 	return w
 }
+
+func doPut(r *gin.Engine, path, body string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("PUT", path, strReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	return w
+}
+
+func doDelete(r *gin.Engine, path string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("DELETE", path, nil))
+	return w
+}

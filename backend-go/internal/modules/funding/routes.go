@@ -46,4 +46,13 @@ func Register(r gin.IRoutes, h *Handler) {
 	r.POST("/carryovers/:id/approval", h.CarryoverAction)
 	r.POST("/budgets/:id/append", h.AppendBudget)
 	r.POST("/budgets/:id/append/approve", h.ApproveBudgetAppend)
+	// T15 科目树形管理 + 预警配置
+	r.GET("/subjects/tree", h.SubjectsTree)
+	r.POST("/subjects", h.CreateSubject)
+	r.PUT("/subjects/:id", h.UpdateSubject)
+	r.DELETE("/subjects/:id", h.DeleteSubject)
+	r.GET("/funding/warn-configs", h.ListWarnConfigs)
+	r.POST("/funding/warn-configs", h.CreateWarnConfig)
+	r.PUT("/funding/warn-configs/:id", h.UpdateWarnConfig)
+	r.DELETE("/funding/warn-configs/:id", h.DeleteWarnConfig)
 }
