@@ -10,7 +10,28 @@
 
 ---
 
-## 当前状态（2026-10-15 晚）
+## 当前状态（2026-10-15 晚 · 更新）
+
+| 项 | 状态 |
+|---|---|
+| T0-T7（基建 + F 域闭环） | ✅ 全绿并 commit（e713a10/07ba5ca/ba535a3） |
+| T8-T10（通知中心 + LLM + 大屏） | ✅ 全绿并 commit（7a22484/12c1410/ab8a0fc/9fe528c）；docker 端到端冒烟通过：staff 建报销→提交→manager 收 TODO 通知→APPROVE→staff 收结果→已读闭环 |
+| T11-T12（前端对接 + 全量验证） | ✅ 已 commit（955a7c9）：App 铃铛轮询+收件箱面板、ExpenseView 真契约（EXECUTING 预算驱动 + snake_case payload）、BigscreenView alerts 适配；vue-tsc+build 全绿；headless Chrome 冒烟 4/4 PASS |
+| P4-P9（T13..T25） | ⬜ 待开工（下一步：T13 Excel 导入导出底座） |
+
+**冒烟踩坑沉淀**（冒烟/联调必读）：
+- 种子账号：admin/Admin@123456、manager/Manager@123456、staff/Staff@123456。
+- POST /budgets、/expenses 均必填 `legal_entity_id`；budget `mode` 枚举为中文 `预算制`/`包干制`；`expense_type` 为英文枚举 EQUIPMENT/MATERIAL/TRAVEL/MEETING/LABOR/EXPERT/OTHER。
+- `sys_legal_entity` 种子为空，status 枚举带中文后缀（`ACTIVE=正常`）；冒烟前需插一条法人。
+- `uk_budget_project_ver` 唯一：同项目重复建预算 50002，冒烟复用 EXECUTING 预算。
+- **列表端点统一返回 `{list,total,page,size}` 分页结构**（/subjects、/budgets/:id/lines、/expenses、/notifications 均如此），前端必须取 `.list`——本轮前端 bug 根因。
+- 前端 headless 冒烟脚本：/tmp/fe-smoke.cjs（playwright + chromium-1228 executablePath）。
+
+**下一步第一件事**：P4 T13 Excel 导入导出底座（migration 000004 sys_import_log → dataio 模块）。
+
+---
+
+## 历史状态存档（2026-10-15 晚首轮）
 
 | 项 | 状态 |
 |---|---|
@@ -19,8 +40,6 @@
 | T2 sqlc F 基建 | 🟡 代码已写完：f_schema.sql（8 表）、db/query_f/*（7 文件）、sqlc.yaml F 块、fstore 生成、funding 模块 12 文件、`go build` 绿 |
 | T2-T3 测试 | 🔴 handler_test/loop_test 红：①seed_f.sql 的 E_PROJECT(9001) 与其它 seed 冲突 ②submit 后批复查询返回 DRAFT ③policy.csv 未加 F 域路由规则 |
 | 未提交 | f_schema/query_f/funding 模块/seed_f/sqlc.yaml 全部未 commit |
-
-**下一步第一件事**：修 seed 冲突（改 E_PROJECT id 或改用 upsert）+ 加 policy.csv 规则 → T2 全绿 commit。
 
 ---
 
