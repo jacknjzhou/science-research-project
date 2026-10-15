@@ -6,6 +6,7 @@ import (
 	"github.com/casbin/casbin/v2"
 	"github.com/eplugger/ark/internal/config"
 	"github.com/eplugger/ark/internal/modules/activity"
+	"github.com/eplugger/ark/internal/modules/archive"
 	"github.com/eplugger/ark/internal/modules/expertreview"
 	"github.com/eplugger/ark/internal/modules/output"
 	"github.com/eplugger/ark/internal/modules/p"
@@ -66,6 +67,9 @@ func Build(d RouterDeps) *gin.Engine {
 		output.Register(api, outH)
 		// N 需注入 E/R Handler 以便按 biz_type 经单一写者回写被评审对象。
 		expertreview.Register(api, expertreview.NewHandler(d.Pool, projH, outH))
+		// O 唯一持有 storage.Storage：d.Storage 为 nil 时端点内 guardStorage 返回 50301，
+		// 保证无 MinIO 宿主仍可编译/可路由。
+		archive.Register(api, archive.NewHandler(d.Pool, d.Storage))
 	}
 
 	// 兜底：命中契约但未手工实现的路由 → passthrough（NoRoute 不经分组中间件，M0 可接受）
