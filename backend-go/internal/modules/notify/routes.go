@@ -10,6 +10,11 @@ func Register(r gin.IRoutes, h *Handler) {
 	r.GET("/notifications/unread-count", h.UnreadCount)
 	r.POST("/notifications/read-all", h.MarkAllRead)
 	r.POST("/notifications/:id/read", h.MarkRead)
+	// T20 任务中心 + 站内消息
+	r.GET("/tasks", h.Tasks)
+	r.GET("/tasks/summary", h.TasksSummary)
+	r.POST("/messages", h.SendMessage)
+	r.GET("/messages", h.ListMessages)
 }
 
 // pageArgs 分页参数（与 funding 同约定：page 从 1，size 默认 20 上限 200）。

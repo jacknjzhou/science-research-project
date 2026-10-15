@@ -7,12 +7,15 @@ import { api } from '@/api/client'
 const router = useRouter()
 const route = useRoute()
 
-// —— 通知中心（NF）铃铛：unread-count 30s 轮询 + 收件箱面板 ——
+// —— 通知中心（NF）铃铛：unread-count 30s 轮询 + 收件箱面板（T20：待办/消息/预警三 tab）——
 interface Notification { id: number; typ: string; title: string; content: string | null; biz_ref: string | null; read: boolean; created_at: string }
 const unread = ref(0)
 const notifOpen = ref(false)
 const notifList = ref<Notification[]>([])
 const notifLoading = ref(false)
+const notifTab = ref<'todo' | 'msg' | 'warn'>('todo')
+const taskSummary = ref<{ todo: number; message: number; warning: number }>({ todo: 0, message: 0, warning: 0 })
+const taskList = ref<Array<{ kind: string; id: number; title: string; content?: string | null; amount?: string; code?: string | null; created_at?: string }>>([])
 let pollTimer: number | undefined
 
 async function loadUnread() {
@@ -22,14 +25,36 @@ async function loadUnread() {
     unread.value = d?.unread ?? 0
   } catch { /* 静默：铃铛轮询失败不打扰 */ }
 }
+async function loadSummary() {
+  try {
+    const d = await api.get<{ todo: number; message: number; warning: number }>('/tasks/summary')
+    if (d) taskSummary.value = d
+  } catch { /* ignore */ }
+}
+async function loadTab() {
+  notifLoading.value = true
+  try {
+    if (notifTab.value === 'todo') {
+      const d = await api.get<{ list: typeof taskList.value }>('/tasks', { size: 20 })
+      taskList.value = d?.list ?? []
+    } else if (notifTab.value === 'msg') {
+      const d = await api.get<{ list: Notification[] }>('/messages', { page: 1, size: 10 })
+      notifList.value = d?.list ?? []
+    } else {
+      const d = await api.get<{ list: Notification[] }>('/notifications', { page: 1, size: 10, typ: 'WARNING' })
+      notifList.value = d?.list ?? []
+    }
+  } catch { taskList.value = []; notifList.value = [] } finally { notifLoading.value = false }
+}
 async function openNotif() {
   notifOpen.value = !notifOpen.value
   if (!notifOpen.value || !auth.isAuthed) return
-  notifLoading.value = true
-  try {
-    const d = await api.get<{ list: Notification[] }>('/notifications', { page: 1, size: 6 })
-    notifList.value = d?.list ?? []
-  } catch { notifList.value = [] } finally { notifLoading.value = false }
+  loadSummary()
+  loadTab()
+}
+function switchTab(t: 'todo' | 'msg' | 'warn') {
+  notifTab.value = t
+  loadTab()
 }
 async function markRead(n: Notification) {
   if (n.read) return
@@ -221,25 +246,49 @@ function toast(m: string) {
         </div>
         <div class="bell-wrap" style="position:relative">
           <span class="bell" @click="openNotif" title="通知中心">🔔<i v-if="unread > 0" style="position:absolute;top:-4px;right:-6px;background:var(--seal,#c0392b);color:#fff;font-style:normal;font-size:10px;min-width:16px;height:16px;line-height:16px;border-radius:8px;text-align:center;padding:0 3px">{{ unread > 99 ? '99+' : unread }}</i></span>
-          <div v-if="notifOpen" style="position:absolute;right:0;top:40px;width:340px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.14);z-index:60;overflow:hidden">
+          <div v-if="notifOpen" style="position:absolute;right:0;top:40px;width:360px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.14);z-index:60;overflow:hidden">
             <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)">
               <b style="font-size:13px">通知中心 <span style="color:var(--seal)">{{ unread }}</span> 条未读</b>
-              <span style="font-size:12px;color:var(--ai);cursor:pointer" @click="markAllRead">全部已读</span>
+              <span v-if="notifTab !== 'todo'" style="font-size:12px;color:var(--ai);cursor:pointer" @click="markAllRead">全部已读</span>
+            </div>
+            <div style="display:flex;border-bottom:1px solid var(--line)">
+              <div v-for="t in [['todo','待办',taskSummary.todo],['msg','消息',taskSummary.message],['warn','预警',taskSummary.warning]] as any"
+                   :key="t[0]" @click="switchTab(t[0])"
+                   style="flex:1;text-align:center;padding:8px 0;font-size:12.5px;cursor:pointer;border-bottom:2px solid transparent"
+                   :style="{ fontWeight: notifTab === t[0] ? 700 : 400, color: notifTab === t[0] ? 'var(--ink)' : 'var(--ink-mute)', borderBottomColor: notifTab === t[0] ? 'var(--seal,#c0392b)' : 'transparent' }">
+                {{ t[1] }}<span v-if="t[2] > 0" style="color:var(--seal,#c0392b)"> ({{ t[2] }})</span>
+              </div>
             </div>
             <div style="max-height:320px;overflow:auto">
               <div v-if="notifLoading" style="padding:18px;text-align:center;font-size:12px;color:var(--ink-mute)">加载中…</div>
-              <div v-else-if="!notifList.length" style="padding:18px;text-align:center;font-size:12px;color:var(--ink-mute)">暂无通知</div>
-              <div v-for="n in notifList" :key="n.id" @click="markRead(n)"
-                   style="padding:10px 14px;border-bottom:1px solid var(--line);cursor:pointer;display:flex;gap:8px;align-items:flex-start"
-                   :style="{ background: n.read ? 'transparent' : 'rgba(192,57,43,.04)' }">
-                <span class="tag" :class="TYP_META[n.typ]?.cls || 'info'" style="flex-shrink:0;font-size:10px">{{ TYP_META[n.typ]?.ic || '•' }} {{ n.typ }}</span>
-                <div style="flex:1;min-width:0">
-                  <div style="font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :style="{ color: n.read ? 'var(--ink-mute)' : 'var(--ink)' }">{{ n.title }}</div>
-                  <div v-if="n.content" style="font-size:11px;color:var(--ink-mute);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ n.content }}</div>
-                  <div style="font-size:10px;color:var(--ink-mute);margin-top:2px">{{ (n.created_at || '').replace('T', ' ').slice(0, 16) }}</div>
+              <!-- 待办 tab：聚合（通知待办 + 我名下 PENDING 审批单） -->
+              <template v-else-if="notifTab === 'todo'">
+                <div v-if="!taskList.length" style="padding:18px;text-align:center;font-size:12px;color:var(--ink-mute)">暂无待办</div>
+                <div v-for="(t, i) in taskList" :key="'t' + t.kind + t.id + i"
+                     style="padding:10px 14px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:flex-start">
+                  <span class="tag" :class="t.kind === 'APPROVAL' ? 'warn' : 'info'" style="flex-shrink:0;font-size:10px">{{ t.kind === 'APPROVAL' ? '✓ 待审' : '◉ 通知' }}</span>
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ t.title }}</div>
+                    <div v-if="t.content" style="font-size:11px;color:var(--ink-mute);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ t.content }}</div>
+                    <div v-if="t.amount" style="font-size:11px;color:var(--ink);margin-top:2px">金额 ¥{{ t.amount }}<span v-if="t.code" style="color:var(--ink-mute)"> · {{ t.code }}</span></div>
+                  </div>
                 </div>
-                <span v-if="!n.read" style="width:7px;height:7px;border-radius:50%;background:var(--seal,#c0392b);flex-shrink:0;margin-top:5px"></span>
-              </div>
+              </template>
+              <!-- 消息/预警 tab：通知收件箱 -->
+              <template v-else>
+                <div v-if="!notifList.length" style="padding:18px;text-align:center;font-size:12px;color:var(--ink-mute)">暂无内容</div>
+                <div v-for="n in notifList" :key="n.id" @click="markRead(n)"
+                     style="padding:10px 14px;border-bottom:1px solid var(--line);cursor:pointer;display:flex;gap:8px;align-items:flex-start"
+                     :style="{ background: n.read ? 'transparent' : 'rgba(192,57,43,.04)' }">
+                  <span class="tag" :class="TYP_META[n.typ]?.cls || 'info'" style="flex-shrink:0;font-size:10px">{{ TYP_META[n.typ]?.ic || '•' }} {{ n.typ }}</span>
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :style="{ color: n.read ? 'var(--ink-mute)' : 'var(--ink)' }">{{ n.title }}</div>
+                    <div v-if="n.content" style="font-size:11px;color:var(--ink-mute);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ n.content }}</div>
+                    <div style="font-size:10px;color:var(--ink-mute);margin-top:2px">{{ (n.created_at || '').replace('T', ' ').slice(0, 16) }}</div>
+                  </div>
+                  <span v-if="!n.read" style="width:7px;height:7px;border-radius:50%;background:var(--seal,#c0392b);flex-shrink:0;margin-top:5px"></span>
+                </div>
+              </template>
             </div>
           </div>
         </div>

@@ -326,6 +326,33 @@ p, R-ETHICS,  /api/v1/notifications,              GET
 p, R-ETHICS,  /api/v1/notifications/*,            GET
 p, R-ETHICS,  /api/v1/notifications/*,            POST
 
+# ---- T20 任务中心 + 站内消息：全员读待办/摘要/收件箱、登录用户发消息 ----
+# 裸路径（/tasks、/tasks/summary、/messages）与 /tasks/* 单独成条（keyMatch2 铁律）
+p, R-STAFF,   /api/v1/tasks,                      GET
+p, R-STAFF,   /api/v1/tasks/*,                    GET
+p, R-STAFF,   /api/v1/messages,                   GET
+p, R-STAFF,   /api/v1/messages,                   POST
+p, R-MANAGER, /api/v1/tasks,                      GET
+p, R-MANAGER, /api/v1/tasks/*,                    GET
+p, R-MANAGER, /api/v1/messages,                   GET
+p, R-MANAGER, /api/v1/messages,                   POST
+p, R-LEADER,  /api/v1/tasks,                      GET
+p, R-LEADER,  /api/v1/tasks/*,                    GET
+p, R-LEADER,  /api/v1/messages,                   GET
+p, R-LEADER,  /api/v1/messages,                   POST
+p, R-FINANCE, /api/v1/tasks,                      GET
+p, R-FINANCE, /api/v1/tasks/*,                    GET
+p, R-FINANCE, /api/v1/messages,                   GET
+p, R-FINANCE, /api/v1/messages,                   POST
+p, R-EXPERT,  /api/v1/tasks,                      GET
+p, R-EXPERT,  /api/v1/tasks/*,                    GET
+p, R-EXPERT,  /api/v1/messages,                   GET
+p, R-EXPERT,  /api/v1/messages,                   POST
+p, R-ETHICS,  /api/v1/tasks,                      GET
+p, R-ETHICS,  /api/v1/tasks/*,                    GET
+p, R-ETHICS,  /api/v1/messages,                   GET
+p, R-ETHICS,  /api/v1/messages,                   POST
+
 # ---- 数据决策域（D）：大屏经费聚合（管理/领导/财务/审计/研究员只读）----
 p, R-MANAGER, /api/v1/dashboard/*,                  GET
 p, R-LEADER,  /api/v1/dashboard/*,                  GET

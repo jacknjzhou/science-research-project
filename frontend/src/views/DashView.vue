@@ -18,6 +18,15 @@ const kpi = ref<Record<string, MetricValue>>({})
 const spark = ref<ForecastRow[]>([])
 const health = ref<DrillRow[]>([])
 const loading = ref(true)
+// T20 今日待办卡（/tasks/summary 真数据；接口失败静默回退 0）
+const summary = ref<{ todo: number; message: number; warning: number }>({ todo: 0, message: 0, warning: 0 })
+
+async function loadSummary() {
+  try {
+    const d = await api.get<{ todo: number; message: number; warning: number }>('/tasks/summary')
+    if (d) summary.value = d
+  } catch { /* 静默 */ }
+}
 
 const KPI_CODES = [
   { code: 'in_research_projects', icon: '◫', cls: '',        delta: '▲ 本季新增 2', dir: 'up' },
@@ -54,7 +63,10 @@ async function load() {
     loading.value = false
   }
 }
-onMounted(load)
+onMounted(() => {
+  load()
+  loadSummary()
+})
 </script>
 
 <template>
@@ -62,7 +74,7 @@ onMounted(load)
     <div class="page-head">
       <div>
         <div class="page-title">早安，<em>周明远</em> 研究员</div>
-        <div class="page-sub mono">2026 年 10 月 13 日 · 星期二 · 你有 <b style="color:var(--seal)">5</b> 项待办与 <b style="color:var(--ai)">2</b> 条 AI 建议</div>
+        <div class="page-sub mono">2026 年 10 月 13 日 · 星期二 · 今日待办 <b style="color:var(--seal)">{{ summary.todo }}</b> · 消息 <b style="color:var(--ai)">{{ summary.message }}</b> · 预警 <b style="color:var(--bad)">{{ summary.warning }}</b></div>
       </div>
       <button class="btn seal" @click="$router.push({ name: 'editor' })">＋ 新申报</button>
     </div>

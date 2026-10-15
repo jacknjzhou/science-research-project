@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	nfstore "github.com/eplugger/ark/internal/modules/notify/store"
+	fstore "github.com/eplugger/ark/internal/modules/funding/store"
 	"github.com/eplugger/ark/internal/platform/auth"
 	"github.com/eplugger/ark/internal/platform/httpx"
 	"github.com/gin-gonic/gin"
@@ -15,11 +16,12 @@ import (
 )
 
 type Handler struct {
-	q *nfstore.Queries
+	q  *nfstore.Queries
+	fq *fstore.Queries // T20 任务中心跨域待办读模型（F_EXPENSE_APPROVAL join）
 }
 
 func NewHandler(pool *pgxpool.Pool) *Handler {
-	return &Handler{q: nfstore.New(pool)}
+	return &Handler{q: nfstore.New(pool), fq: fstore.New(pool)}
 }
 
 // Push 单用户触达（funding.Notifier）。
