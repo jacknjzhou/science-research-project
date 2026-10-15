@@ -1,7 +1,9 @@
 package archive
 
 import (
+	"encoding/json"
 	"strconv"
+	"time"
 
 	ostore "github.com/eplugger/ark/internal/modules/archive/store"
 	"github.com/eplugger/ark/internal/platform/auth"
@@ -342,4 +344,205 @@ func (h *Handler) IngestSource(c *gin.Context) {
 		return
 	}
 	httpx.WriteOK(c, ToAPIArchiveItem(r))
+}
+
+// ---------- 状态机动作 ----------
+
+type destroyBody struct {
+	Reason *string `json:"reason"`
+}
+
+// strOf 返回指向入参字符串副本的指针（供 SetArchiveStatus.FromStatus 携带期望前态）。
+func strOf(s string) *string { return &s }
+
+// SubmitArchive 契约 POST /archives/{id}/submit：PENDING_SUBMIT/REJECTED → SUBMITTED。
+// 非法前态（GetArchive 命中但状态不符）→ 40901；不存在 → 40401。
+func (h *Handler) SubmitArchive(c *gin.Context) {
+	d := auth.DomainFrom(c)
+	id, ok := parseArchiveID(c)
+	if !ok {
+		return
+	}
+	cur, err := h.q.GetArchive(c, id)
+	if err != nil {
+		httpx.WriteErr(c, 404, 40401, "案卷不存在")
+		return
+	}
+	if cur.Status != "PENDING_SUBMIT" && cur.Status != "REJECTED" {
+		httpx.WriteErr(c, 409, 40901, "仅 PENDING_SUBMIT/REJECTED 可提交")
+		return
+	}
+	now := time.Now()
+	userID := d.UserID
+	rows, err := h.q.SetArchiveStatus(c, ostore.SetArchiveStatusParams{
+		Status: "SUBMITTED", SubmitterID: &userID, SubmitAt: tsOf(&now),
+		ModifierID: d.UserID, ID: id, FromStatus: strOf(cur.Status),
+	})
+	if err != nil {
+		httpx.WriteErr(c, 500, 50002, "提交失败")
+		return
+	}
+	if rows == 0 {
+		httpx.WriteErr(c, 409, 40901, "状态已变更，请刷新重试")
+		return
+	}
+	r, _ := h.q.GetArchive(c, id)
+	httpx.WriteOK(c, ToAPIArchive(r))
+}
+
+// FileArchive 契约 POST /archives/{id}/file：PASSED → ARCHIVED（Casbin 限 R-ADMIN）。
+// archivist_id/filed_at 填当前用户/时间。
+func (h *Handler) FileArchive(c *gin.Context) {
+	d := auth.DomainFrom(c)
+	id, ok := parseArchiveID(c)
+	if !ok {
+		return
+	}
+	cur, err := h.q.GetArchive(c, id)
+	if err != nil {
+		httpx.WriteErr(c, 404, 40401, "案卷不存在")
+		return
+	}
+	if cur.Status != "PASSED" {
+		httpx.WriteErr(c, 409, 40901, "仅 PASSED 案卷可入库")
+		return
+	}
+	now := time.Now()
+	archivistID := d.UserID
+	rows, err := h.q.SetArchiveStatus(c, ostore.SetArchiveStatusParams{
+		Status: "ARCHIVED", ArchivistID: &archivistID, FiledAt: tsOf(&now),
+		ModifierID: d.UserID, ID: id, FromStatus: strOf(cur.Status),
+	})
+	if err != nil {
+		httpx.WriteErr(c, 500, 50002, "入库失败")
+		return
+	}
+	if rows == 0 {
+		httpx.WriteErr(c, 409, 40901, "状态已变更，请刷新重试")
+		return
+	}
+	r, _ := h.q.GetArchive(c, id)
+	httpx.WriteOK(c, ToAPIArchive(r))
+}
+
+// DestroyArchive 契约 POST /archives/{id}/destroy：ARCHIVED → DESTROYED（Casbin 限 R-ADMIN）。
+// 说明：SetArchiveStatus 查询无 remark 字段，销毁原因 reason 本轮仅接收不回写（无对应查询，
+// 遵循「不臆造新查询」约束）；流转本身即留痕（modifier_id/updated_at/status）。
+func (h *Handler) DestroyArchive(c *gin.Context) {
+	d := auth.DomainFrom(c)
+	id, ok := parseArchiveID(c)
+	if !ok {
+		return
+	}
+	var b destroyBody
+	_ = c.ShouldBindJSON(&b) // reason 可选，绑定失败不阻断流转
+	cur, err := h.q.GetArchive(c, id)
+	if err != nil {
+		httpx.WriteErr(c, 404, 40401, "案卷不存在")
+		return
+	}
+	if cur.Status != "ARCHIVED" {
+		httpx.WriteErr(c, 409, 40901, "仅 ARCHIVED 案卷可销毁")
+		return
+	}
+	rows, err := h.q.SetArchiveStatus(c, ostore.SetArchiveStatusParams{
+		Status: "DESTROYED", ModifierID: d.UserID, ID: id, FromStatus: strOf(cur.Status),
+	})
+	if err != nil {
+		httpx.WriteErr(c, 500, 50002, "销毁失败")
+		return
+	}
+	if rows == 0 {
+		httpx.WriteErr(c, 409, 40901, "状态已变更，请刷新重试")
+		return
+	}
+	r, _ := h.q.GetArchive(c, id)
+	httpx.WriteOK(c, ToAPIArchive(r))
+}
+
+// CheckArchive 契约 POST /archives/{id}/check：四性检测落库（本任务新增的「落库」环节）。
+//
+// facts 组装全部走可查询数据，不拉取对象字节重算哈希（handler 层不持有真实重算能力，
+// 见 check.go 注释）：
+//   - INTEGRITY：required 清单总数 vs 已填（doc_id 非空且 status=FILLED）数；
+//   - AUTHENTICITY：期望值取 o_document.checksum_sha256，实取值本轮直接信任该记录值
+//     （Got==Expected → PASS；未来接对象存储重算时改 Got 为回读字节的 sha256 即可）；
+//   - USABILITY：doc.Status=="STORED" 视为可读；
+//   - SECURITY：本轮无操作人密级模型，恒 true。
+//
+// 计算结果经 evaluateFourProperties 得出，逐项 UpsertCheck 落 o_archive_check；
+// 若案卷当前处于 SUBMITTED，则按 allPassed 迁移 PASSED/REJECTED（best-effort，忽略错误/0 行）。
+func (h *Handler) CheckArchive(c *gin.Context) {
+	d := auth.DomainFrom(c)
+	id, ok := parseArchiveID(c)
+	if !ok {
+		return
+	}
+	cur, err := h.q.GetArchive(c, id)
+	if err != nil {
+		httpx.WriteErr(c, 404, 40401, "案卷不存在")
+		return
+	}
+	required, err := h.q.ListRequiredItems(c, id)
+	if err != nil {
+		httpx.WriteErr(c, 500, 50001, "查询清单失败")
+		return
+	}
+	f := facts{SecurityOK: true}
+	for _, it := range required {
+		f.RequiredTotal++
+		filled := it.DocID != nil && it.Status == "FILLED"
+		if filled {
+			f.RequiredFilled++
+		}
+		if it.DocID == nil {
+			continue
+		}
+		doc, derr := h.q.GetDocument(c, *it.DocID)
+		if derr != nil {
+			// 引用的文档缺失/已删：计不可读、真实性不命中（Expected 空 → 不计入 mismatch，
+			// 保持与 check.go 纯逻辑一致：空 Expected 不判 FAIL）。
+			continue
+		}
+		var exp string
+		if doc.ChecksumSha256 != nil {
+			exp = *doc.ChecksumSha256
+		}
+		f.Docs = append(f.Docs, docFact{
+			DocID: *it.DocID, Expected: exp, Got: exp, Usable: doc.Status == "STORED",
+		})
+	}
+
+	res := evaluateFourProperties(f)
+	passed := allPassed(res)
+	checkerID := d.UserID
+	list := make([]map[string]any, 0, len(res))
+	for _, r := range res {
+		detail, merr := json.Marshal(r.Detail)
+		if merr != nil {
+			detail = []byte("{}")
+		}
+		row, uerr := h.q.UpsertCheck(c, ostore.UpsertCheckParams{
+			TenantID: cur.TenantID, ArchiveID: id, CheckType: r.CheckType,
+			Result: r.Result, Detail: detail, CheckerID: &checkerID,
+		})
+		if uerr != nil {
+			httpx.WriteErr(c, 500, 50002, "检测结果落库失败")
+			return
+		}
+		list = append(list, ToAPIArchiveCheck(row))
+	}
+
+	// 仅 SUBMITTED 态才迁移结论（best-effort：忽略错误与并发 0 行）。
+	if cur.Status == "SUBMITTED" {
+		target := "REJECTED"
+		if passed {
+			target = "PASSED"
+		}
+		_, _ = h.q.SetArchiveStatus(c, ostore.SetArchiveStatusParams{
+			Status: target, ModifierID: d.UserID, ID: id, FromStatus: strOf(cur.Status),
+		})
+	}
+
+	httpx.WriteOK(c, gin.H{"list": list, "passed": passed})
 }
