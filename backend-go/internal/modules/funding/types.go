@@ -1,13 +1,7 @@
 package funding
 
-// llmVerdict：LLM 结构化建议（AiReviewResult 契约子集）。
-type llmVerdict struct {
-	Verdict    string   `json:"verdict"` // PASS / REVIEW / REJECT
-	Confidence float64  `json:"confidence"`
-	Issues     []llmIssue `json:"issues"`
-}
+import "github.com/eplugger/ark/internal/platform/llm"
 
-type llmIssue struct {
-	Rule   string `json:"rule"`
-	Reason string `json:"reason"`
-}
+// LLMVerdict 别名：LLM 结构化建议（AiReviewResult 契约子集），类型真源在 platform/llm。
+type LLMVerdict = llm.Verdict
+type LLMIssue = llm.Issue

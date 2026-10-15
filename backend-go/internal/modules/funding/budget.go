@@ -63,7 +63,8 @@ func strToNum(s string) pgtype.Numeric {
 
 // ListSubjects GET /subjects —— 启用科目（扁平，前端组树）。
 func (h *Handler) ListSubjects(c *gin.Context) {
-	rows, err := h.q.ListSubjects(c)
+	d := auth.DomainFrom(c)
+	rows, err := h.q.ListSubjects(c, d.TenantID)
 	if err != nil {
 		httpx.WriteErr(c, http.StatusInternalServerError, 50001, "查询失败")
 		return

@@ -17,7 +17,7 @@ type Notifier interface {
 
 // LLMClient AI 建议客户端（platform/llm 实现；nil 或不可用 → AI 端点降级 REVIEW）。
 type LLMClient interface {
-	ChatJSON(ctx context.Context, system, user string) (llmVerdict, error)
+	ChatJSON(ctx context.Context, system, user string) (LLMVerdict, error)
 }
 
 type Handler struct {

@@ -44,13 +44,13 @@ func (q *Queries) GetSubject(ctx context.Context, id int64) (FSubject, error) {
 const listSubjects = `-- name: ListSubjects :many
 
 SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, name, parent_id, level, category, is_leaf, ratio_limit, applies_to, sort_no, effective_from, effective_to FROM F_SUBJECT
-WHERE deleted = 0 AND status = 'ACTIVE'
+WHERE deleted = 0 AND status = 'ACTIVE' AND tenant_id = $1
 ORDER BY sort_no, id
 `
 
 // F-01 科目字典（只读主数据，seed 维护）
-func (q *Queries) ListSubjects(ctx context.Context) ([]FSubject, error) {
-	rows, err := q.db.Query(ctx, listSubjects)
+func (q *Queries) ListSubjects(ctx context.Context, tenantID int64) ([]FSubject, error) {
+	rows, err := q.db.Query(ctx, listSubjects, tenantID)
 	if err != nil {
 		return nil, err
 	}

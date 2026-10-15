@@ -38,7 +38,13 @@ func poolForTest(t *testing.T) *pgxpool.Pool {
 	if dsn == "" {
 		t.Skip("ARK_TEST_DATABASE_URL 未设置，跳过 DB 集成")
 	}
-	pool, err := pgxpool.New(testCtx(), dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse dsn: %v", err)
+	}
+	// 全量并行跑测试时 PG 连接数紧张：测试池收紧到 2，避免 "too many clients" 瞬时错误。
+	cfg.MaxConns = 2
+	pool, err := pgxpool.NewWithConfig(testCtx(), cfg)
 	if err != nil {
 		t.Fatalf("pool: %v", err)
 	}
@@ -46,7 +52,7 @@ func poolForTest(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// runSeed 幂等清插本域数据。
+// runSeed 幂等清插本域数据（串行化由 poolForTest 的会话级 advisory lock 保证）。
 func runSeed(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join("..", "..", "..", "testdata", "seed_f.sql"))

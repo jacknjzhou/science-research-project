@@ -10,6 +10,223 @@ import (
 	"time"
 )
 
+const dashCountsByState = `-- name: DashCountsByState :many
+SELECT CASE
+         WHEN status = 'DRAFT' THEN 'pre'
+         WHEN status IN ('SUBMITTED','AI_REVIEW','HUMAN_REVIEW') THEN 'during'
+         ELSE 'post'
+       END AS bucket, count(*) AS cnt
+FROM F_EXPENSE
+WHERE tenant_id = $1 AND deleted = 0
+  AND ($2::bigint IS NULL OR legal_entity_id = $2::bigint)
+  AND COALESCE(submitted_at, created_at) >= date_trunc('year', now())
+GROUP BY 1
+`
+
+type DashCountsByStateParams struct {
+	TenantID      int64  `json:"tenant_id"`
+	LegalEntityID *int64 `json:"legal_entity_id"`
+}
+
+type DashCountsByStateRow struct {
+	Bucket string `json:"bucket"`
+	Cnt    int64  `json:"cnt"`
+}
+
+func (q *Queries) DashCountsByState(ctx context.Context, arg DashCountsByStateParams) ([]DashCountsByStateRow, error) {
+	rows, err := q.db.Query(ctx, dashCountsByState, arg.TenantID, arg.LegalEntityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DashCountsByStateRow
+	for rows.Next() {
+		var i DashCountsByStateRow
+		if err := rows.Scan(&i.Bucket, &i.Cnt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const dashDeptHeatmap = `-- name: DashDeptHeatmap :many
+SELECT b.legal_entity_id AS department_id,
+       COALESCE(SUM(b.total_approved), 0)::numeric(18,2)::text AS budget,
+       COALESCE((SELECT SUM(e.amount) FROM F_EXPENSE e
+                 WHERE e.tenant_id = $1 AND e.deleted = 0
+                   AND e.legal_entity_id = b.legal_entity_id
+                   AND e.status IN ('APPROVED','PAID','VOUCHER_SYNCED')), 0)::numeric(18,2)::text AS used
+FROM F_BUDGET b
+WHERE b.tenant_id = $1 AND b.deleted = 0
+  AND ($2::bigint IS NULL OR b.legal_entity_id = $2::bigint)
+  AND b.status IN ('EXECUTING','ADJUSTING','RE_APPROVED','CLOSED')
+GROUP BY b.legal_entity_id
+`
+
+type DashDeptHeatmapParams struct {
+	TenantID      int64  `json:"tenant_id"`
+	LegalEntityID *int64 `json:"legal_entity_id"`
+}
+
+type DashDeptHeatmapRow struct {
+	DepartmentID int64  `json:"department_id"`
+	Budget       string `json:"budget"`
+	Used         string `json:"used"`
+}
+
+func (q *Queries) DashDeptHeatmap(ctx context.Context, arg DashDeptHeatmapParams) ([]DashDeptHeatmapRow, error) {
+	rows, err := q.db.Query(ctx, dashDeptHeatmap, arg.TenantID, arg.LegalEntityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DashDeptHeatmapRow
+	for rows.Next() {
+		var i DashDeptHeatmapRow
+		if err := rows.Scan(&i.DepartmentID, &i.Budget, &i.Used); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const dashTotalBudget = `-- name: DashTotalBudget :one
+
+SELECT COALESCE(SUM(total_approved), 0)::numeric(18,2)::text AS total FROM F_BUDGET
+WHERE tenant_id = $1 AND deleted = 0
+  AND ($2::bigint IS NULL OR legal_entity_id = $2::bigint)
+  AND status IN ('EXECUTING','ADJUSTING','RE_APPROVED','CLOSED')
+`
+
+type DashTotalBudgetParams struct {
+	TenantID      int64  `json:"tenant_id"`
+	LegalEntityID *int64 `json:"legal_entity_id"`
+}
+
+// —— 大屏聚合（F-18 一图一舱三预警，T10）——
+// 语义：
+//
+//	totalBudget  = 有效批复预算合计
+//	yearIncome   = 本年度已认领到账
+//	yearUsed     = 本年度已核销支出（APPROVED/PAID/VOUCHER_SYNCED）
+//	violation    = 事后违规近似：本年度 REJECTED/RETURNED 报销单数
+//	deptHeatmap  = 按法人实体分组（契约 departmentId 以 legal_entity_id 承载）
+//	trend12      = 近 12 个月逐月支出（相对 totalBudget 归一执行率）
+func (q *Queries) DashTotalBudget(ctx context.Context, arg DashTotalBudgetParams) (string, error) {
+	row := q.db.QueryRow(ctx, dashTotalBudget, arg.TenantID, arg.LegalEntityID)
+	var total string
+	err := row.Scan(&total)
+	return total, err
+}
+
+const dashTrend12 = `-- name: DashTrend12 :many
+SELECT to_char(date_trunc('month', COALESCE(submitted_at, created_at)), 'YYYY-MM') AS month,
+       COALESCE(SUM(amount), 0)::numeric(18,2)::text AS total
+FROM F_EXPENSE
+WHERE tenant_id = $1 AND deleted = 0
+  AND ($2::bigint IS NULL OR legal_entity_id = $2::bigint)
+  AND status IN ('APPROVED','PAID','VOUCHER_SYNCED')
+  AND COALESCE(submitted_at, created_at) >= date_trunc('month', now()) - interval '11 months'
+GROUP BY 1 ORDER BY 1
+`
+
+type DashTrend12Params struct {
+	TenantID      int64  `json:"tenant_id"`
+	LegalEntityID *int64 `json:"legal_entity_id"`
+}
+
+type DashTrend12Row struct {
+	Month string `json:"month"`
+	Total string `json:"total"`
+}
+
+func (q *Queries) DashTrend12(ctx context.Context, arg DashTrend12Params) ([]DashTrend12Row, error) {
+	rows, err := q.db.Query(ctx, dashTrend12, arg.TenantID, arg.LegalEntityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DashTrend12Row
+	for rows.Next() {
+		var i DashTrend12Row
+		if err := rows.Scan(&i.Month, &i.Total); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const dashViolationCount = `-- name: DashViolationCount :one
+SELECT count(*) FROM F_EXPENSE
+WHERE tenant_id = $1 AND deleted = 0
+  AND ($2::bigint IS NULL OR legal_entity_id = $2::bigint)
+  AND status IN ('REJECTED','RETURNED')
+  AND COALESCE(submitted_at, created_at) >= date_trunc('year', now())
+`
+
+type DashViolationCountParams struct {
+	TenantID      int64  `json:"tenant_id"`
+	LegalEntityID *int64 `json:"legal_entity_id"`
+}
+
+func (q *Queries) DashViolationCount(ctx context.Context, arg DashViolationCountParams) (int64, error) {
+	row := q.db.QueryRow(ctx, dashViolationCount, arg.TenantID, arg.LegalEntityID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const dashYearIncome = `-- name: DashYearIncome :one
+SELECT COALESCE(SUM(amount), 0)::numeric(18,2)::text AS total FROM F_INCOME
+WHERE tenant_id = $1 AND deleted = 0 AND claim_status = 'CLAIMED'
+  AND ($2::bigint IS NULL OR legal_entity_id = $2::bigint)
+  AND claimed_at >= date_trunc('year', now())
+`
+
+type DashYearIncomeParams struct {
+	TenantID      int64  `json:"tenant_id"`
+	LegalEntityID *int64 `json:"legal_entity_id"`
+}
+
+func (q *Queries) DashYearIncome(ctx context.Context, arg DashYearIncomeParams) (string, error) {
+	row := q.db.QueryRow(ctx, dashYearIncome, arg.TenantID, arg.LegalEntityID)
+	var total string
+	err := row.Scan(&total)
+	return total, err
+}
+
+const dashYearUsed = `-- name: DashYearUsed :one
+SELECT COALESCE(SUM(amount), 0)::numeric(18,2)::text AS total FROM F_EXPENSE
+WHERE tenant_id = $1 AND deleted = 0
+  AND ($2::bigint IS NULL OR legal_entity_id = $2::bigint)
+  AND status IN ('APPROVED','PAID','VOUCHER_SYNCED')
+  AND COALESCE(submitted_at, created_at) >= date_trunc('year', now())
+`
+
+type DashYearUsedParams struct {
+	TenantID      int64  `json:"tenant_id"`
+	LegalEntityID *int64 `json:"legal_entity_id"`
+}
+
+func (q *Queries) DashYearUsed(ctx context.Context, arg DashYearUsedParams) (string, error) {
+	row := q.db.QueryRow(ctx, dashYearUsed, arg.TenantID, arg.LegalEntityID)
+	var total string
+	err := row.Scan(&total)
+	return total, err
+}
+
 const getProjectBrief = `-- name: GetProjectBrief :one
 SELECT id, code, title, end_date, actual_end_date, pi_user_id FROM E_PROJECT
 WHERE id = $1 AND deleted = 0
@@ -80,7 +297,7 @@ func (q *Queries) ListExecutingProjects(ctx context.Context, tenantID int64) ([]
 }
 
 const sumBudgetApproved = `-- name: SumBudgetApproved :one
-SELECT COALESCE(SUM(total_approved), 0)::text AS total FROM F_BUDGET
+SELECT COALESCE(SUM(total_approved), 0)::numeric(18,2)::text AS total FROM F_BUDGET
 WHERE tenant_id = $1 AND project_id = $2 AND deleted = 0
   AND status IN ('EXECUTING','ADJUSTING','RE_APPROVED','CLOSED')
 `
@@ -99,7 +316,7 @@ func (q *Queries) SumBudgetApproved(ctx context.Context, arg SumBudgetApprovedPa
 
 const sumClaimedIncome = `-- name: SumClaimedIncome :one
 
-SELECT COALESCE(SUM(amount), 0)::text AS total FROM F_INCOME
+SELECT COALESCE(SUM(amount), 0)::numeric(18,2)::text AS total FROM F_INCOME
 WHERE tenant_id = $1 AND project_id = $2 AND claim_status = 'CLAIMED' AND deleted = 0
 `
 
@@ -117,7 +334,7 @@ func (q *Queries) SumClaimedIncome(ctx context.Context, arg SumClaimedIncomePara
 }
 
 const sumExpenseFrozen = `-- name: SumExpenseFrozen :one
-SELECT COALESCE(SUM(amount), 0)::text AS total FROM F_EXPENSE
+SELECT COALESCE(SUM(amount), 0)::numeric(18,2)::text AS total FROM F_EXPENSE
 WHERE tenant_id = $1 AND project_id = $2 AND deleted = 0
   AND status IN ('SUBMITTED','AI_REVIEW','HUMAN_REVIEW')
 `
@@ -135,7 +352,7 @@ func (q *Queries) SumExpenseFrozen(ctx context.Context, arg SumExpenseFrozenPara
 }
 
 const sumExpenseUsed = `-- name: SumExpenseUsed :one
-SELECT COALESCE(SUM(amount), 0)::text AS total FROM F_EXPENSE
+SELECT COALESCE(SUM(amount), 0)::numeric(18,2)::text AS total FROM F_EXPENSE
 WHERE tenant_id = $1 AND project_id = $2 AND deleted = 0
   AND status IN ('APPROVED','PAID','VOUCHER_SYNCED')
 `

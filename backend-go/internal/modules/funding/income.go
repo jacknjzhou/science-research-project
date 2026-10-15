@@ -127,7 +127,12 @@ func (h *Handler) ImportBankFlow(c *gin.Context) {
 		exists, err := h.q.IncomeFlowNoExists(c, fstore.IncomeFlowNoExistsParams{
 			TenantID: d.TenantID, BankFlowNo: &r.BankFlowNo,
 		})
-		if err == nil && exists {
+		if err != nil {
+			// 幂等检查失败必须显式失败，严禁静默当作"不存在"重复入账
+			httpx.WriteErr(c, http.StatusInternalServerError, 50002, "幂等检查失败："+err.Error())
+			return
+		}
+		if exists {
 			skipped++
 			continue
 		}

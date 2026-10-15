@@ -23,11 +23,14 @@ INSERT INTO F_SUBJECT (tenant_id, status, creator_id, code, name, level, categor
  (1, 'ACTIVE', 1, 'SUB-IND', '间接费用',       1, 'INDIRECT',   TRUE, 0.30, 8);
 
 -- 项目（E_PROJECT 跨模块逻辑引用：9001 执行中且临近结题、9002 已结题）
-DELETE FROM E_PROJECT WHERE id IN (9001, 9002);
+-- upsert 而非 delete+insert：并行包共享 9001/9002 时行永不缺席。
 INSERT INTO E_PROJECT (id, tenant_id, status, creator_id, application_id, title, pi_user_id, legal_entity_id, end_date, total_budget, member_ids)
 OVERRIDING SYSTEM VALUE VALUES
  (9001, 1, 'EXECUTING', 1, 9001, '面向高端装备的拓扑优化研究', 100, 1, CURRENT_DATE + 15, 500000, '[]'),
- (9002, 1, 'CLOSED',    1, 9002, '已结题历史项目',             101, 1, CURRENT_DATE - 200, 100000, '[]');
+ (9002, 1, 'CLOSED',    1, 9002, '已结题历史项目',             101, 1, CURRENT_DATE - 200, 100000, '[]')
+ON CONFLICT (id) DO UPDATE SET
+  status = EXCLUDED.status, end_date = EXCLUDED.end_date,
+  total_budget = EXCLUDED.total_budget, deleted = 0;
 
 -- 预算（EXECUTING，50 万）+ 3 行
 INSERT INTO F_BUDGET (id, tenant_id, status, creator_id, code, project_id, legal_entity_id, mode, total_approved, total_adjusted, version, approved_at, approved_by)
