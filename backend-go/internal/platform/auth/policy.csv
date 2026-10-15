@@ -290,3 +290,11 @@ p, R-MANAGER, /api/v1/dashboard/*,                  GET
 p, R-LEADER,  /api/v1/dashboard/*,                  GET
 p, R-FINANCE, /api/v1/dashboard/*,                  GET
 p, R-STAFF,   /api/v1/dashboard/*,                  GET
+
+# ---- 导入导出底座（T13）：仅管理/领导可导入导出，撤销仅管理 ----
+p, R-MANAGER, /api/v1/dataio/*,                     GET
+p, R-MANAGER, /api/v1/dataio/*,                     POST
+p, R-LEADER,  /api/v1/dataio/*,                     GET
+p, R-LEADER,  /api/v1/dataio/*,                     POST
+p, R-FINANCE, /api/v1/dataio/*,                     GET
+p, R-FINANCE, /api/v1/dataio/*,                     POST

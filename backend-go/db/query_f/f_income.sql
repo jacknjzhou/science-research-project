@@ -41,3 +41,15 @@ UPDATE F_INCOME
 SET project_id = $2, claimed_by = $3, claimed_at = now(), claim_status = 'CLAIMED', updated_at = now()
 WHERE id = $1 AND claim_status = 'UNCLAIMED' AND deleted = 0
 RETURNING *;
+
+-- T13 导入撤销：批次内仍 UNCLAIMED 的行删除；已认领行计数>0 则整体拒绝（handler 判断）。
+
+-- name: CountIncomesClaimedByFlowNos :one
+SELECT count(*) FROM F_INCOME
+WHERE tenant_id = $1 AND bank_flow_no = ANY(sqlc.arg('flow_nos')::text[])
+  AND claim_status <> 'UNCLAIMED' AND deleted = 0;
+
+-- name: DeleteImportedIncomes :execrows
+DELETE FROM F_INCOME
+WHERE tenant_id = $1 AND bank_flow_no = ANY(sqlc.arg('flow_nos')::text[])
+  AND claim_status = 'UNCLAIMED' AND deleted = 0;

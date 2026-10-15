@@ -31,3 +31,16 @@ CREATE TABLE sys_user_role (
   tenant_id BIGINT NOT NULL,
   expires_at TIMESTAMPTZ
 );
+
+-- T13 导入日志（dataio 模块；snapshot=成功行业务键 JSON 数组，undo 依据）
+CREATE TABLE sys_import_log (
+  id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  tenant_id     BIGINT NOT NULL,
+  module        VARCHAR(64) NOT NULL,
+  row_count     INT NOT NULL DEFAULT 0,
+  success_count INT NOT NULL DEFAULT 0,
+  fail_count    INT NOT NULL DEFAULT 0,
+  operator_id   BIGINT NOT NULL,
+  snapshot      JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);

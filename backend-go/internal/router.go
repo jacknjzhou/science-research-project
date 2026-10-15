@@ -7,6 +7,7 @@ import (
 	"github.com/eplugger/ark/internal/config"
 	"github.com/eplugger/ark/internal/modules/activity"
 	"github.com/eplugger/ark/internal/modules/archive"
+	"github.com/eplugger/ark/internal/modules/dataio"
 	"github.com/eplugger/ark/internal/modules/dataops"
 	"github.com/eplugger/ark/internal/modules/expertreview"
 	"github.com/eplugger/ark/internal/modules/funding"
@@ -85,6 +86,8 @@ func Build(d RouterDeps) *gin.Engine {
 				time.Duration(d.Cfg.LLMTimeoutSec)*time.Second))
 		}
 		funding.Register(api, fundH)
+		// T13 Excel 导入导出底座。
+		dataio.Register(api, dataio.NewHandler(d.Pool))
 		// D 数据决策：大屏经费真聚合（F-18）。
 		dataops.Register(api, dataops.NewHandler(d.Pool))
 	}
