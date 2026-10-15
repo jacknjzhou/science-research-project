@@ -6,6 +6,7 @@ import (
 	"github.com/casbin/casbin/v2"
 	"github.com/eplugger/ark/internal/config"
 	"github.com/eplugger/ark/internal/modules/activity"
+	"github.com/eplugger/ark/internal/modules/expertreview"
 	"github.com/eplugger/ark/internal/modules/output"
 	"github.com/eplugger/ark/internal/modules/p"
 	"github.com/eplugger/ark/internal/modules/performance"
@@ -59,8 +60,12 @@ func Build(d RouterDeps) *gin.Engine {
 		sysadmin.Register(api, sysadmin.NewHandler(d.Pool, d.Enforcer))
 		activity.Register(api, activity.NewHandler(d.Pool))
 		performance.Register(api, performance.NewHandler(d.Pool))
-		project.Register(api, project.NewHandler(d.Pool))
-		output.Register(api, output.NewHandler(d.Pool))
+		projH := project.NewHandler(d.Pool)
+		outH := output.NewHandler(d.Pool)
+		project.Register(api, projH)
+		output.Register(api, outH)
+		// N 需注入 E/R Handler 以便按 biz_type 经单一写者回写被评审对象。
+		expertreview.Register(api, expertreview.NewHandler(d.Pool, projH, outH))
 	}
 
 	// 兜底：命中契约但未手工实现的路由 → passthrough（NoRoute 不经分组中间件，M0 可接受）
