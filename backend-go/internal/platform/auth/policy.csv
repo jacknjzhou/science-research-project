@@ -169,6 +169,7 @@ p, R-EXPERT,  /api/v1/reviews/*/scores,           POST
 p, R-MANAGER, /api/v1/documents,                    POST
 p, R-MANAGER, /api/v1/documents/*,                  GET
 p, R-MANAGER, /api/v1/documents/search,             GET
+p, R-MANAGER, /api/v1/archives,                     GET
 p, R-MANAGER, /api/v1/archives/*,                   GET
 p, R-MANAGER, /api/v1/archives,                     POST
 p, R-MANAGER, /api/v1/archives/*,                   PUT
@@ -177,6 +178,7 @@ p, R-MANAGER, /api/v1/archives/*/check,             POST
 p, R-MANAGER, /api/v1/archives/*/items,             POST
 p, R-MANAGER, /api/v1/archives/*/ingest,            POST
 p, R-MANAGER, /api/v1/borrows,                      POST
+p, R-MANAGER, /api/v1/borrows,                      GET
 # R-ADMIN：入库/销毁/检测、文档与案卷删除、借阅审批/拒绝/读。
 p, R-ADMIN,   /api/v1/archives/*/file,              POST
 p, R-ADMIN,   /api/v1/archives/*/destroy,           POST
