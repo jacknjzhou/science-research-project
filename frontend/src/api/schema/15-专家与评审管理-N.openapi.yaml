@@ -1,0 +1,690 @@
+openapi: 3.0.3
+info:
+  title: 专家与评审管理（N）API
+  version: "1.0"
+  description: >-
+    15 专家与评审管理模块对外 REST 契约（自包含 OpenAPI 3.0.3，可独立导入 Swagger/Postman）。
+    覆盖专家库台账（增删改查/启停）、评审任务（建单/抽取/邀请/应允/开始/打分/结论/评审费），
+    其中抽取引擎按回避规则确定性随机，结论按 biz_type 经 E/R 单一写者回写被评审对象。
+    字段与 ../README.md §2 通用列及 15-专家与评审管理-N.ddl.sql 对齐；状态 enum 取 §5 N 状态 token。
+    上游设计：../docs/superpowers/specs/2026-10-14-project-lifecycle-expert-review-archive-design.md §5。
+servers:
+  - url: /api/v1
+    description: 科研管理系统网关（v1）
+
+tags:
+  - name: expertreview
+    description: 专家库与评审流程（域 N）
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      description: 页码，1-based
+      schema: { type: integer, minimum: 1, default: 1 }
+    SizeParam:
+      name: size
+      in: query
+      description: 每页条数，默认 20，上限 200
+      schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: 幂等键（UUID），POST/PUT 服务端缓存去重（§3）
+      schema: { type: string, format: uuid }
+    ExpertId:
+      name: id
+      in: path
+      required: true
+      description: 专家主键 n_expert.id
+      schema: { type: integer, format: int64 }
+    ReviewId:
+      name: id
+      in: path
+      required: true
+      description: 评审任务主键 n_review_task.id
+      schema: { type: integer, format: int64 }
+
+  schemas:
+    ApiResponse:
+      type: object
+      description: 统一响应包裹（§3）
+      properties:
+        code:    { type: integer, description: 0 为成功，非 0 为业务错误码 }
+        message: { type: string }
+        data:    { type: object, nullable: true }
+        traceId: { type: string }
+        timestamp: { type: integer, format: int64 }
+
+    # 分页骨架（通用 items，不钉死具体实体；typed list 由端点 data 内 allOf 覆写 list 项型）。
+    PageResult:
+      type: object
+      properties:
+        total: { type: integer, format: int64 }
+        page:  { type: integer }
+        size:  { type: integer }
+
+    Expert:
+      type: object
+      description: 专家库主档视图（字段对齐 n_expert DDL）
+      properties:
+        id:               { type: integer, format: int64 }
+        code:             { type: string, nullable: true }
+        tenant_id:        { type: integer, format: int64 }
+        status:
+          type: string
+          enum: [CANDIDATE, ACTIVE, SUSPENDED, BLACKLIST]
+        name:             { type: string }
+        gender:           { type: string, nullable: true }
+        title:            { type: string, nullable: true }
+        org_name:         { type: string, nullable: true }
+        user_id:          { type: integer, format: int64, nullable: true }
+        source:
+          type: string
+          enum: [INTERNAL, EXTERNAL]
+        field_tags:       { type: array, items: { type: string } }
+        expertise_level:
+          type: string
+          enum: [JUNIOR, SENIOR, EXPERT]
+        avoid_orgs:       { type: array, items: { type: string } }
+        avoid_person_ids: { type: array, items: { type: integer, format: int64 } }
+        security_level:   { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET] }
+        created_at:       { type: string, format: date-time }
+        updated_at:       { type: string, format: date-time }
+
+    ReviewTask:
+      type: object
+      description: 评审任务视图（字段对齐 n_review_task DDL）
+      properties:
+        id:               { type: integer, format: int64 }
+        code:             { type: string, nullable: true }
+        tenant_id:        { type: integer, format: int64 }
+        biz_type:
+          type: string
+          enum: [MID_CHECK, FINAL_ACCEPT, OUTPUT_EVAL, PROJECT_APPLY, OTHER]
+        target_type:      { type: string, nullable: true }
+        target_id:        { type: integer, format: int64, nullable: true }
+        project_id:       { type: integer, format: int64, nullable: true }
+        title:            { type: string }
+        review_method:
+          type: string
+          enum: [RANDOM, COMBINATION, MANUAL]
+        plan_count:       { type: integer }
+        draw_rule:        { type: object, additionalProperties: true }
+        status:
+          type: string
+          enum: [DRAFT, DRAWN, INVITING, QUORUM, IN_REVIEW, COLLECTING, CONCLUDED, CANCELLED]
+        conclusion:       { type: string, nullable: true }
+        score_summary:    { type: object, nullable: true, additionalProperties: true }
+        security_level:   { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET] }
+        created_at:       { type: string, format: date-time }
+        updated_at:       { type: string, format: date-time }
+
+    Invitation:
+      type: object
+      description: 抽取/邀请名单项（字段对齐 n_review_invitation DDL）
+      properties:
+        id:          { type: integer, format: int64 }
+        task_id:     { type: integer, format: int64 }
+        expert_id:   { type: integer, format: int64 }
+        expert_name: { type: string, nullable: true }
+        seat_no:     { type: integer }
+        avoid_hit:   { type: boolean }
+        response:
+          type: string
+          enum: [PENDING, ACCEPT, DECLINE, EXPIRED]
+
+    Score:
+      type: object
+      description: 在线打分项（字段对齐 n_review_score DDL）
+      properties:
+        id:               { type: integer, format: int64 }
+        task_id:          { type: integer, format: int64 }
+        expert_id:        { type: integer, format: int64 }
+        dimension_scores: { type: array, items: { type: object, additionalProperties: true } }
+        total_score:      { type: string, description: NUMERIC(10,2) 定标字符串 }
+        status:           { type: string, enum: [SUBMITTED, ABSTAIN] }
+
+    ReviewDetail:
+      type: object
+      description: 评审详情（自包含内联分页对象 + task + invitations + scores；避免与 PageResult 组合冲突）
+      properties:
+        task:         { $ref: '#/components/schemas/ReviewTask' }
+        invitations:  { type: array, items: { $ref: '#/components/schemas/Invitation' } }
+        scores:       { type: array, items: { $ref: '#/components/schemas/Score' } }
+
+    ExpertCreateRequest:
+      type: object
+      description: 新建专家请求
+      required: [name]
+      properties:
+        name:             { type: string }
+        gender:           { type: string }
+        title:            { type: string }
+        org_name:         { type: string }
+        user_id:          { type: integer, format: int64 }
+        source:           { type: string, enum: [INTERNAL, EXTERNAL], default: EXTERNAL }
+        field_tags:       { type: array, items: { type: string } }
+        expertise_level:  { type: string, enum: [JUNIOR, SENIOR, EXPERT], default: EXPERT }
+        avoid_orgs:       { type: array, items: { type: string } }
+        avoid_person_ids: { type: array, items: { type: integer, format: int64 } }
+        security_level:   { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET], default: INTERNAL }
+
+    ExpertUpdateRequest:
+      type: object
+      description: 更新专家请求（字段子集）
+      properties:
+        name:             { type: string }
+        title:            { type: string }
+        org_name:         { type: string }
+        field_tags:       { type: array, items: { type: string } }
+        avoid_orgs:       { type: array, items: { type: string } }
+        avoid_person_ids: { type: array, items: { type: integer, format: int64 } }
+
+    ExpertStatusRequest:
+      type: object
+      description: 启停/黑名单请求
+      required: [status]
+      properties:
+        status: { type: string, enum: [CANDIDATE, ACTIVE, SUSPENDED, BLACKLIST] }
+
+    ReviewCreateRequest:
+      type: object
+      description: 新建评审任务请求
+      required: [biz_type, title]
+      properties:
+        biz_type:      { type: string, enum: [MID_CHECK, FINAL_ACCEPT, OUTPUT_EVAL, PROJECT_APPLY, OTHER] }
+        target_type:   { type: string }
+        target_id:     { type: integer, format: int64 }
+        project_id:    { type: integer, format: int64 }
+        title:         { type: string }
+        review_method: { type: string, enum: [RANDOM, COMBINATION, MANUAL], default: RANDOM }
+        plan_count:    { type: integer, default: 3 }
+        draw_rule:     { type: object, additionalProperties: true }
+        security_level: { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET], default: INTERNAL }
+
+    DrawRequest:
+      type: object
+      description: 抽取请求（可传 seed 复现）
+      properties:
+        method:     { type: string, enum: [RANDOM, COMBINATION, MANUAL] }
+        plan_count: { type: integer }
+        seed:       { type: integer, format: int64, description: 随机种子；缺省用时钟，测试可传固定值复现 }
+
+    InvitationRespondRequest:
+      type: object
+      description: 接受/拒绝邀请（专家本人或代录）
+      properties:
+        expert_id: { type: integer, format: int64 }
+
+    ScoreSubmitRequest:
+      type: object
+      description: 专家提交打分
+      required: [expert_id, dimension_scores, total_score]
+      properties:
+        expert_id:        { type: integer, format: int64 }
+        dimension_scores: { type: array, items: { type: object, additionalProperties: true } }
+        total_score:      { type: string, description: NUMERIC(10,2) 定标字符串 }
+        comment:          { type: string }
+        status:           { type: string, enum: [SUBMITTED, ABSTAIN], default: SUBMITTED }
+
+    ConcludeRequest:
+      type: object
+      description: 评审结论（按 biz_type 语义回写 E/R）
+      required: [conclusion]
+      properties:
+        conclusion: { type: string, description: 依 biz_type 取值：MID_CHECK→CONTINUE/CORRECT/TERMINATE；FINAL_ACCEPT/OUTPUT_EVAL→PASS/REJECT/SUPPLEMENT }
+
+    FeeGenerateRequest:
+      type: object
+      description: 生成评审费请求
+      properties:
+        amount:      { type: string, description: 单人评审费 NUMERIC(18,2) 定标字符串 }
+        pay_channel: { type: string }
+
+    Error:
+      type: object
+      description: 业务错误（HTTP 表达传输层，code 非 0 表达业务错误）
+      properties:
+        code:    { type: integer }
+        message: { type: string }
+        traceId: { type: string }
+
+  responses:
+    Ok:
+      description: 成功
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    BadRequest:
+      description: 参数校验失败
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    Forbidden:
+      description: 越权
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /experts:
+    get:
+      tags: [expertreview]
+      operationId: listExperts
+      summary: 专家列表（状态/来源/关键词筛选）
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+        - { name: status, in: query, schema: { type: string, enum: [CANDIDATE, ACTIVE, SUSPENDED, BLACKLIST] } }
+        - { name: source, in: query, schema: { type: string, enum: [INTERNAL, EXTERNAL] } }
+        - { name: kw, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: 分页专家列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list: { type: array, items: { $ref: '#/components/schemas/Expert' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    post:
+      tags: [expertreview]
+      operationId: createExpert
+      summary: 新建专家（分配编号 EXR-年-序）
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpertCreateRequest' }
+      responses:
+        '200':
+          description: 新建专家回显
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Expert' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /experts/{id}:
+    get:
+      tags: [expertreview]
+      operationId: getExpert
+      summary: 专家详情
+      parameters:
+        - { $ref: '#/components/parameters/ExpertId' }
+      responses:
+        '200':
+          description: 专家详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Expert' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [expertreview]
+      operationId: updateExpert
+      summary: 更新专家
+      parameters:
+        - { $ref: '#/components/parameters/ExpertId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpertUpdateRequest' }
+      responses:
+        '200':
+          description: 更新后专家
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Expert' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [expertreview]
+      operationId: deleteExpert
+      summary: 删除专家（软删）
+      parameters:
+        - { $ref: '#/components/parameters/ExpertId' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /experts/{id}/status:
+    post:
+      tags: [expertreview]
+      operationId: setExpertStatus
+      summary: 启停/黑名单（校验目标 status ∈ 枚举）
+      parameters:
+        - { $ref: '#/components/parameters/ExpertId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpertStatusRequest' }
+      responses:
+        '200':
+          description: 状态更新后专家
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Expert' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /reviews:
+    get:
+      tags: [expertreview]
+      operationId: listReviews
+      summary: 评审任务列表（biz_type/status 筛选）
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+        - { name: biz_type, in: query, schema: { type: string, enum: [MID_CHECK, FINAL_ACCEPT, OUTPUT_EVAL, PROJECT_APPLY, OTHER] } }
+        - { name: status, in: query, schema: { type: string, enum: [DRAFT, DRAWN, INVITING, QUORUM, IN_REVIEW, COLLECTING, CONCLUDED, CANCELLED] } }
+      responses:
+        '200':
+          description: 分页评审任务列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list: { type: array, items: { $ref: '#/components/schemas/ReviewTask' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    post:
+      tags: [expertreview]
+      operationId: createReview
+      summary: 新建评审任务（分配编号 RVW-年-序，落 DRAFT）
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReviewCreateRequest' }
+      responses:
+        '200':
+          description: 新建评审任务回显
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ReviewTask' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /reviews/{id}:
+    get:
+      tags: [expertreview]
+      operationId: getReview
+      summary: 评审任务详情（不含名单）
+      parameters:
+        - { $ref: '#/components/parameters/ReviewId' }
+      responses:
+        '200':
+          description: 评审任务
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ReviewTask' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [expertreview]
+      operationId: cancelReview
+      summary: 取消评审（→CANCELLED）
+      parameters:
+        - { $ref: '#/components/parameters/ReviewId' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /reviews/{id}/draw:
+    post:
+      tags: [expertreview]
+      operationId: drawExperts
+      summary: 抽取专家（回避过滤 + 确定性随机 → DRAFT→DRAWN）
+      parameters:
+        - { $ref: '#/components/parameters/ReviewId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DrawRequest' }
+      responses:
+        '200':
+          description: 抽取结果名单
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          drawn: { type: array, items: { type: integer, format: int64 } }
+                          count: { type: integer }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /reviews/{id}/invite:
+    post:
+      tags: [expertreview]
+      operationId: inviteExperts
+      summary: 发出邀请（DRAWN→INVITING，MID_CHECK 回填 E_MID_CHECK.expert_ids）
+      parameters:
+        - { $ref: '#/components/parameters/ReviewId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /reviews/{id}/accept:
+    post:
+      tags: [expertreview]
+      operationId: acceptInvitation
+      summary: 接受邀请（达法定人数→QUORUM）
+      parameters:
+        - { $ref: '#/components/parameters/ReviewId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvitationRespondRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /reviews/{id}/decline:
+    post:
+      tags: [expertreview]
+      operationId: declineInvitation
+      summary: 拒绝邀请
+      parameters:
+        - { $ref: '#/components/parameters/ReviewId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvitationRespondRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /reviews/{id}/start:
+    post:
+      tags: [expertreview]
+      operationId: startReview
+      summary: 开始评审（QUORUM→IN_REVIEW）
+      parameters:
+        - { $ref: '#/components/parameters/ReviewId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /reviews/{id}/scores:
+    post:
+      tags: [expertreview]
+      operationId: submitScore
+      summary: 提交打分（全员完成→COLLECTING）
+      parameters:
+        - { $ref: '#/components/parameters/ReviewId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScoreSubmitRequest' }
+      responses:
+        '200':
+          description: 打分回显
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Score' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /reviews/{id}/conclude:
+    post:
+      tags: [expertreview]
+      operationId: concludeReview
+      summary: 汇总结论（→CONCLUDED，按 biz_type 回写 E/R）
+      parameters:
+        - { $ref: '#/components/parameters/ReviewId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConcludeRequest' }
+      responses:
+        '200':
+          description: 结论后评审任务
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ReviewTask' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /reviews/{id}/fees:
+    post:
+      tags: [expertreview]
+      operationId: generateFees
+      summary: 生成评审费（联动 F，按已接受专家）
+      parameters:
+        - { $ref: '#/components/parameters/ReviewId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FeeGenerateRequest' }
+      responses:
+        '200':
+          description: 生成条数
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          generated: { type: integer }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /reviews/{id}/detail:
+    get:
+      tags: [expertreview]
+      operationId: getReviewDetail
+      summary: 评审详情（含 invitations + scores）
+      parameters:
+        - { $ref: '#/components/parameters/ReviewId' }
+      responses:
+        '200':
+          description: 评审详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ReviewDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
