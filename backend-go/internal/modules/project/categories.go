@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	estore "github.com/eplugger/ark/internal/modules/project/store"
@@ -173,13 +174,28 @@ func (h *Handler) ScanWarnings(c *gin.Context) {
 			continue
 		}
 		if h.nt != nil {
-			h.nt.Push(c, d.TenantID, p.PiUserID, "WARNING", kind+"："+p.Title,
-				"项目《"+p.Title+"》"+title+"，截止 "+due+"，请及时安排中检/结项材料",
+			// T24：F_WARN_CONFIG 模板渲染（channel=cron 的 MIDCHECK/CLOSING 配置；{project}/{date} 占位）
+			content := "项目《" + p.Title + "》" + title + "，截止 " + due + "，请及时安排中检/结项材料"
+			if tpl := h.warnTemplate(c, d.TenantID, strings.TrimSuffix(kind, "_DUE")); tpl != "" {
+				content = strings.NewReplacer("{project}", p.Title, "{date}", due).Replace(tpl)
+			}
+			h.nt.Push(c, d.TenantID, p.PiUserID, "WARNING", kind+"："+p.Title, content,
 				"project/"+strconv.FormatInt(p.ID, 10))
 			sent++
 		}
 	}
 	httpx.WriteOK(c, gin.H{"scanned": len(rows), "sent": sent})
+}
+
+// warnTemplate 取启用的预警模板（F_WARN_CONFIG；无配置返回空走默认文案）。
+func (h *Handler) warnTemplate(c *gin.Context, tenantID int64, kind string) string {
+	var tpl *string
+	if err := h.pool.QueryRow(c,
+		`SELECT template FROM f_warn_config WHERE tenant_id=$1 AND warn_kind=$2 AND deleted=0
+		 AND status='ACTIVE' AND enabled LIMIT 1`, tenantID, kind).Scan(&tpl); err != nil || tpl == nil {
+		return ""
+	}
+	return *tpl
 }
 
 // inWindow 当前日期 ∈ [from-15d, to]。
