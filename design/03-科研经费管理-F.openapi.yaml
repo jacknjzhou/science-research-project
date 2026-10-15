@@ -1087,6 +1087,52 @@ paths:
                     properties:
                       data: { $ref: '#/components/schemas/FundingDashboard' }
 
+  /funding/execution:
+    get:
+      tags: [Execution]
+      summary: 项目经费执行率聚合（预算批复/到账/已用/冻结/剩余，两口径执行率）
+      operationId: fundingExecution
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 执行率聚合
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/FundingExecution' }
+
+  /funding/warnings:
+    get:
+      tags: [Execution]
+      summary: 经费执行预警清单（惰性计算：执行率超阈值 + 结题窗口风险，竞品"三预警"确定性部分）
+      operationId: fundingWarnings
+      parameters:
+        - name: projectId
+          in: query
+          schema: { type: integer, format: int64 }
+          description: 可选过滤；缺省扫描全部 EXECUTING 项目
+      responses:
+        "200":
+          description: 预警清单
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/FundingWarning' }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1668,3 +1714,29 @@ components:
         verdict: { type: string, enum: [PASS, REJECT, WARN] }
         policyPackId: { type: integer, format: int64, nullable: true }
         detail: { type: object }
+
+    FundingExecution:
+      type: object
+      description: 项目经费执行率聚合（金额为 NUMERIC 字符串承载，PRD 2.6）
+      properties:
+        projectId: { type: integer, format: int64 }
+        budgetApproved: { $ref: '#/components/schemas/Money' }
+        budgetAdjusted: { $ref: '#/components/schemas/Money' }
+        incomeTotal: { $ref: '#/components/schemas/Money' }
+        used: { $ref: '#/components/schemas/Money' }
+        frozen: { $ref: '#/components/schemas/Money' }
+        remaining: { $ref: '#/components/schemas/Money' }
+        execRateByBudget: { type: number, format: double, description: used / 批复总额 }
+        execRateByIncome: { type: number, format: double, description: used / 认领到账总额 }
+
+    FundingWarning:
+      type: object
+      description: 经费执行预警（惰性计算，不落库）
+      properties:
+        projectId: { type: integer, format: int64 }
+        projectCode: { type: string }
+        projectName: { type: string }
+        level: { type: string, enum: [WARN, CRITICAL, DEADLINE_RISK], description: WARN=执行率≥80%；CRITICAL=≥100%；DEADLINE_RISK=结题窗口30天内且执行率<100% }
+        execRate: { type: number, format: double }
+        deadline: { type: string, format: date, nullable: true, description: 结题/验收截止日期 }
+        message: { type: string }
