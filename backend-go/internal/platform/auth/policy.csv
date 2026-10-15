@@ -104,6 +104,33 @@ p, R-LEADER,  /api/v1/project/*/change-request/*/approve,      POST
 p, R-FINANCE, /api/v1/project/*,                               GET
 # 审计：读全（既有通用规则 R-AUDITOR /api/v1/* GET 已覆盖，此处不重复）
 
+# ---- 科研成果管理域（R）：研究员读写自身成果+认领、主管关联项目+审读、专家评审读、领导/财务只读 ----
+# R-ADMIN 全域读写通配 + R-AUDITOR 全局只读沿用既有规则，此处不重复。
+# 铁律：keyMatch2 `*` 需尾斜杠才命中，故裸 /api/v1/output（列表/新建）单独成条，不被 /api/v1/output/* 覆盖。
+# 契约校正：linkProjects 契约方法是 PUT（非计划示例 POST）。
+# 研究员：成果台账读/新建 + 我的 + 待认领 + 认领/拒绝/非我 + 全域读
+p, R-STAFF,   /api/v1/output,                    GET
+p, R-STAFF,   /api/v1/output,                    POST
+p, R-STAFF,   /api/v1/output/mine,               GET
+p, R-STAFF,   /api/v1/output/pending-claim,      GET
+p, R-STAFF,   /api/v1/output/claim,              POST
+p, R-STAFF,   /api/v1/output/reject,             POST
+p, R-STAFF,   /api/v1/output/mark-not-mine,      POST
+p, R-STAFF,   /api/v1/output/*,                  GET
+# 主管：全域读 + 关联项目（PUT）
+p, R-MANAGER, /api/v1/output,                    GET
+p, R-MANAGER, /api/v1/output/*,                  GET
+p, R-MANAGER, /api/v1/output/*/projects,         PUT
+# 专家：读成果（评审依赖），无任何写动作（认领/关联属研究员/主管）
+p, R-EXPERT,  /api/v1/output,                    GET
+p, R-EXPERT,  /api/v1/output/*,                  GET
+# 领导：只读
+p, R-LEADER,  /api/v1/output,                    GET
+p, R-LEADER,  /api/v1/output/*,                  GET
+# 财务：只读（绩效计入取数）
+p, R-FINANCE, /api/v1/output,                    GET
+p, R-FINANCE, /api/v1/output/*,                  GET
+
 # ---- 每个已认证角色都能读自身身份/能力（前端登录后引导依赖）----
 p, R-STAFF,   /api/v1/auth/me, GET
 p, R-MANAGER, /api/v1/auth/me, GET
