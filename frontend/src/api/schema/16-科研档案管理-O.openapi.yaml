@@ -1,0 +1,813 @@
+openapi: 3.0.3
+info:
+  title: 科研档案管理（O）API
+  version: "1.0"
+  description: >-
+    16 科研档案管理模块对外 REST 契约（自包含 OpenAPI 3.0.3，可独立导入 Swagger/Postman）。
+    覆盖电子文档上传/下载/检索（对象存储 MinIO）、跨域案卷台账（门类清单/来源摄取）、
+    归档流程状态机（提交→四性检测→入库→销毁）与借阅审批。四性检测=真实性(checksum)/
+    完整性(required 门类齐备)/可用性(格式可读)/安全性(密级权限)。
+    字段与 ../README.md §2 通用列及 16-科研档案管理-O.ddl.sql 对齐；状态 enum 取规格 §6 token。
+    text_content 为检索内部字段，不外泄；命中片段走 searchDocuments 的 snippet。
+    上游设计：../docs/superpowers/specs/2026-10-14-project-lifecycle-expert-review-archive-design.md §6。
+servers:
+  - url: /api/v1
+    description: 科研管理系统网关（v1）
+
+tags:
+  - name: archive
+    description: 科研档案与借阅（域 O）
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      description: 页码，1-based
+      schema: { type: integer, minimum: 1, default: 1 }
+    SizeParam:
+      name: size
+      in: query
+      description: 每页条数，默认 20，上限 200
+      schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: 幂等键（UUID），POST/PUT 服务端缓存去重（§3）
+      schema: { type: string, format: uuid }
+    DocumentId:
+      name: id
+      in: path
+      required: true
+      description: 文档主键 o_document.id
+      schema: { type: integer, format: int64 }
+    ArchiveId:
+      name: id
+      in: path
+      required: true
+      description: 案卷主键 o_archive.id
+      schema: { type: integer, format: int64 }
+    ItemId:
+      name: itemId
+      in: path
+      required: true
+      description: 门类清单条目主键 o_archive_item.id
+      schema: { type: integer, format: int64 }
+    BorrowId:
+      name: id
+      in: path
+      required: true
+      description: 借阅申请主键 o_borrow.id
+      schema: { type: integer, format: int64 }
+
+  schemas:
+    ApiResponse:
+      type: object
+      description: 统一响应包裹（§3）
+      properties:
+        code:    { type: integer, description: 0 为成功，非 0 为业务错误码 }
+        message: { type: string }
+        data:    { type: object, nullable: true }
+        traceId: { type: string }
+        timestamp: { type: integer, format: int64 }
+
+    # 分页骨架：通用 items 不钉死具体实体（O 含 Document/Archive/Borrow 多实体列表，
+    # 钉死会踩 R/S pinned PageResult 枚举/可空组合冲突致 verify 报错）；
+    # typed list 由各端点 data 内 allOf 覆写 list 项型。
+    PageResult:
+      type: object
+      properties:
+        total: { type: integer, format: int64 }
+        page:  { type: integer }
+        size:  { type: integer }
+
+    Document:
+      type: object
+      description: 电子件元数据视图（字段对齐 o_document DDL；text_content 不外泄）
+      properties:
+        id:              { type: integer, format: int64 }
+        code:            { type: string, nullable: true }
+        tenant_id:       { type: integer, format: int64 }
+        status:          { type: string, enum: [UPLOADING, STORED, MISSING] }
+        name:            { type: string }
+        doc_type:        { type: string, nullable: true }
+        size_bytes:      { type: integer, format: int64, nullable: true }
+        bucket:          { type: string, nullable: true }
+        object_key:      { type: string, nullable: true }
+        checksum_sha256: { type: string, nullable: true }
+        source_module:   { type: string, nullable: true }
+        source_id:       { type: integer, format: int64, nullable: true }
+        security_level:  { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET] }
+        uploaded_at:     { type: string, format: date-time, nullable: true }
+        created_at:      { type: string, format: date-time }
+
+    DocumentSearchHit:
+      type: object
+      description: 全文检索命中项（Document + 计算列 snippet/rank）
+      allOf:
+        - $ref: '#/components/schemas/Document'
+        - type: object
+          properties:
+            snippet: { type: string, description: ts_headline 高亮片段 }
+            rank:    { type: number, format: float, description: ts_rank 相关度 }
+
+    Archive:
+      type: object
+      description: 案卷视图（字段对齐 o_archive DDL）
+      properties:
+        id:              { type: integer, format: int64 }
+        code:            { type: string, nullable: true }
+        title:           { type: string }
+        archive_type:    { type: string, enum: [PROJECT, OUTPUT, EXPENSE, CONTRACT, ACTIVITY, OTHER] }
+        source_module:   { type: string, nullable: true }
+        source_id:       { type: integer, format: int64, nullable: true }
+        source_code:     { type: string, nullable: true }
+        owner_dept_id:   { type: integer, format: int64, nullable: true }
+        retention_years: { type: integer }
+        status:          { type: string, enum: [PENDING_SUBMIT, SUBMITTED, CHECKING, PASSED, ARCHIVED, REJECTED, DESTROYED] }
+        security_level:  { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET] }
+        submitter_id:    { type: integer, format: int64, nullable: true }
+        submit_at:       { type: string, format: date-time, nullable: true }
+        archivist_id:    { type: integer, format: int64, nullable: true }
+        filed_at:        { type: string, format: date-time, nullable: true }
+        created_at:      { type: string, format: date-time }
+        updated_at:      { type: string, format: date-time }
+
+    ArchiveItem:
+      type: object
+      description: 归档门类清单条目（字段对齐 o_archive_item DDL）
+      properties:
+        id:            { type: integer, format: int64 }
+        archive_id:    { type: integer, format: int64 }
+        category_code: { type: string }
+        category_name: { type: string, nullable: true }
+        required:      { type: boolean }
+        doc_id:        { type: integer, format: int64, nullable: true }
+        status:        { type: string, enum: [MISSING, FILLED, CHECKED] }
+        sort_no:       { type: integer }
+
+    ArchiveCheck:
+      type: object
+      description: 四性检测报告单项（字段对齐 o_archive_check DDL）
+      properties:
+        id:         { type: integer, format: int64 }
+        archive_id: { type: integer, format: int64 }
+        check_type: { type: string, enum: [AUTHENTICITY, INTEGRITY, USABILITY, SECURITY] }
+        result:     { type: string, enum: [PASS, FAIL, WARN] }
+        detail:     { type: object, additionalProperties: true }
+        checked_at: { type: string, format: date-time, nullable: true }
+        checker_id: { type: integer, format: int64, nullable: true }
+
+    Borrow:
+      type: object
+      description: 借阅申请视图（字段对齐 o_borrow DDL）
+      properties:
+        id:               { type: integer, format: int64 }
+        code:             { type: string, nullable: true }
+        archive_id:       { type: integer, format: int64 }
+        archive_title:    { type: string, nullable: true }
+        borrower_user_id: { type: integer, format: int64 }
+        purpose:          { type: string, nullable: true }
+        borrow_type:      { type: string, enum: [READ, COPY] }
+        status:           { type: string, enum: [SUBMITTED, APPROVED, REJECTED, RETURNED, EXPIRED] }
+        approved_by:      { type: integer, format: int64, nullable: true }
+        approved_at:      { type: string, format: date-time, nullable: true }
+        due_at:           { type: string, format: date-time, nullable: true }
+        returned_at:      { type: string, format: date-time, nullable: true }
+        created_at:       { type: string, format: date-time }
+
+    DocumentMetaRequest:
+      type: object
+      description: 上传时随文件附带的元数据（multipart form fields）
+      properties:
+        name:           { type: string, description: 展示名，缺省取文件名 }
+        security_level: { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET], default: INTERNAL }
+        source_module:  { type: string }
+        source_id:      { type: integer, format: int64 }
+        text_content:   { type: string, description: 已抽取正文（可选，本轮不接解析服务） }
+
+    ArchiveCreateRequest:
+      type: object
+      description: 新建案卷请求
+      required: [title]
+      properties:
+        title:           { type: string }
+        archive_type:    { type: string, enum: [PROJECT, OUTPUT, EXPENSE, CONTRACT, ACTIVITY, OTHER], default: OTHER }
+        source_module:   { type: string }
+        source_id:       { type: integer, format: int64 }
+        source_code:     { type: string }
+        owner_dept_id:   { type: integer, format: int64 }
+        retention_years: { type: integer, default: 10 }
+        security_level:  { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET], default: INTERNAL }
+
+    ArchiveUpdateRequest:
+      type: object
+      description: 更新案卷元数据请求（仅 PENDING_SUBMIT/REJECTED 可编辑）
+      properties:
+        title:           { type: string }
+        archive_type:    { type: string, enum: [PROJECT, OUTPUT, EXPENSE, CONTRACT, ACTIVITY, OTHER] }
+        retention_years: { type: integer }
+        security_level:  { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET] }
+
+    ItemAddRequest:
+      type: object
+      description: 新增门类清单条目（不带 doc → MISSING，带 doc → FILLED）
+      required: [category_code]
+      properties:
+        category_code: { type: string }
+        category_name: { type: string }
+        required:      { type: boolean, default: true }
+        sort_no:       { type: integer, default: 0 }
+        doc_id:        { type: integer, format: int64 }
+
+    ItemFillRequest:
+      type: object
+      description: 为清单条目挂载文档（doc_id 非空且文档须 STORED）
+      required: [doc_id]
+      properties:
+        doc_id: { type: integer, format: int64 }
+
+    IngestRequest:
+      type: object
+      description: 从来源对象摄取文档建清单条目（等价于带 doc 的 AddItem）
+      required: [category_code]
+      properties:
+        category_code: { type: string }
+        category_name: { type: string }
+        doc_id:        { type: integer, format: int64 }
+        source_module: { type: string }
+        source_id:     { type: integer, format: int64 }
+
+    DestroyRequest:
+      type: object
+      description: 到期销毁请求（ARCHIVED→DESTROYED，留痕）
+      required: [reason]
+      properties:
+        reason: { type: string }
+
+    BorrowCreateRequest:
+      type: object
+      description: 借阅申请请求
+      required: [archive_id]
+      properties:
+        archive_id:  { type: integer, format: int64 }
+        purpose:     { type: string }
+        borrow_type: { type: string, enum: [READ, COPY], default: READ }
+        due_at:      { type: string, format: date-time }
+
+    DownloadResult:
+      type: object
+      description: presigned 下载结果
+      properties:
+        url:        { type: string, description: MinIO presigned GET URL }
+        expires_at: { type: string, format: date-time, description: URL 过期时刻（now+15min） }
+
+    CheckReport:
+      type: object
+      description: 四性检测报告（单项列表 + 总通过位）
+      properties:
+        list:   { type: array, items: { $ref: '#/components/schemas/ArchiveCheck' } }
+        passed: { type: boolean, description: 全 PASS 则案卷 → PASSED，否则 → REJECTED }
+
+    Error:
+      type: object
+      description: 业务错误
+      properties:
+        code:    { type: integer }
+        message: { type: string }
+        traceId: { type: string }
+
+  responses:
+    Ok:
+      description: 成功
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    BadRequest:
+      description: 参数校验失败
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    Forbidden:
+      description: 越权
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    Conflict:
+      description: 状态/并发冲突
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+    ServiceUnavailable:
+      description: 对象存储不可用（未初始化 MinIO）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /documents:
+    post:
+      tags: [archive]
+      operationId: uploadDocument
+      summary: 上传文档（multipart → MinIO → 写 o_document，计算 sha256）
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                name: { type: string }
+                security_level: { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET] }
+                source_module: { type: string }
+                source_id: { type: integer, format: int64 }
+                text_content: { type: string }
+      responses:
+        '200':
+          description: 上传后文档元数据
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Document' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /documents/{id}:
+    get:
+      tags: [archive]
+      operationId: getDocument
+      summary: 文档详情
+      parameters:
+        - { $ref: '#/components/parameters/DocumentId' }
+      responses:
+        '200':
+          description: 文档
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Document' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [archive]
+      operationId: deleteDocument
+      summary: 删除文档（软删 + 尽力删对象）
+      parameters:
+        - { $ref: '#/components/parameters/DocumentId' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /documents/{id}/download:
+    get:
+      tags: [archive]
+      operationId: downloadDocument
+      summary: 下载文档（返回 presigned URL）
+      parameters:
+        - { $ref: '#/components/parameters/DocumentId' }
+      responses:
+        '200':
+          description: presigned 下载信息
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DownloadResult' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /documents/search:
+    get:
+      tags: [archive]
+      operationId: searchDocuments
+      summary: 全文检索文档（plainto_tsquery + ts_rank + ts_headline）
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+      responses:
+        '200':
+          description: 命中文档分页（含 snippet/rank）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list: { type: array, items: { $ref: '#/components/schemas/DocumentSearchHit' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /archives:
+    get:
+      tags: [archive]
+      operationId: listArchives
+      summary: 案卷列表（状态/门类/关键词筛选）
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+        - { name: status, in: query, schema: { type: string, enum: [PENDING_SUBMIT, SUBMITTED, CHECKING, PASSED, ARCHIVED, REJECTED, DESTROYED] } }
+        - { name: archive_type, in: query, schema: { type: string, enum: [PROJECT, OUTPUT, EXPENSE, CONTRACT, ACTIVITY, OTHER] } }
+        - { name: kw, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: 分页案卷列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list: { type: array, items: { $ref: '#/components/schemas/Archive' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    post:
+      tags: [archive]
+      operationId: createArchive
+      summary: 新建案卷（分配编号 ARC-年-序，落 PENDING_SUBMIT）
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ArchiveCreateRequest' }
+      responses:
+        '200':
+          description: 新建案卷回显
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Archive' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /archives/{id}:
+    get:
+      tags: [archive]
+      operationId: getArchive
+      summary: 案卷详情
+      parameters:
+        - { $ref: '#/components/parameters/ArchiveId' }
+      responses:
+        '200':
+          description: 案卷
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Archive' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [archive]
+      operationId: updateArchive
+      summary: 更新案卷元数据（仅 PENDING_SUBMIT/REJECTED）
+      parameters:
+        - { $ref: '#/components/parameters/ArchiveId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ArchiveUpdateRequest' }
+      responses:
+        '200':
+          description: 更新后案卷
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Archive' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [archive]
+      operationId: deleteArchive
+      summary: 删除案卷（软删，仅 PENDING_SUBMIT/REJECTED）
+      parameters:
+        - { $ref: '#/components/parameters/ArchiveId' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /archives/{id}/items:
+    get:
+      tags: [archive]
+      operationId: listItems
+      summary: 门类清单列表
+      parameters:
+        - { $ref: '#/components/parameters/ArchiveId' }
+      responses:
+        '200':
+          description: 清单条目列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list: { type: array, items: { $ref: '#/components/schemas/ArchiveItem' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [archive]
+      operationId: addItem
+      summary: 新增门类条目（required 缺 doc→MISSING，带 doc→FILLED）
+      parameters:
+        - { $ref: '#/components/parameters/ArchiveId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ItemAddRequest' }
+      responses:
+        '200':
+          description: 新建条目回显
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ArchiveItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /archives/{id}/items/{itemId}:
+    put:
+      tags: [archive]
+      operationId: fillItem
+      summary: 为条目挂载文档（doc_id 须指向 STORED 文档）
+      parameters:
+        - { $ref: '#/components/parameters/ArchiveId' }
+        - { $ref: '#/components/parameters/ItemId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ItemFillRequest' }
+      responses:
+        '200':
+          description: 更新后条目
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ArchiveItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [archive]
+      operationId: deleteItem
+      summary: 删除门类条目
+      parameters:
+        - { $ref: '#/components/parameters/ArchiveId' }
+        - { $ref: '#/components/parameters/ItemId' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /archives/{id}/ingest:
+    post:
+      tags: [archive]
+      operationId: ingestSource
+      summary: 从来源对象摄取文档建清单条目
+      parameters:
+        - { $ref: '#/components/parameters/ArchiveId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IngestRequest' }
+      responses:
+        '200':
+          description: 摄取生成的条目
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ArchiveItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /archives/{id}/submit:
+    post:
+      tags: [archive]
+      operationId: submitArchive
+      summary: 提交归档（PENDING_SUBMIT/REJECTED → SUBMITTED）
+      parameters:
+        - { $ref: '#/components/parameters/ArchiveId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /archives/{id}/check:
+    post:
+      tags: [archive]
+      operationId: checkArchive
+      summary: 四性检测（SUBMITTED → CHECKING → 写四性 → PASSED/REJECTED）
+      parameters:
+        - { $ref: '#/components/parameters/ArchiveId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200':
+          description: 四性检测报告
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CheckReport' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /archives/{id}/file:
+    post:
+      tags: [archive]
+      operationId: fileArchive
+      summary: 确认入库（PASSED → ARCHIVED）
+      parameters:
+        - { $ref: '#/components/parameters/ArchiveId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /archives/{id}/destroy:
+    post:
+      tags: [archive]
+      operationId: destroyArchive
+      summary: 到期销毁（ARCHIVED → DESTROYED，body{reason} 留痕）
+      parameters:
+        - { $ref: '#/components/parameters/ArchiveId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DestroyRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /borrows:
+    get:
+      tags: [archive]
+      operationId: listBorrows
+      summary: 借阅列表（借阅人/案卷/状态筛选）
+      parameters:
+        - { $ref: '#/components/parameters/PageParam' }
+        - { $ref: '#/components/parameters/SizeParam' }
+        - { name: borrower_user_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: archive_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: status, in: query, schema: { type: string, enum: [SUBMITTED, APPROVED, REJECTED, RETURNED, EXPIRED] } }
+      responses:
+        '200':
+          description: 分页借阅列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list: { type: array, items: { $ref: '#/components/schemas/Borrow' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    post:
+      tags: [archive]
+      operationId: createBorrow
+      summary: 发起借阅申请（分配编号 BORROW-年-序，落 SUBMITTED）
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BorrowCreateRequest' }
+      responses:
+        '200':
+          description: 借阅申请回显
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Borrow' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /borrows/{id}/approve:
+    post:
+      tags: [archive]
+      operationId: approveBorrow
+      summary: 审批通过（SUBMITTED → APPROVED）
+      parameters:
+        - { $ref: '#/components/parameters/BorrowId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /borrows/{id}/reject:
+    post:
+      tags: [archive]
+      operationId: rejectBorrow
+      summary: 审批驳回（SUBMITTED → REJECTED）
+      parameters:
+        - { $ref: '#/components/parameters/BorrowId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /borrows/{id}/return:
+    post:
+      tags: [archive]
+      operationId: returnBorrow
+      summary: 归还（APPROVED → RETURNED）
+      parameters:
+        - { $ref: '#/components/parameters/BorrowId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
