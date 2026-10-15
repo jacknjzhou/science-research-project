@@ -1,8 +1,7 @@
-# syntax=docker/dockerfile:1
 # 科研管理 Go 后端镜像。构建上下文 = 仓库根：
 #   docker build -f backend-go/Dockerfile -t eplugger-ark-go:0.1.0 .
-# 阶段 1：静态编译（pgx 纯 Go，无需 CGO）
-FROM golang:1.22-alpine AS build
+# 阶段 1：静态编译（pgx 纯 Go，无需 CGO）；版本须与 backend-go/go.mod 的 go 指令一致
+FROM golang:1.25-alpine AS build
 WORKDIR /src
 
 # 先拷依赖清单，命中层缓存

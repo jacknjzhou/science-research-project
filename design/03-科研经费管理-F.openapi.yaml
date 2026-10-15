@@ -321,6 +321,32 @@ paths:
                         items: { $ref: '#/components/schemas/SubjectNode' }
 
   /subjects:
+    get:
+      tags: [Subject]
+      summary: 查询经费科目树（按项目类型过滤）
+      operationId: listSubjects
+      parameters:
+        - name: projectType
+          in: query
+          schema: { type: string }
+          description: 项目类型（对齐 sys_dict project_type），过滤 applies_to
+        - name: category
+          in: query
+          schema: { type: string, enum: [DIRECT, INDIRECT, PERFORMANCE] }
+      responses:
+        "200":
+          description: 科目树
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Subject' }
+
     post:
       tags: [Subject]
       summary: 新建科目（T15；parent_id 缺省为顶级 level=1）
@@ -546,33 +572,6 @@ paths:
                                 id: { type: integer, format: int64 }
                                 ok: { type: boolean }
                                 err: { type: string, nullable: true }
-
-  /subjects:
-    get:
-      tags: [Subject]
-      summary: 查询经费科目树（按项目类型过滤）
-      operationId: listSubjects
-      parameters:
-        - name: projectType
-          in: query
-          schema: { type: string }
-          description: 项目类型（对齐 sys_dict project_type），过滤 applies_to
-        - name: category
-          in: query
-          schema: { type: string, enum: [DIRECT, INDIRECT, PERFORMANCE] }
-      responses:
-        "200":
-          description: 科目树
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/ApiResponse'
-                  - type: object
-                    properties:
-                      data:
-                        type: array
-                        items: { $ref: '#/components/schemas/Subject' }
 
   /budgets:
     post:
