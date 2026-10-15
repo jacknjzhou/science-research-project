@@ -200,3 +200,67 @@ p, R-FINANCE, /api/v1/auth/me, GET
 p, R-AUDITOR, /api/v1/auth/me, GET
 p, R-EXPERT,  /api/v1/auth/me, GET
 p, R-ETHICS,  /api/v1/auth/me, GET
+
+# ---- 科研经费域（F）：科目/预算/到款/报销/执行率/预警/间接费/AI 审核 ----
+# 铁律同 O/N：keyMatch2 裸路径（列表/新建）单独成条。
+# 主管：F 域全量读写（预算编制/提交/批复/调整、到款登记/认领/导入、报销审批、间接费计提）
+p, R-MANAGER, /api/v1/subjects,                     GET
+p, R-MANAGER, /api/v1/subjects,                     POST
+p, R-MANAGER, /api/v1/subjects/*,                   GET
+p, R-MANAGER, /api/v1/subjects/*,                   PUT
+p, R-MANAGER, /api/v1/subjects/*,                   DELETE
+p, R-MANAGER, /api/v1/budgets,                      GET
+p, R-MANAGER, /api/v1/budgets,                      POST
+p, R-MANAGER, /api/v1/budgets/*,                    GET
+p, R-MANAGER, /api/v1/budgets/*,                    POST
+p, R-MANAGER, /api/v1/budget-lines/*,               GET
+p, R-MANAGER, /api/v1/incomes,                      GET
+p, R-MANAGER, /api/v1/incomes,                      POST
+p, R-MANAGER, /api/v1/incomes/*,                    GET
+p, R-MANAGER, /api/v1/incomes/*,                    POST
+p, R-MANAGER, /api/v1/expenses,                     GET
+p, R-MANAGER, /api/v1/expenses,                     POST
+p, R-MANAGER, /api/v1/expenses/*,                   GET
+p, R-MANAGER, /api/v1/expenses/*,                   POST
+p, R-MANAGER, /api/v1/funding/*,                    GET
+p, R-MANAGER, /api/v1/indirect-fees,                GET
+p, R-MANAGER, /api/v1/indirect-fees,                POST
+p, R-MANAGER, /api/v1/expense/ai-invoice-review,    POST
+# 领导：读 + 批复/大额审批（审批角色校验在 handler 内兜底）
+p, R-LEADER,  /api/v1/subjects,                     GET
+p, R-LEADER,  /api/v1/budgets,                      GET
+p, R-LEADER,  /api/v1/budgets/*,                    GET
+p, R-LEADER,  /api/v1/budgets/*/approve,            POST
+p, R-LEADER,  /api/v1/budget-lines/*,               GET
+p, R-LEADER,  /api/v1/incomes,                      GET
+p, R-LEADER,  /api/v1/expenses,                     GET
+p, R-LEADER,  /api/v1/expenses/*,                   GET
+p, R-LEADER,  /api/v1/expenses/*/approval,          POST
+p, R-LEADER,  /api/v1/funding/*,                    GET
+# 研究员：读字典/预算/执行率 + 填报销/提交（审批动作 handler 内 403 兜底）
+p, R-STAFF,   /api/v1/subjects,                     GET
+p, R-STAFF,   /api/v1/budgets,                      GET
+p, R-STAFF,   /api/v1/budgets/*,                    GET
+p, R-STAFF,   /api/v1/budget-lines/*,               GET
+p, R-STAFF,   /api/v1/expenses,                     GET
+p, R-STAFF,   /api/v1/expenses,                     POST
+p, R-STAFF,   /api/v1/expenses/*,                   GET
+p, R-STAFF,   /api/v1/expenses/*,                   POST
+p, R-STAFF,   /api/v1/funding/*,                    GET
+# 财务：F 域全量读写（到款/报销/计提/AI 审核）
+p, R-FINANCE, /api/v1/subjects,                     GET
+p, R-FINANCE, /api/v1/budgets,                      GET
+p, R-FINANCE, /api/v1/budgets/*,                    GET
+p, R-FINANCE, /api/v1/budget-lines/*,               GET
+p, R-FINANCE, /api/v1/incomes,                      GET
+p, R-FINANCE, /api/v1/incomes,                      POST
+p, R-FINANCE, /api/v1/incomes/*,                    GET
+p, R-FINANCE, /api/v1/incomes/*,                    POST
+p, R-FINANCE, /api/v1/expenses,                     GET
+p, R-FINANCE, /api/v1/expenses,                     POST
+p, R-FINANCE, /api/v1/expenses/*,                   GET
+p, R-FINANCE, /api/v1/expenses/*,                   POST
+p, R-FINANCE, /api/v1/funding/*,                    GET
+p, R-FINANCE, /api/v1/indirect-fees,                GET
+p, R-FINANCE, /api/v1/indirect-fees,                POST
+p, R-FINANCE, /api/v1/expense/ai-invoice-review,    POST
