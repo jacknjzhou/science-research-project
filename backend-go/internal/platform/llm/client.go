@@ -112,3 +112,50 @@ func (c *Client) ChatJSON(ctx context.Context, system, user string) (Verdict, er
 	}
 	return v, nil
 }
+
+// ExtractJSON T22：通用结构化抽取——返回模型原始 content 字符串（调用方自行 Unmarshal）。
+// 与 ChatJSON 同链路（json_object response_format），失败返回 error 由调用方降级。
+func (c *Client) ExtractJSON(ctx context.Context, system, user string) (string, error) {
+	if c == nil || c.baseURL == "" {
+		return "", fmt.Errorf("llm 未配置")
+	}
+	reqBody, err := json.Marshal(chatRequest{
+		Model:          c.model,
+		Messages:       []chatMessage{{Role: "system", Content: system}, {Role: "user", Content: user}},
+		Temperature:    0.2,
+		ResponseFormat: &respFormat{Type: "json_object"},
+	})
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(reqBody))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("llm http %d", resp.StatusCode)
+	}
+	var out struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	if len(out.Choices) == 0 {
+		return "", fmt.Errorf("llm 空响应")
+	}
+	return out.Choices[0].Message.Content, nil
+}

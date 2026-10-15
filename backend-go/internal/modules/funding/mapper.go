@@ -115,6 +115,7 @@ func ToAPIIncome(i fstore.FIncome) map[string]any {
 		"purpose_text": optStr(i.PurposeText), "bank_flow_no": optStr(i.BankFlowNo),
 		"claim_status": i.ClaimStatus, "claimed_by": optI64(i.ClaimedBy),
 		"claimed_at": fmtTimePtr(i.ClaimedAt),
+		"mgmt_fee":   numDec(i.MgmtFee, 2),
 		"created_at": fmtTime(i.CreatedAt),
 	}
 }

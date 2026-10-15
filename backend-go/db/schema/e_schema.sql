@@ -31,7 +31,8 @@ CREATE TABLE E_PROJECT (
   ethics_case_id   BIGINT,                                   -- 逻辑外键 -> 05/06 C 模块伦理审查案件（单号前缀 ETH）
   policy_pack_id   BIGINT,                                   -- 命中制度包快照 -> common sys_policy_pack.id（复算依据，PRD 2.10）
   security_level   VARCHAR(16)  NOT NULL DEFAULT 'INTERNAL'
-                   CHECK (security_level IN ('PUBLIC','INTERNAL','SECRET','TOP_SECRET')) -- 涉密等级（PRD 2.13）
+                   CHECK (security_level IN ('PUBLIC','INTERNAL','SECRET','TOP_SECRET')), -- 涉密等级（PRD 2.13）
+  category_id      BIGINT                                   -- T21 项目分类 -> E_PROJECT_CATEGORY(id)
 );
 CREATE TABLE E_TASK (
   id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -251,4 +252,22 @@ CREATE TABLE E_ARCHIVE_CHECKLIST (
   completed_count  INT          NOT NULL DEFAULT 0,                 -- 已上传必交项数
   completeness     NUMERIC(6,4) NOT NULL DEFAULT 0,                 -- 完成度=已上传必交项/必交项总数
   blocked_items    JSONB        NOT NULL DEFAULT '[]'::jsonb        -- 缺项清单（结题/验收拦截依据）
+);
+
+-- T21 项目分类（中检/结项窗口 + 认领管理费率）
+CREATE TABLE E_PROJECT_CATEGORY (
+    id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    tenant_id      BIGINT NOT NULL,
+    code           VARCHAR(32) NOT NULL,
+    name           VARCHAR(128) NOT NULL,
+    level          VARCHAR(16) NOT NULL DEFAULT 'NORMAL',
+    budget_template JSONB NOT NULL DEFAULT '[]',
+    mgmt_fee_pct   NUMERIC(5,2) NOT NULL DEFAULT 0,
+    midcheck_from  DATE,
+    midcheck_to    DATE,
+    closing_from   DATE,
+    closing_to     DATE,
+    deleted        SMALLINT NOT NULL DEFAULT 0,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );

@@ -55,6 +55,23 @@ type EArchiveChecklist struct {
 	BlockedItems   []byte             `json:"blocked_items"`
 }
 
+type EProjectCategory struct {
+	ID             int64              `json:"id"`
+	TenantID       int64              `json:"tenant_id"`
+	Code           string             `json:"code"`
+	Name           string             `json:"name"`
+	Level          string             `json:"level"`
+	BudgetTemplate []byte             `json:"budget_template"`
+	MgmtFeePct     pgtype.Numeric     `json:"mgmt_fee_pct"`
+	MidcheckFrom   pgtype.Date        `json:"midcheck_from"`
+	MidcheckTo     pgtype.Date        `json:"midcheck_to"`
+	ClosingFrom    pgtype.Date        `json:"closing_from"`
+	ClosingTo      pgtype.Date        `json:"closing_to"`
+	Deleted        int16              `json:"deleted"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 type EProjectDoc struct {
 	ID            int64              `json:"id"`
 	Code          *string            `json:"code"`
@@ -222,6 +239,7 @@ type Project struct {
 	EthicsCaseID   *int64         `json:"ethics_case_id"`
 	PolicyPackID   *int64         `json:"policy_pack_id"`
 	SecurityLevel  string         `json:"security_level"`
+	CategoryID     *int64         `json:"category_id"`
 }
 
 type Task struct {

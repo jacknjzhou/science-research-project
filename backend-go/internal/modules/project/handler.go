@@ -19,6 +19,8 @@ import (
 type Handler struct {
 	q    *estore.Queries
 	pool *pgxpool.Pool
+	nt   Notifier // T21 预警扫描触达（notify 模块实现，装配期注入）
+	tbLLM TaskbookLLM // T22 任务书 PDF 解析 LLM（llm.Client 实现，装配期注入）
 }
 
 // NewHandler 用 pgxpool 构造 Handler；pool 由 router.RouterDeps 注入。

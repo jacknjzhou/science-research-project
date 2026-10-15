@@ -237,7 +237,8 @@ CREATE TABLE E_PROJECT (
   ethics_case_id   BIGINT,                                   -- 逻辑外键 -> 05/06 C 模块伦理审查案件（单号前缀 ETH）
   policy_pack_id   BIGINT,                                   -- 命中制度包快照 -> common sys_policy_pack.id（复算依据，PRD 2.10）
   security_level   VARCHAR(16)  NOT NULL DEFAULT 'INTERNAL'
-                   CHECK (security_level IN ('PUBLIC','INTERNAL','SECRET','TOP_SECRET')) -- 涉密等级（PRD 2.13）
+                   CHECK (security_level IN ('PUBLIC','INTERNAL','SECRET','TOP_SECRET')),
+  category_id      BIGINT                                   -- T21 项目分类 -> E_PROJECT_CATEGORY(id)
 );
 
 -- T14 外拨（F-24）：经费拨付外单位，两级审批后从预算行实扣
@@ -302,4 +303,25 @@ CREATE TABLE F_WARN_CONFIG (
     cron_expr           VARCHAR(64),
     template            TEXT,
     enabled             BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+-- T21 认领入账管理费
+ALTER TABLE F_INCOME ADD COLUMN mgmt_fee NUMERIC(18,2) NOT NULL DEFAULT 0;
+
+-- T21 项目分类最小定义（仅编译期解析用，运行时打真库；完整定义见 e_schema.sql）
+CREATE TABLE E_PROJECT_CATEGORY (
+  id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  tenant_id      BIGINT NOT NULL,
+  code           VARCHAR(32) NOT NULL,
+  name           VARCHAR(128) NOT NULL,
+  level          VARCHAR(16) NOT NULL DEFAULT 'NORMAL',
+  budget_template JSONB NOT NULL DEFAULT '[]',
+  mgmt_fee_pct   NUMERIC(5,2) NOT NULL DEFAULT 0,
+  midcheck_from  DATE,
+  midcheck_to    DATE,
+  closing_from   DATE,
+  closing_to     DATE,
+  deleted        SMALLINT NOT NULL DEFAULT 0,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );

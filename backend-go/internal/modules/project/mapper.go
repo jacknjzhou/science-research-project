@@ -7,6 +7,7 @@ package project
 
 import (
 	"encoding/json"
+	"math/big"
 	"strconv"
 	"time"
 
@@ -270,4 +271,40 @@ func ToAPIProgressReport(r estore.ProgressReport) map[string]any {
 		"attachment_ids":   jsonToAny(r.AttachmentIds, []any{}),
 		"submitted_at":     fmtTimePtr(r.SubmittedAt),
 	}
+}
+
+// ToAPICategory T21 项目分类 API 映射。
+func ToAPICategory(r estore.EProjectCategory) map[string]any {
+	dateOr := func(d pgtype.Date) any {
+		if !d.Valid {
+			return nil
+		}
+		return d.Time.Format("2006-01-02")
+	}
+	var pct any
+	if r.MgmtFeePct.Valid {
+		rat := new(big.Rat).SetInt(r.MgmtFeePct.Int)
+		if r.MgmtFeePct.Exp < 0 {
+			rat.Mul(rat, new(big.Rat).SetFrac(big.NewInt(1), new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-r.MgmtFeePct.Exp)), nil)))
+		} else if r.MgmtFeePct.Exp > 0 {
+			rat.Mul(rat, new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(r.MgmtFeePct.Exp)), nil)))
+		}
+		pct = rat.FloatString(2)
+	}
+	return map[string]any{
+		"id": r.ID, "code": r.Code, "name": r.Name, "level": r.Level,
+		"mgmt_fee_pct": pct,
+		"midcheck_from": dateOr(r.MidcheckFrom), "midcheck_to": dateOr(r.MidcheckTo),
+		"closing_from": dateOr(r.ClosingFrom), "closing_to": dateOr(r.ClosingTo),
+		"created_at": fmtTz(r.CreatedAt),
+	}
+}
+
+
+// fmtTz pgtype.Timestamptz → RFC3339（无效值返回空串）。
+func fmtTz(t pgtype.Timestamptz) string {
+	if !t.Valid {
+		return ""
+	}
+	return t.Time.Format(time.RFC3339)
 }

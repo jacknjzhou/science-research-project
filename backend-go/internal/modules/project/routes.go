@@ -18,5 +18,14 @@ func Register(r gin.IRoutes, h *Handler) {
 	r.POST("/project/:id/change-request/:changeId/approve", h.ApproveChangeRequest)
 	// T19 两级审核 + 批量
 	r.POST("/projects/approve-batch", h.ApproveChangeBatch)
+	// T21 项目分类 + 日期范围预警
+	r.GET("/project-categories", h.ListProjectCategories)
+	r.POST("/project-categories", h.CreateProjectCategory)
+	r.PUT("/project-categories/:id", h.UpdateProjectCategory)
+	r.DELETE("/project-categories/:id", h.DeleteProjectCategory)
+	r.POST("/project-categories/scan-warnings", h.ScanWarnings)
+	r.POST("/projects/:id/category", h.AttachProjectCategory)
+	// T22 任务书 PDF 解析（回填表单用，不落库）
+	r.POST("/projects/extract-taskbook", h.ExtractTaskbook)
 	r.POST("/project/:id/final-accept", h.CreateFinalAccept)
 }

@@ -2,6 +2,7 @@
 package funding
 
 import (
+	"math/big"
 	"errors"
 	"net/http"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/eplugger/ark/internal/platform/httpx"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type incomeBody struct {
@@ -101,6 +103,11 @@ func (h *Handler) ClaimIncome(c *gin.Context) {
 		httpx.WriteErr(c, http.StatusInternalServerError, 50002, "认领失败")
 		return
 	}
+	// T21 管理费：按项目分类 mgmt_fee_pct 计算（amount × pct / 100），best-effort 不阻断认领
+	if fee, ferr := h.calcMgmtFee(c, b.ProjectID, claimed.Amount); ferr == nil {
+		_, _ = h.q.UpdateIncomeMgmtFee(c, fstore.UpdateIncomeMgmtFeeParams{ID: claimed.ID, MgmtFee: fee})
+		claimed.MgmtFee = fee
+	}
 	httpx.WriteOK(c, ToAPIIncome(claimed))
 }
 
@@ -151,4 +158,35 @@ func (h *Handler) ImportBankFlow(c *gin.Context) {
 		imported++
 	}
 	httpx.WriteOK(c, gin.H{"imported": imported, "skipped": skipped})
+}
+
+
+// calcMgmtFee T21：项目分类管理费率 → 金额 × pct / 100（big.Rat 精确计算）。
+func (h *Handler) calcMgmtFee(c *gin.Context, projectID int64, amount pgtype.Numeric) (pgtype.Numeric, error) {
+	pct, err := h.q.GetMgmtFeePctByProject(c, projectID)
+	if err != nil || !pct.Valid || pct.Int == nil {
+		return pgtype.Numeric{}, err
+	}
+	if !amount.Valid || amount.Int == nil {
+		return pgtype.Numeric{}, nil
+	}
+	r := new(big.Rat).SetInt(amount.Int)
+	if amount.Exp < 0 {
+		r.Mul(r, new(big.Rat).SetFrac(big.NewInt(1), new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-amount.Exp)), nil)))
+	} else if amount.Exp > 0 {
+		r.Mul(r, new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(amount.Exp)), nil)))
+	}
+	p := new(big.Rat).SetInt(pct.Int)
+	if pct.Exp < 0 {
+		p.Mul(p, new(big.Rat).SetFrac(big.NewInt(1), new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-pct.Exp)), nil)))
+	} else if pct.Exp > 0 {
+		p.Mul(p, new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(pct.Exp)), nil)))
+	}
+	fee := new(big.Rat).Mul(r, p)
+	fee.Quo(fee, big.NewRat(100, 1))
+	// 转 NUMERIC(18,2)：定点 2 位小数 → Int×10^-2
+	f2 := new(big.Rat).Mul(fee, big.NewRat(100, 1))
+	num, _ := f2.Float64()
+	i := big.NewInt(int64(num + 0.5))
+	return pgtype.Numeric{Int: i, Exp: -2, Valid: true}, nil
 }

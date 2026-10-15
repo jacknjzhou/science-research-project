@@ -37,7 +37,7 @@ func (q *Queries) CountMyProjects(ctx context.Context, arg CountMyProjectsParams
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, application_id, title, project_type, pi_user_id, member_ids, department_id, legal_entity_id, start_date, end_date, actual_end_date, total_budget, received_amount, spent_amount, health_score, risk_level, ethics_case_id, policy_pack_id, security_level FROM E_PROJECT WHERE id = $1 AND deleted = 0
+SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, application_id, title, project_type, pi_user_id, member_ids, department_id, legal_entity_id, start_date, end_date, actual_end_date, total_budget, received_amount, spent_amount, health_score, risk_level, ethics_case_id, policy_pack_id, security_level, category_id FROM E_PROJECT WHERE id = $1 AND deleted = 0
 `
 
 func (q *Queries) GetProject(ctx context.Context, id int64) (Project, error) {
@@ -72,12 +72,13 @@ func (q *Queries) GetProject(ctx context.Context, id int64) (Project, error) {
 		&i.EthicsCaseID,
 		&i.PolicyPackID,
 		&i.SecurityLevel,
+		&i.CategoryID,
 	)
 	return i, err
 }
 
 const listMyProjects = `-- name: ListMyProjects :many
-SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, application_id, title, project_type, pi_user_id, member_ids, department_id, legal_entity_id, start_date, end_date, actual_end_date, total_budget, received_amount, spent_amount, health_score, risk_level, ethics_case_id, policy_pack_id, security_level FROM E_PROJECT
+SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, application_id, title, project_type, pi_user_id, member_ids, department_id, legal_entity_id, start_date, end_date, actual_end_date, total_budget, received_amount, spent_amount, health_score, risk_level, ethics_case_id, policy_pack_id, security_level, category_id FROM E_PROJECT
 WHERE deleted = 0 AND pi_user_id = $1::bigint
   AND ($2::text IS NULL OR status = $2::text)
   AND ($3::text IS NULL OR project_type = $3::text)
@@ -140,6 +141,7 @@ func (q *Queries) ListMyProjects(ctx context.Context, arg ListMyProjectsParams) 
 			&i.EthicsCaseID,
 			&i.PolicyPackID,
 			&i.SecurityLevel,
+			&i.CategoryID,
 		); err != nil {
 			return nil, err
 		}

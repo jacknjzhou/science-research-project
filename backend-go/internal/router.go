@@ -80,6 +80,13 @@ func Build(d RouterDeps) *gin.Engine {
 		notify.Register(api, notifH)
 		fundH := funding.NewHandler(d.Pool)
 		fundH.SetNotifier(notifH)
+		// T21 项目分类日期范围预警扫描触达。
+		projH.SetNotifier(notifH)
+		// T22 任务书 PDF 解析（LLM 未配置时端点降级提示人工录入）。
+		if d.Cfg.LLMBaseURL != "" {
+			projH.SetTaskbookLLM(llm.New(d.Cfg.LLMBaseURL, d.Cfg.LLMAPIKey, d.Cfg.LLMModel,
+				time.Duration(d.Cfg.LLMTimeoutSec)*time.Second))
+		}
 		// LLM（NewAPI OpenAI 兼容）：未配置时 AI 审核端点自动降级 REVIEW。
 		if d.Cfg.LLMBaseURL != "" {
 			fundH.SetLLM(llm.New(d.Cfg.LLMBaseURL, d.Cfg.LLMAPIKey, d.Cfg.LLMModel,
