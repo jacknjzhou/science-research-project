@@ -65,6 +65,7 @@ CREATE TABLE r_output (
 CREATE TABLE e_project (
   id BIGINT PRIMARY KEY, tenant_id BIGINT NOT NULL, deleted SMALLINT NOT NULL DEFAULT 0,
   pi_user_id BIGINT NOT NULL, department_id BIGINT, project_type VARCHAR(64),
+  member_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
   start_date DATE, total_budget NUMERIC(18,2) NOT NULL DEFAULT 0
 );
 CREATE TABLE f_income (
@@ -74,4 +75,16 @@ CREATE TABLE f_income (
 CREATE TABLE t_deal (
   id BIGINT PRIMARY KEY, tenant_id BIGINT NOT NULL, output_id BIGINT NOT NULL,
   contract_amount NUMERIC(18,2) NOT NULL DEFAULT 0, signed_at TIMESTAMPTZ
+);
+
+-- T24 画像 used 聚合跨读（最小列，运行时打真库）
+CREATE TABLE f_budget (
+  id BIGINT PRIMARY KEY, tenant_id BIGINT NOT NULL, project_id BIGINT NOT NULL,
+  deleted SMALLINT NOT NULL DEFAULT 0
+);
+CREATE TABLE f_budget_line (
+  id BIGINT PRIMARY KEY, budget_id BIGINT NOT NULL,
+  amount_planned NUMERIC(18,2) NOT NULL DEFAULT 0, amount_adjusted NUMERIC(18,2),
+  amount_used NUMERIC(18,2) NOT NULL DEFAULT 0, amount_frozen NUMERIC(18,2) NOT NULL DEFAULT 0,
+  deleted SMALLINT NOT NULL DEFAULT 0
 );

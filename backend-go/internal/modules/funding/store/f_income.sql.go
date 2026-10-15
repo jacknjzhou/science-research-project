@@ -16,7 +16,7 @@ const claimIncome = `-- name: ClaimIncome :one
 UPDATE F_INCOME
 SET project_id = $2, claimed_by = $3, claimed_at = now(), claim_status = 'CLAIMED', updated_at = now()
 WHERE id = $1 AND claim_status = 'UNCLAIMED' AND deleted = 0
-RETURNING id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, receipt_no, receipt_date, amount, payer_name, payer_bank, purpose_text, bank_flow_no, claim_status, match_confidence, claimed_by, claimed_at, voucher_url
+RETURNING id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, receipt_no, receipt_date, amount, payer_name, payer_bank, purpose_text, bank_flow_no, claim_status, match_confidence, claimed_by, claimed_at, voucher_url, mgmt_fee
 `
 
 type ClaimIncomeParams struct {
@@ -53,6 +53,7 @@ func (q *Queries) ClaimIncome(ctx context.Context, arg ClaimIncomeParams) (FInco
 		&i.ClaimedBy,
 		&i.ClaimedAt,
 		&i.VoucherUrl,
+		&i.MgmtFee,
 	)
 	return i, err
 }
@@ -108,7 +109,7 @@ const createIncome = `-- name: CreateIncome :one
 
 INSERT INTO F_INCOME (tenant_id, status, creator_id, legal_entity_id, receipt_no, receipt_date, amount, payer_name, payer_bank, purpose_text, bank_flow_no, claim_status)
 VALUES ($1, 'ACTIVE', $2, $3, $4, $5, $6, $7, $8, $9, $10, 'UNCLAIMED')
-RETURNING id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, receipt_no, receipt_date, amount, payer_name, payer_bank, purpose_text, bank_flow_no, claim_status, match_confidence, claimed_by, claimed_at, voucher_url
+RETURNING id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, receipt_no, receipt_date, amount, payer_name, payer_bank, purpose_text, bank_flow_no, claim_status, match_confidence, claimed_by, claimed_at, voucher_url, mgmt_fee
 `
 
 type CreateIncomeParams struct {
@@ -164,6 +165,7 @@ func (q *Queries) CreateIncome(ctx context.Context, arg CreateIncomeParams) (FIn
 		&i.ClaimedBy,
 		&i.ClaimedAt,
 		&i.VoucherUrl,
+		&i.MgmtFee,
 	)
 	return i, err
 }
@@ -188,7 +190,7 @@ func (q *Queries) DeleteImportedIncomes(ctx context.Context, arg DeleteImportedI
 }
 
 const getIncome = `-- name: GetIncome :one
-SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, receipt_no, receipt_date, amount, payer_name, payer_bank, purpose_text, bank_flow_no, claim_status, match_confidence, claimed_by, claimed_at, voucher_url FROM F_INCOME WHERE id = $1 AND deleted = 0
+SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, receipt_no, receipt_date, amount, payer_name, payer_bank, purpose_text, bank_flow_no, claim_status, match_confidence, claimed_by, claimed_at, voucher_url, mgmt_fee FROM F_INCOME WHERE id = $1 AND deleted = 0
 `
 
 func (q *Queries) GetIncome(ctx context.Context, id int64) (FIncome, error) {
@@ -219,12 +221,13 @@ func (q *Queries) GetIncome(ctx context.Context, id int64) (FIncome, error) {
 		&i.ClaimedBy,
 		&i.ClaimedAt,
 		&i.VoucherUrl,
+		&i.MgmtFee,
 	)
 	return i, err
 }
 
 const getIncomeForUpdate = `-- name: GetIncomeForUpdate :one
-SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, receipt_no, receipt_date, amount, payer_name, payer_bank, purpose_text, bank_flow_no, claim_status, match_confidence, claimed_by, claimed_at, voucher_url FROM F_INCOME WHERE id = $1 AND deleted = 0 FOR UPDATE
+SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, receipt_no, receipt_date, amount, payer_name, payer_bank, purpose_text, bank_flow_no, claim_status, match_confidence, claimed_by, claimed_at, voucher_url, mgmt_fee FROM F_INCOME WHERE id = $1 AND deleted = 0 FOR UPDATE
 `
 
 func (q *Queries) GetIncomeForUpdate(ctx context.Context, id int64) (FIncome, error) {
@@ -255,6 +258,7 @@ func (q *Queries) GetIncomeForUpdate(ctx context.Context, id int64) (FIncome, er
 		&i.ClaimedBy,
 		&i.ClaimedAt,
 		&i.VoucherUrl,
+		&i.MgmtFee,
 	)
 	return i, err
 }
@@ -279,7 +283,7 @@ func (q *Queries) IncomeFlowNoExists(ctx context.Context, arg IncomeFlowNoExists
 }
 
 const listIncomes = `-- name: ListIncomes :many
-SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, receipt_no, receipt_date, amount, payer_name, payer_bank, purpose_text, bank_flow_no, claim_status, match_confidence, claimed_by, claimed_at, voucher_url FROM F_INCOME
+SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, receipt_no, receipt_date, amount, payer_name, payer_bank, purpose_text, bank_flow_no, claim_status, match_confidence, claimed_by, claimed_at, voucher_url, mgmt_fee FROM F_INCOME
 WHERE deleted = 0 AND tenant_id = $1::bigint
   AND ($2::text IS NULL OR claim_status = $2::text)
   AND ($3::bigint IS NULL OR project_id = $3::bigint)
@@ -338,6 +342,7 @@ func (q *Queries) ListIncomes(ctx context.Context, arg ListIncomesParams) ([]FIn
 			&i.ClaimedBy,
 			&i.ClaimedAt,
 			&i.VoucherUrl,
+			&i.MgmtFee,
 		); err != nil {
 			return nil, err
 		}

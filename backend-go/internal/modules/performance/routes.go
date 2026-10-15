@@ -9,6 +9,8 @@ import "github.com/gin-gonic/gin"
 //	/perf/payouts[/:id][/approve|/pay|/reject]
 //	/perf/me  /perf/ranking
 func Register(r gin.IRoutes, h *Handler) {
+	// T24 PI 画像（真数据聚合）
+	r.GET("/portrait/:userId", h.Portrait)
 	// 方案
 	r.GET("/perf/schemes", h.ListSchemes)
 	r.POST("/perf/schemes", h.CreateScheme)

@@ -280,6 +280,10 @@ p, R-STAFF,   /api/v1/project-categories,           GET
 p, R-STAFF,   /api/v1/project-categories/*,         GET
 p, R-MANAGER, /api/v1/projects/*/category,         POST
 p, R-STAFF,   /api/v1/projects/*/category,          POST
+# T24 PI 画像（管理/领导/审计读真数据聚合）
+p, R-MANAGER, /api/v1/portrait/*,                   GET
+p, R-LEADER,  /api/v1/portrait/*,                   GET
+p, R-FINANCE, /api/v1/portrait/*,                   GET
 # T22 任务书 PDF 解析（登录用户可用，解析结果仅回填表单）
 p, R-STAFF,   /api/v1/projects/extract-taskbook,   POST
 p, R-MANAGER, /api/v1/projects/extract-taskbook,   POST

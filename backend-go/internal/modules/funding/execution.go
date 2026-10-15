@@ -48,17 +48,6 @@ func (h *Handler) executionOf(c *gin.Context, tenantID, projectID int64) map[str
 	}
 }
 
-// FundingExecution GET /funding/execution?projectId=。
-func (h *Handler) FundingExecution(c *gin.Context) {
-	d := auth.DomainFrom(c)
-	pid := optInt64(c, "project_id")
-	if pid == nil {
-		httpx.WriteErr(c, http.StatusBadRequest, 40001, "project_id 必填")
-		return
-	}
-	httpx.WriteOK(c, h.executionOf(c, d.TenantID, *pid))
-}
-
 // FundingWarnings GET /funding/warnings?projectId=
 // 惰性计算不落库：WARN 执行率≥80%；CRITICAL ≥100%；DEADLINE_RISK 结题窗口 30 天内且 <100%。
 func (h *Handler) FundingWarnings(c *gin.Context) {

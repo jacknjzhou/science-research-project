@@ -10,6 +10,7 @@ import (
 	"github.com/eplugger/ark/internal/platform/auth"
 	"github.com/eplugger/ark/internal/platform/httpx"
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -87,6 +88,26 @@ func (h *Handler) FundingDashboard(c *gin.Context) {
 		alerts[b.Bucket] = map[string]any{"count": b.Cnt}
 	}
 
+	// T23 三维监控：大屏补充 byCollege / bySubject 分组聚合（失败静默，不阻断主聚合）
+	byCollege := make([]map[string]any, 0)
+	bySubject := make([]map[string]any, 0)
+	if rows, err := h.q.ExecutionByCollege(c, d.TenantID); err == nil {
+		for _, r := range rows {
+			byCollege = append(byCollege, map[string]any{
+				"dimId": r.DimID, "approved": numToDec(r.Approved), "used": numToDec(r.Used),
+				"frozen": numToDec(r.Frozen), "executionRate": rateOf(numToDec(r.Used), numToDec(r.Approved)),
+			})
+		}
+	}
+	if rows, err := h.q.ExecutionBySubject(c, d.TenantID); err == nil {
+		for _, r := range rows {
+			bySubject = append(bySubject, map[string]any{
+				"dimId": r.DimID, "approved": numToDec(r.Approved), "used": numToDec(r.Used),
+				"frozen": numToDec(r.Frozen), "executionRate": rateOf(numToDec(r.Used), numToDec(r.Approved)),
+			})
+		}
+	}
+
 	httpx.WriteOK(c, map[string]any{
 		"totalBudget":   budget,
 		"yearIncome":    income,
@@ -96,6 +117,8 @@ func (h *Handler) FundingDashboard(c *gin.Context) {
 		"deptHeatmap":   heatOut,
 		"trend12Months": trendOut,
 		"alerts":        alerts,
+		"byCollege":     byCollege,
+		"bySubject":     bySubject,
 	})
 }
 
@@ -128,4 +151,19 @@ func optInt64(c *gin.Context, key string) *int64 {
 		n = n*10 + int64(ch-'0')
 	}
 	return &n
+}
+
+
+// numToDec T23：pgtype.Numeric → "1234.56"（无效值 "0.00"）。
+func numToDec(n pgtype.Numeric) string {
+	if !n.Valid || n.Int == nil {
+		return "0.00"
+	}
+	r := new(big.Rat).SetInt(n.Int)
+	if n.Exp < 0 {
+		r.Mul(r, new(big.Rat).SetFrac(big.NewInt(1), new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-n.Exp)), nil)))
+	} else if n.Exp > 0 {
+		r.Mul(r, new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n.Exp)), nil)))
+	}
+	return r.FloatString(2)
 }

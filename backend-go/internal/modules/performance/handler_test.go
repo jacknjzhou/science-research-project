@@ -51,6 +51,9 @@ func runSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 		`DELETE FROM t_deal WHERE tenant_id=1`,
 		`DELETE FROM t_disclosure WHERE tenant_id=1`,
 		`DELETE FROM f_income WHERE tenant_id=1`,
+		`DELETE FROM r_claim_record WHERE tenant_id=1`,
+		`DELETE FROM r_patent_fee WHERE tenant_id=1`,
+		`DELETE FROM r_paper_reprint WHERE tenant_id=1`,
 		`DELETE FROM e_project WHERE tenant_id=1`,
 		`DELETE FROM r_output WHERE tenant_id=1`,
 	} {

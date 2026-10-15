@@ -17,8 +17,26 @@ type EProject struct {
 	PiUserID     int64          `json:"pi_user_id"`
 	DepartmentID *int64         `json:"department_id"`
 	ProjectType  *string        `json:"project_type"`
+	MemberIds    []byte         `json:"member_ids"`
 	StartDate    pgtype.Date    `json:"start_date"`
 	TotalBudget  pgtype.Numeric `json:"total_budget"`
+}
+
+type FBudget struct {
+	ID        int64 `json:"id"`
+	TenantID  int64 `json:"tenant_id"`
+	ProjectID int64 `json:"project_id"`
+	Deleted   int16 `json:"deleted"`
+}
+
+type FBudgetLine struct {
+	ID             int64          `json:"id"`
+	BudgetID       int64          `json:"budget_id"`
+	AmountPlanned  pgtype.Numeric `json:"amount_planned"`
+	AmountAdjusted pgtype.Numeric `json:"amount_adjusted"`
+	AmountUsed     pgtype.Numeric `json:"amount_used"`
+	AmountFrozen   pgtype.Numeric `json:"amount_frozen"`
+	Deleted        int16          `json:"deleted"`
 }
 
 type FIncome struct {
