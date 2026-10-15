@@ -1,30 +1,40 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { api, list } from '@/api/client'
+import { toPct } from '@/utils/money'
 
-interface Badge { label: string; cls: string }
-interface ClaimCard {
+// 数据模型严格对齐后端 mapper.go ToAPIOutput（design/04 Output）。
+// 展示态字段（作者串、年份、来源标签、存疑说明）在视图层从契约字段派生。
+interface AuthorItem { user_id: number | null; name: string; order?: number; is_corresponding?: boolean }
+interface Output {
   id: number
-  code: string
-  output_type: 'PAPER' | 'PATENT' | 'SOFTWARE'
+  code: string | null
+  tenant_id: number
+  status: string
+  output_type: string
   title: string
-  authors: string
-  venue: string
-  year: number
+  title_en: string | null
+  abstract: string | null
+  publish_date: string | null
+  authors: AuthorItem[]
+  external_author_names?: { name: string; inst: string }[]
+  affiliations?: { user_id: number | null; inst_id: number | null; is_primary: boolean }[]
+  project_ids: number[]
+  language: string | null
   source: string
-  match_confidence: number
+  is_claimed: boolean
   claim_status: string
-  doubt?: string
-  badges?: Badge[]
-  suggest?: string
-  suggest_id?: number
+  match_confidence: number | null
+  security_level: string
+  remark: string | null
+  [k: string]: any
 }
 
 const toast = (m: string) => (window as any).toast?.(m)
 
 type FilterKey = 'all' | 'PAPER' | 'PATENT' | 'high' | 'doubt'
 
-const items = ref<ClaimCard[]>([])
+const items = ref<Output[]>([])
 const pendingTotal = ref(0)
 const mineTotal = ref(0)
 const loading = ref(true)
@@ -46,7 +56,7 @@ const visible = computed(() => {
     case 'PATENT':
       return l.filter((c) => c.output_type === filter.value)
     case 'high':
-      return l.filter((c) => c.match_confidence >= 0.85)
+      return l.filter((c) => (c.match_confidence ?? 0) >= 0.85)
     case 'doubt':
       return l.filter((c) => c.claim_status === 'DOUBTFUL')
     default:
@@ -54,20 +64,41 @@ const visible = computed(() => {
   }
 })
 
-const confPct = (c: ClaimCard) => Math.round((c.match_confidence ?? 0) * 100)
-const confColor = (c: ClaimCard) =>
+// —— 派生展示助手（从契约字段计算，无 venue/year/suggest 等视图态字段）——
+const confPct = (c: Output) => toPct(c.match_confidence ?? 0)
+const confColor = (c: Output) =>
   c.claim_status === 'DOUBTFUL' || (c.match_confidence ?? 0) < 0.7 ? 'var(--warn)' : undefined
-const ringStyle = (c: ClaimCard) => `--p:${confPct(c)}%`
-const claimed = (c: ClaimCard) => c.claim_status === 'CLAIMED'
+const ringStyle = (c: Output) => `--p:${confPct(c)}%`
+const claimed = (c: Output) => c.is_claimed || c.claim_status === 'CLAIMED'
+
+const authorsStr = (c: Output) => {
+  const a = (c.authors || []).map((x) => x.name + (x.is_corresponding ? '*' : '')).join('，')
+  if (a) return a
+  const ext = (c.external_author_names || []).map((x) => x.name).join('，')
+  return ext || '—'
+}
+const yearOf = (c: Output) => (c.publish_date ? c.publish_date.slice(0, 4) : '—')
+const sourceLabel = (c: Output) => SOURCE_TEXT[c.source] || c.source
+const typeLabel = (c: Output) => TYPE_TEXT[c.output_type] || c.output_type
+const linked = (c: Output) => (c.project_ids || []).length > 0
 const restCount = computed(() => Math.max(pendingTotal.value - items.value.length, 0))
+
+const SOURCE_TEXT: Record<string, string> = {
+  WOS: 'WoS', SCOPUS: 'Scopus', CNKI: '知网', WANFANG: '万方', CNIPA: '国家知识产权局',
+  CROSSREF: 'CrossRef', FETCH: '增量抓取', MANUAL: '手动录入', ALTMETRIC: 'Altmetric',
+}
+const TYPE_TEXT: Record<string, string> = {
+  PAPER: '论文', PATENT: '专利', SOFTWARE: '软著', STANDARD: '标准',
+  AWARD: '奖励', BOOK: '著作', DATASET: '数据集', CONFERENCE: '会议', HONOR: '荣誉',
+}
 
 async function load() {
   loading.value = true
   try {
-    const { rows, total } = await list<ClaimCard>('/output/pending-claim', { min_confidence: 0 })
+    const { rows, total } = await list<Output>('/output/pending-claim', { min_confidence: 0 })
     items.value = rows ?? []
     pendingTotal.value = total ?? rows?.length ?? 0
-    const mine = await api.get<{ total?: number }>('/output/mine')
+    const mine = await list<Output>('/output/mine')
     mineTotal.value = mine?.total ?? 0
   } catch (e: any) {
     toast('数据加载失败：' + (e?.message || e))
@@ -77,11 +108,12 @@ async function load() {
 }
 onMounted(load)
 
-async function claimOne(c: ClaimCard) {
+async function claimOne(c: Output) {
   if (busy.value || claimed(c)) return
   busy.value = true
   try {
-    await api.post('/output/claim', { action: 'CLAIM', items: [{ output_id: c.id }] })
+    await api.post('/output/claim', { items: [{ output_id: c.id }] })
+    c.is_claimed = true
     c.claim_status = 'CLAIMED'
     toast('已认领 → 待关联项目 ✓')
   } catch (e: any) {
@@ -92,12 +124,12 @@ async function claimOne(c: ClaimCard) {
 }
 
 async function claimHigh() {
-  const hs = items.value.filter((c) => c.match_confidence >= 0.85 && !claimed(c))
+  const hs = items.value.filter((c) => (c.match_confidence ?? 0) >= 0.85 && !claimed(c))
   if (!hs.length) return toast('暂无高置信记录可认领')
   busy.value = true
   try {
-    await api.post('/output/claim', { action: 'CLAIM', items: hs.map((h) => ({ output_id: h.id })) })
-    hs.forEach((h) => (h.claim_status = 'CLAIMED'))
+    await api.post('/output/claim', { items: hs.map((h) => ({ output_id: h.id })) })
+    hs.forEach((h) => { h.is_claimed = true; h.claim_status = 'CLAIMED' })
     toast(`已批量认领 ${hs.length} 条高置信记录`)
   } catch (e: any) {
     toast('批量认领失败：' + (e?.message || e))
@@ -106,14 +138,14 @@ async function claimHigh() {
   }
 }
 
-async function assignProject(c: ClaimCard) {
+async function assignProject(c: Output) {
   busy.value = true
   try {
-    await api.put(`/output/${c.id}/projects`, {
-      project_ids: [c.suggest_id ?? 87],
-      relation_type: 'PRIMARY',
-    })
-    toast('已归属项目：' + (c.suggest?.split('（')[0] || 'PRJ-2024-00087') + ' ✓')
+    // 演示：归属到本人主项目；真实选择器在成果详情/台账中提供。
+    await api.put(`/output/${c.id}/projects`, { project_ids: [90001], relation_type: 'ASSIGNED_TO_PROJECT' })
+    c.project_ids = [90001]
+    c.status = 'ASSIGNED_TO_PROJECT'
+    toast('已归属项目 ✓')
   } catch (e: any) {
     toast('关联失败：' + (e?.message || e))
   } finally {
@@ -121,10 +153,10 @@ async function assignProject(c: ClaimCard) {
   }
 }
 
-async function markNotMine(c: ClaimCard) {
+async function markNotMine(c: Output) {
   busy.value = true
   try {
-    await api.post('/output/mark-not-mine', { action: 'MARK_NOT_MINE', items: [{ output_id: c.id }] })
+    await api.post('/output/mark-not-mine', { items: [{ output_id: c.id }] })
     items.value = items.value.filter((x) => x.id !== c.id)
     toast('已反馈非本人，模型将学习此负例')
   } catch (e: any) {
@@ -171,21 +203,20 @@ async function markNotMine(c: ClaimCard) {
         <div style="flex:1">
           <div style="font-family:var(--serif);font-weight:700;font-size:14px">
             {{ c.title }}
-            <span v-if="c.doubt" style="font-weight:400;color:var(--warn)">（{{ c.doubt }}）</span>
+            <span class="tag" style="margin-left:6px">{{ typeLabel(c) }}</span>
           </div>
           <div style="font-size:12px;color:var(--ink-mute);margin-top:4px">
-            <b style="color:var(--ok)">{{ c.authors }}</b> — <i>{{ c.venue }}</i> · {{ c.year }}
-            <span v-for="b in c.badges" :key="b.label" class="tag" :class="b.cls" style="margin-left:6px">{{ b.label }}</span>
+            <b style="color:var(--ok)">{{ authorsStr(c) }}</b> — {{ sourceLabel(c) }} · {{ yearOf(c) }}
+            <span v-if="linked(c)" class="tag ok" style="margin-left:6px">已关联 {{ c.project_ids.length }} 个项目</span>
           </div>
-          <div v-if="c.suggest" style="font-size:11px;color:var(--ai);margin-top:5px">✦ 建议关联：{{ c.suggest }}</div>
-          <div v-if="c.claim_status === 'DOUBTFUL'" style="margin-top:6px">
-            <button class="btn sm ghost" @click="toast('展开对比：合作者/单位/摘要相似度（演示）')">查看匹配证据</button>
+          <div v-if="c.claim_status === 'DOUBTFUL' && c.remark" style="font-size:11px;color:var(--warn);margin-top:5px">
+            ⚠ {{ c.remark }}
           </div>
         </div>
 
         <div class="claim-actions">
           <button class="btn sm seal" :disabled="claimed(c)" @click="claimOne(c)">{{ claimed(c) ? '已认领' : '认领' }}</button>
-          <button v-if="c.suggest_id || c.suggest" class="btn sm ghost" @click="assignProject(c)">归属项目</button>
+          <button v-if="claimed(c) && !linked(c)" class="btn sm ghost" @click="assignProject(c)">归属项目</button>
           <button v-if="c.claim_status === 'DOUBTFUL'" class="btn sm ghost" @click="toast('已转交科研办仲裁')">仲裁</button>
           <button v-else class="btn sm ghost" @click="markNotMine(c)">不是我的</button>
         </div>

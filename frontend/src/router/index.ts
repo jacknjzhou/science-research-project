@@ -23,6 +23,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/project/:id?', name: 'project', meta: { zh: '项目详情', en: 'PROJECT DETAIL' }, component: () => import('@/views/ProjectView.vue') },
   { path: '/expense', name: 'expense', meta: { zh: '报销填单', en: 'EXPENSE FORM', roles: ['R-STAFF', 'R-MANAGER', 'R-FINANCE'] }, component: () => import('@/views/ExpenseView.vue') },
   { path: '/claim', name: 'claim', meta: { zh: '成果认领', en: 'OUTPUT CLAIM', roles: ['R-STAFF', 'R-MANAGER', 'R-LEADER'] }, component: () => import('@/views/ClaimView.vue') },
+  { path: '/output', name: 'output', meta: { zh: '成果台账', en: 'OUTPUT LEDGER', roles: ['R-STAFF', 'R-MANAGER', 'R-LEADER'] }, component: () => import('@/views/OutputView.vue') },
   { path: '/transfer', name: 'transfer', meta: { zh: '转化看板', en: 'TECH TRANSFER', roles: ['R-MANAGER', 'R-LEADER', 'R-ADMIN'] }, component: () => import('@/views/TransferView.vue') },
   { path: '/procurement', name: 'procurement', meta: { zh: '采购与合同', en: 'PROCUREMENT & CONTRACT', roles: ['R-MANAGER', 'R-FINANCE', 'R-ADMIN'] }, component: () => import('@/views/ProcurementView.vue') },
   { path: '/asset', name: 'asset', meta: { zh: '资产与耗材台账', en: 'ASSET & CONSUMABLE', roles: ['R-MANAGER', 'R-FINANCE', 'R-ADMIN'] }, component: () => import('@/views/AssetView.vue') },
