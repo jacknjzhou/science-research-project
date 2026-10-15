@@ -33,6 +33,8 @@ tags:
   - name: Trace
     description: 全程双向追溯链（E-17，引用 e_trace_node）
 
+  - name: Category
+    description: E-09 项目分类与窗口预警 / 任务书解析（T21/T22）
 security:
   - bearerAuth: []
 
@@ -461,6 +463,236 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /projects/approve-batch:
+    post:
+      tags: [Change]
+      summary: 变更申请批量审批（T19；两级开关 ARK_APPROVAL_TWOSTEP=on 时 R-MANAGER→R-LEADER 逐级推进，批量逐条独立事务）
+      operationId: approveChangeBatch
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids, action]
+              properties:
+                ids:
+                  type: array
+                  minItems: 1
+                  items: { type: integer, format: int64 }
+                action: { type: string, enum: [APPROVE, REJECT, RETURN] }
+                comment: { type: string }
+      responses:
+        "200":
+          description: 批量结果（total/ok/逐条 results）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          total: { type: integer }
+                          ok: { type: integer }
+                          results:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                id: { type: integer, format: int64 }
+                                ok: { type: boolean }
+                                err: { type: string, nullable: true }
+
+  /project-categories:
+    get:
+      tags: [Category]
+      summary: 项目分类列表（T21）
+      operationId: listProjectCategories
+      responses:
+        "200":
+          description: 分类列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/ProjectCategory' }
+                          total: { type: integer }
+    post:
+      tags: [Category]
+      summary: 新建项目分类（T21；含中检/结项窗口与学费比例）
+      operationId: createProjectCategory
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CategoryUpsert' }
+      responses:
+        "200":
+          description: 分类
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ProjectCategory' }
+
+  /project-categories/{id}:
+    put:
+      tags: [Category]
+      summary: 更新项目分类（T21；COALESCE 局部更新）
+      operationId: updateProjectCategory
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CategoryUpsert' }
+      responses:
+        "200":
+          description: 更新后分类
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ProjectCategory' }
+    delete:
+      tags: [Category]
+      summary: 删除项目分类（T21；被项目引用禁止删除）
+      operationId: deleteProjectCategory
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 删除结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          deleted: { type: boolean }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+
+  /project-categories/scan-warnings:
+    post:
+      tags: [Category]
+      summary: 中检/结项窗口预警扫描（T21；EXECUTING 项目 × 分类窗口（窗口内或窗口前 15 天），幂等去重推送）
+      operationId: scanCategoryWarnings
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        "200":
+          description: 扫描结果（scanned/sent）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          scanned: { type: integer }
+                          sent: { type: integer }
+
+  /projects/{id}/category:
+    post:
+      tags: [Category]
+      summary: 项目挂接分类（T21）
+      operationId: attachProjectCategory
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [categoryId]
+              properties:
+                categoryId: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 挂接结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          projectId: { type: integer, format: int64 }
+                          categoryId: { type: integer, format: int64 }
+
+  /projects/extract-taskbook:
+    post:
+      tags: [Category]
+      summary: 任务书 PDF 解析（T22；multipart 上传，LLM 抽取 JSON 直通；confidence<0.85 降级附 rawText 不落库）
+      operationId: extractTaskbook
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: 任务书 PDF（文本版优先；扫描件降级）
+      responses:
+        "200":
+          description: 解析结果（ok=true 抽取成功；ok=false 降级，附 rawText/message）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/TaskbookExtract' }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -491,6 +723,13 @@ components:
       description: 幂等键，服务端缓存去重（POST/PUT/DELETE）
 
   responses:
+    RuleRejected:
+      description: 规则引擎判定拒绝（状态机不允许 / 越权 / 引用被占用），回传 code 与说明
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ApiResponse'
     Unauthorized:
       description: 未认证 / Token 失效
       content:
@@ -843,3 +1082,55 @@ components:
         actorId: { type: integer, format: int64 }
         action: { type: string }
         occurredAt: { type: string, format: date-time }
+    ProjectCategory:
+      type: object
+      description: 项目分类（T21；窗口驱动中检/结项预警）
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        name: { type: string }
+        level: { type: string, nullable: true }
+        mgmtFeePct: { type: string, nullable: true, description: 管理费比例 NUMERIC 字符串 }
+        midcheckFrom: { type: string, format: date, nullable: true }
+        midcheckTo: { type: string, format: date, nullable: true }
+        closingFrom: { type: string, format: date, nullable: true }
+        closingTo: { type: string, format: date, nullable: true }
+
+    CategoryUpsert:
+      type: object
+      description: 分类创建/更新请求（T21；update 全字段可选）
+      properties:
+        code: { type: string }
+        name: { type: string }
+        level: { type: string, nullable: true }
+        mgmtFeePct: { type: string, nullable: true }
+        midcheckFrom: { type: string, nullable: true, description: "2006-01-02" }
+        midcheckTo: { type: string, nullable: true }
+        closingFrom: { type: string, nullable: true }
+        closingTo: { type: string, nullable: true }
+
+    TaskbookExtract:
+      type: object
+      description: 任务书解析结果（T22；仅回填表单不落库）
+      properties:
+        ok: { type: boolean }
+        projectName: { type: string, nullable: true }
+        pi: { type: string, nullable: true }
+        members:
+          type: array
+          items: { type: string }
+        budgetLines:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              amount: { type: string }
+        period:
+          type: object
+          properties:
+            start: { type: string, nullable: true }
+            end: { type: string, nullable: true }
+        confidence: { type: number, format: double, description: <0.85 时降级附 rawText }
+        rawText: { type: string, nullable: true, description: 降级时附原文（截断 2000 字） }
+        message: { type: string, nullable: true }

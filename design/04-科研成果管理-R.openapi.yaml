@@ -28,6 +28,12 @@ tags:
   - name: export
     description: 成果报送导出（R-18）
 
+  - name: journal
+    description: R-05 期刊源库与刊物级别治理（T16）
+  - name: reprint
+    description: R-06 论文转载登记（T16）
+  - name: push
+    description: R-07 网推成果认领与去重（T17）
 components:
   securitySchemes:
     bearerAuth:
@@ -36,6 +42,16 @@ components:
       bearerFormat: JWT
 
   parameters:
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, default: 1, minimum: 1 }
+      description: 页码（1-based）
+    Size:
+      name: size
+      in: query
+      schema: { type: integer, default: 20, maximum: 200 }
+      description: 每页条数（上限 200）
     PageParam:
       name: page
       in: query
@@ -332,6 +348,74 @@ components:
         message: { type: string }
         traceId: { type: string }
 
+    JournalSource:
+      type: object
+      description: 期刊源（T16）
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        issn: { type: string, nullable: true }
+        yearFrom: { type: integer, format: int32, nullable: true }
+        yearTo: { type: integer, format: int32, nullable: true }
+
+    JournalLevel:
+      type: object
+      description: 刊物级别（T16）
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        name: { type: string }
+        paperType: { type: string, nullable: true }
+        indexed: { type: boolean }
+
+    Reprint:
+      type: object
+      description: 转载/引用登记（T16）
+      properties:
+        id: { type: integer, format: int64 }
+        outputId: { type: integer, format: int64, nullable: true }
+        name: { type: string }
+        type: { type: string, nullable: true }
+        reprintDate: { type: string, nullable: true }
+        remark: { type: string, nullable: true }
+
+    PushItem:
+      type: object
+      description: 网推成果（T17）
+      properties:
+        id: { type: integer, format: int64 }
+        type: { type: string }
+        sourceDb: { type: string }
+        title: { type: string }
+        authors: { type: string }
+        year: { type: integer, nullable: true }
+        rawDoi: { type: string, nullable: true }
+        status: { type: string }
+        pushedAt: { type: string }
+
+    PatentFee:
+      type: object
+      description: 专利年费（T18）
+      properties:
+        id: { type: integer, format: int64 }
+        patentId: { type: integer, format: int64 }
+        year: { type: integer, format: int32 }
+        amount: { $ref: '#/components/schemas/Money' }
+        paidAt: { type: string, nullable: true }
+        status: { type: string }
+
+    Agency:
+      type: object
+      description: 专利代理机构（T18）
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        contact: { type: string, nullable: true }
+
+    Money:
+      type: string
+      description: NUMERIC(18,2) 金额字符串承载，如 "1234.56"
+
   responses:
     Ok:
       description: 成功
@@ -363,6 +447,495 @@ security:
   - bearerAuth: []
 
 paths:
+  /journal-sources:
+    get:
+      tags: [journal]
+      summary: 期刊源库列表（T16；query year 过滤年度窗口）
+      operationId: listJournalSources
+      parameters:
+        - name: year
+          in: query
+          schema: { type: integer, format: int32 }
+          description: 年度窗口过滤（year_from<=year<=year_to）
+      responses:
+        "200":
+          description: 源库列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/JournalSource' }
+                          total: { type: integer }
+    post:
+      tags: [journal]
+      summary: 新建期刊源（T16）
+      operationId: createJournalSource
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                issn: { type: string, nullable: true }
+                yearFrom: { type: integer, format: int32, nullable: true }
+                yearTo: { type: integer, format: int32, nullable: true }
+      responses:
+        "200":
+          description: 期刊源
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/JournalSource' }
+
+  /journal-levels:
+    get:
+      tags: [journal]
+      summary: 刊物级别目录（T16）
+      operationId: listJournalLevels
+      responses:
+        "200":
+          description: 级别列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/JournalLevel' }
+                          total: { type: integer }
+    post:
+      tags: [journal]
+      summary: 新建刊物级别（T16；indexed 缺省 true）
+      operationId: createJournalLevel
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, name]
+              properties:
+                code: { type: string }
+                name: { type: string }
+                paperType: { type: string, nullable: true }
+                indexed: { type: boolean, default: true }
+      responses:
+        "200":
+          description: 刊物级别
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/JournalLevel' }
+
+  /journal-levels/resolve:
+    get:
+      tags: [journal]
+      summary: 按期刊名解析级别（T16；未命中 data=null）
+      operationId: resolveJournalLevel
+      parameters:
+        - name: name
+          in: query
+          required: true
+          schema: { type: string }
+        - name: year
+          in: query
+          schema: { type: integer, format: int32 }
+      responses:
+        "200":
+          description: 解析结果（levelCode/levelName 或 null）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        nullable: true
+                        properties:
+                          levelCode: { type: string }
+                          levelName: { type: string }
+
+  /journal-levels/{id}/sources:
+    post:
+      tags: [journal]
+      summary: 级别挂接期刊源（T16）
+      operationId: attachLevelSource
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sourceId]
+              properties:
+                sourceId: { type: integer, format: int64 }
+                yearFrom: { type: integer, format: int32, nullable: true }
+                yearTo: { type: integer, format: int32, nullable: true }
+      responses:
+        "200":
+          description: 挂接结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          levelId: { type: integer, format: int64 }
+                          sourceId: { type: integer, format: int64 }
+
+  /papers/{id}/reprints:
+    get:
+      tags: [reprint]
+      summary: 论文转载/引用登记列表（T16）
+      operationId: listReprints
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+          description: 论文成果 ID（r_output.id）
+      responses:
+        "200":
+          description: 转载列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/Reprint' }
+                          total: { type: integer }
+    post:
+      tags: [reprint]
+      summary: 登记转载（T16）
+      operationId: createReprint
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                type: { type: string, nullable: true }
+                reprintDate: { type: string, nullable: true, description: "2006-01-02" }
+                remark: { type: string, nullable: true }
+      responses:
+        "200":
+          description: 转载记录
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Reprint' }
+
+  /push-items:
+    get:
+      tags: [push]
+      summary: 网推成果列表（T17；query status/type 过滤）
+      operationId: listPushItems
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: type
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: 推送列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/PushItem' }
+
+  /push-items/{id}/import:
+    post:
+      tags: [push]
+      summary: 认领导入网推成果（T17；布隆+相似查重，force=true 跳过相似拦截）
+      operationId: importPushItem
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+        - name: force
+          in: query
+          schema: { type: string, enum: ["true", "false"] }
+          description: "true 时跳过相似查重"
+      responses:
+        "200":
+          description: 导入成功（outputId + status=IMPORTED）或相似提示（similar/needForce）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          outputId: { type: integer, format: int64, nullable: true }
+                          status: { type: string }
+                          similar:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                id: { type: integer, format: int64 }
+                                title: { type: string }
+                                status: { type: string }
+                          needForce: { type: boolean }
+        "409":
+          description: 精确重复（40905，data 带 existingId/existingTitle）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+
+  /push-items/{id}/ignore:
+    post:
+      tags: [push]
+      summary: 忽略网推成果（T17；幂等）
+      operationId: ignorePushItem
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 忽略结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          ignored: { type: boolean }
+
+  /patents/{id}/stage:
+    post:
+      tags: [patent]
+      summary: 推进专利生命周期阶段（T18；仅允许按序 +1 或原地）
+      operationId: setPatentStage
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stage]
+              properties:
+                stage: { type: string, enum: [PRE_APPLY, APPLIED, PUBLISHED, GRANTED, TRANSFERRED] }
+      responses:
+        "200":
+          description: 推进后阶段
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id: { type: integer, format: int64 }
+                          stage: { type: string }
+
+  /patents/{id}/fees:
+    get:
+      tags: [patent]
+      summary: 专利年费列表（T18）
+      operationId: listPatentFees
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 年费列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/PatentFee' }
+                          total: { type: integer }
+    post:
+      tags: [patent]
+      summary: 登记专利年费（T18；status 缺省 UNPAID）
+      operationId: createPatentFee
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [year, amount]
+              properties:
+                year: { type: integer, format: int32 }
+                amount: { $ref: '#/components/schemas/Money' }
+                paidAt: { type: string, nullable: true }
+                status: { type: string, default: UNPAID }
+      responses:
+        "200":
+          description: 年费记录
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PatentFee' }
+
+  /agencies:
+    get:
+      tags: [patent]
+      summary: 专利代理机构列表（T18）
+      operationId: listAgencies
+      responses:
+        "200":
+          description: 机构列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/Agency' }
+                          total: { type: integer }
+    post:
+      tags: [patent]
+      summary: 新建专利代理机构（T18）
+      operationId: createAgency
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                contact: { type: string, nullable: true }
+      responses:
+        "200":
+          description: 机构
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Agency' }
+
   /output:
     get:
       tags: [output]

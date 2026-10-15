@@ -577,6 +577,28 @@ paths:
                     properties:
                       data: { type: object, properties: { list: { type: array, items: { $ref: '#/components/schemas/RankItem' } } } }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /portrait/{userId}:
+    get:
+      tags: [performance]
+      summary: 科研人员画像（T24；真数据聚合——项目数/经费/执行率、成果数、最新考核分）
+      operationId: getPortrait
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 画像数据
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Portrait' }
+
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
@@ -761,3 +783,23 @@ components:
         staff_name:    { type: string, nullable: true }
         dept_id:       { type: integer, format: int64, nullable: true }
         total_score:   { type: string }
+    Portrait:
+      type: object
+      description: 科研人员画像（T24）
+      properties:
+        userId: { type: integer, format: int64 }
+        projects:
+          type: object
+          properties:
+            count: { type: integer, description: 主持+参与在研项目数 }
+            budgetTotal: { type: string, description: 主持项目经费合计 NUMERIC 字符串 }
+            usedTotal: { type: string }
+            execRate: { type: number, format: double }
+        outputs:
+          type: object
+          properties:
+            count: { type: integer, description: 成果总数 }
+        assessment:
+          type: object
+          properties:
+            latestScore: { type: number, format: double, nullable: true, description: 最新考核得分，无记录为 null }

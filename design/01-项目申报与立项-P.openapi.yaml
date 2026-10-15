@@ -31,6 +31,8 @@ tags:
   - name: taskbook
     description: 任务书生成与签订（P-12）
 
+  - name: plan
+    description: P-08 申报计划与形式审查（T25；时间窗守卫/两级审批/转立项）
 security:
   - bearerAuth: []
 
@@ -840,6 +842,283 @@ paths:
                       data: { $ref: '#/components/schemas/TaskBook' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /apply-plans:
+    get:
+      tags: [plan]
+      summary: 申报计划列表（T25）
+      operationId: listApplyPlans
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        "200":
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/ApplyPlan' }
+    post:
+      tags: [plan]
+      summary: 创建申报计划（T25；初始 DRAFT）
+      operationId: createApplyPlan
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, startAt, endAt]
+              properties:
+                name: { type: string }
+                categoryId: { type: integer, format: int64, nullable: true }
+                source: { type: string, nullable: true, description: 来源（如 NSFC），转立项时作项目类型 }
+                startAt: { type: string, format: date }
+                endAt: { type: string, format: date }
+                needReview: { type: boolean, default: true }
+                guideFileId: { type: integer, format: int64, nullable: true }
+      responses:
+        "200":
+          description: 申报计划
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ApplyPlan' }
+
+  /apply-plans/{id}/start:
+    post:
+      tags: [plan]
+      summary: 开启申报计划（T25；仅 DRAFT → OPEN，进入申报时间窗守卫）
+      operationId: startApplyPlan
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 状态变更结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id: { type: integer, format: int64 }
+                          status: { type: string }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+
+  /apply-plans/{id}/stop:
+    post:
+      tags: [plan]
+      summary: 停止申报计划（T25；仅 OPEN → STOPPED）
+      operationId: stopApplyPlan
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 状态变更结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id: { type: integer, format: int64 }
+                          status: { type: string }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+
+  /apply-plans/auto-stop:
+    post:
+      tags: [plan]
+      summary: 到期计划自动停止（T25；end_at < 今天且 OPEN → STOPPED，cron 幂等）
+      operationId: autoStopApplyPlans
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        "200":
+          description: 停止数量
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          stopped: { type: integer }
+
+  /apply-plans/{id}/applications:
+    post:
+      tags: [plan]
+      summary: 提交申报单（T25；守卫：计划 OPEN 且今天 ∈ [startAt, endAt]，否则 40901）
+      operationId: createApplication
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectName]
+              properties:
+                projectName: { type: string }
+                applyAmount: { type: string, nullable: true, description: NUMERIC 字符串，缺省 0 }
+                attachmentIds:
+                  type: array
+                  nullable: true
+                  items: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 申报单（status=SUBMITTED）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id: { type: integer, format: int64 }
+                          planId: { type: integer, format: int64 }
+                          status: { type: string }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+    get:
+      tags: [plan]
+      summary: 形式审查视图（T25；附申请人主持+参与项目数量与经费合计）
+      operationId: listPlanApplications
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 申报单列表（含形式审查摘要）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/ApplicationReview' }
+                          total: { type: integer }
+
+  /applications/{id}/approve:
+    post:
+      tags: [plan]
+      summary: 申报单审批（T25；两级开关 on：R-MANAGER SUBMITTED→COLLEGE_PASSED、R-LEADER COLLEGE_PASSED→SCHOOL_PASSED，R-MANAGER 终审 403；off：一步到 SCHOOL_PASSED；REJECT 按级回退并写审批流水）
+      operationId: approveApplication
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [APPROVE, REJECT] }
+                comment: { type: string }
+      responses:
+        "200":
+          description: 审批后状态
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id: { type: integer, format: int64 }
+                          status: { type: string, enum: [COLLEGE_PASSED, SCHOOL_PASSED, COLLEGE_REJECTED, SCHOOL_REJECTED] }
+        "403":
+          description: 角色不符当前审批级（40301）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+
+  /applications/{id}/to-project:
+    post:
+      tags: [plan]
+      summary: 转立项（T25；仅 SCHOOL_PASSED，生成 E_PROJECT 草稿；重复调用幂等返回 duplicated=true）
+      operationId: applicationToProject
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 项目 ID（duplicated=true 表示已转）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          projectId: { type: integer, format: int64 }
+                          duplicated: { type: boolean }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -875,6 +1154,13 @@ components:
       schema: { type: integer, format: int64 }
 
   responses:
+    RuleRejected:
+      description: 规则引擎判定拒绝（状态机不允许 / 越权 / 引用被占用），回传 code 与说明
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ApiResponse'
     BadRequest:
       description: 参数校验失败（业务码 40001）
       content:
@@ -1329,3 +1615,28 @@ components:
         role:       { type: string, description: "签署方角色：PI/MANAGER/LEADER 等" }
         signed_at:  { type: string, format: date-time }
         sig_result: { type: string }
+    ApplyPlan:
+      type: object
+      description: 申报计划（T25）
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        categoryId: { type: integer, format: int64, nullable: true }
+        source: { type: string, nullable: true }
+        startAt: { type: string, format: date }
+        endAt: { type: string, format: date }
+        needReview: { type: boolean }
+        status: { type: string, enum: [DRAFT, OPEN, STOPPED] }
+
+    ApplicationReview:
+      type: object
+      description: 申报单形式审查视图（T25）
+      properties:
+        id: { type: integer, format: int64 }
+        projectName: { type: string }
+        applyAmount: { type: string }
+        applicantId: { type: integer, format: int64 }
+        status: { type: string, enum: [SUBMITTED, COLLEGE_PASSED, COLLEGE_REJECTED, SCHOOL_PASSED, SCHOOL_REJECTED] }
+        piProjectCount: { type: integer, description: 申请人主持+参与在研项目数 }
+        piBudgetTotal: { type: string, description: 申请人主持项目经费合计 }
+        projectId: { type: integer, format: int64, nullable: true }
