@@ -26,7 +26,7 @@
 | **T13-T25 全量回归** | ✅ 31+ 包 `-p 1` 全绿（ARK_TEST_DATABASE_URL 测试库，migration 已至 version 12） |
 
 **遗留事项**（后续可另开任务）：
-- 契约同步：T13-T25 新端点尚未写入 design/*.openapi.yaml。
+- ~~契约同步：T13-T25 新端点尚未写入 design/*.openapi.yaml~~ ✅ 已完成（f7ee0a6）：7 份契约补齐 40+ 端点，pyyaml 语法 + $ref 校验 ALL PASS。
 - T25 CreateApplication 的 sqlc 坑：`COALESCE($4,0)` 会推断成 `Column4 interface{}`，须全命名参数 `sqlc.arg('apply_amount')::numeric`。
 
 **冒烟踩坑沉淀**（冒烟/联调必读）：
