@@ -131,6 +131,37 @@ p, R-LEADER,  /api/v1/output/*,                  GET
 p, R-FINANCE, /api/v1/output,                    GET
 p, R-FINANCE, /api/v1/output/*,                  GET
 
+# ---- 专家评审域（N）：主管读写专家库+建/抽/邀/开/结论/评审费，专家评审应允/打分，领导审批结论，审计全局只读沿用通用规则 ----
+# 铁律：keyMatch2 `*` 需前缀斜杠才命中，故裸 /api/v1/experts、/api/v1/reviews（列表/新建）单独成条。
+# 计划校正：补列表 GET（GET /experts、GET /reviews）+ R-EXPERT 读评审(含 /detail)，使端点真实可达。
+# R-MANAGER：专家库读写 + 评审建单/抽取/邀请/开始/结论/评审费/取消
+p, R-MANAGER, /api/v1/experts,                    GET
+p, R-MANAGER, /api/v1/experts,                    POST
+p, R-MANAGER, /api/v1/experts/*,                  GET
+p, R-MANAGER, /api/v1/experts/*,                  PUT
+p, R-MANAGER, /api/v1/experts/*,                  DELETE
+p, R-MANAGER, /api/v1/experts/*/status,           POST
+p, R-MANAGER, /api/v1/reviews,                    GET
+p, R-MANAGER, /api/v1/reviews,                    POST
+p, R-MANAGER, /api/v1/reviews/*,                  GET
+p, R-MANAGER, /api/v1/reviews/*,                  DELETE
+p, R-MANAGER, /api/v1/reviews/*/draw,             POST
+p, R-MANAGER, /api/v1/reviews/*/invite,           POST
+p, R-MANAGER, /api/v1/reviews/*/start,            POST
+p, R-MANAGER, /api/v1/reviews/*/conclude,         POST
+p, R-MANAGER, /api/v1/reviews/*/fees,             POST
+# R-LEADER：读评审 + 审批结论
+p, R-LEADER,  /api/v1/reviews,                    GET
+p, R-LEADER,  /api/v1/reviews/*,                  GET
+p, R-LEADER,  /api/v1/reviews/*/conclude,         POST
+# R-EXPERT：读自己的评审 + 应允/打分（无抽取/结论/建库权限）
+p, R-EXPERT,  /api/v1/reviews,                    GET
+p, R-EXPERT,  /api/v1/reviews/*,                  GET
+p, R-EXPERT,  /api/v1/reviews/*/accept,           POST
+p, R-EXPERT,  /api/v1/reviews/*/decline,          POST
+p, R-EXPERT,  /api/v1/reviews/*/scores,           POST
+# R-AUDITOR：全局只读已由通用 /api/v1/* GET 覆盖，此处不重复。
+
 # ---- 每个已认证角色都能读自身身份/能力（前端登录后引导依赖）----
 p, R-STAFF,   /api/v1/auth/me, GET
 p, R-MANAGER, /api/v1/auth/me, GET
