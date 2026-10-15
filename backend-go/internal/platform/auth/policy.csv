@@ -162,6 +162,34 @@ p, R-EXPERT,  /api/v1/reviews/*/decline,          POST
 p, R-EXPERT,  /api/v1/reviews/*/scores,           POST
 # R-AUDITOR：全局只读已由通用 /api/v1/* GET 覆盖，此处不重复。
 
+# ---- 科研档案域（O）：主管文档上传/案卷读写+提交+四性检测+借阅申请，R-ADMIN 独家入库/销毁/删档/借阅审批，审计只读沿用通用规则 ----
+# 铁律同 N：keyMatch2 `*` 需前缀斜杠才命中，裸 /api/v1/documents、/api/v1/archives、/api/v1/borrows（列表/新建）单独成条。
+# 角色不新增（复用 R-MANAGER/R-ADMIN/R-AUDITOR），入库/销毁/删除/审批仅 R-ADMIN。
+# R-MANAGER：文档上传/读/检索、案卷读+建+改+提交+检测+门类+摄取、借阅申请。
+p, R-MANAGER, /api/v1/documents,                    POST
+p, R-MANAGER, /api/v1/documents/*,                  GET
+p, R-MANAGER, /api/v1/documents/search,             GET
+p, R-MANAGER, /api/v1/archives/*,                   GET
+p, R-MANAGER, /api/v1/archives,                     POST
+p, R-MANAGER, /api/v1/archives/*,                   PUT
+p, R-MANAGER, /api/v1/archives/*/submit,            POST
+p, R-MANAGER, /api/v1/archives/*/check,             POST
+p, R-MANAGER, /api/v1/archives/*/items,             POST
+p, R-MANAGER, /api/v1/archives/*/ingest,            POST
+p, R-MANAGER, /api/v1/borrows,                      POST
+# R-ADMIN：入库/销毁/检测、文档与案卷删除、借阅审批/拒绝/读。
+p, R-ADMIN,   /api/v1/archives/*/file,              POST
+p, R-ADMIN,   /api/v1/archives/*/destroy,           POST
+p, R-ADMIN,   /api/v1/archives/*/check,             POST
+p, R-ADMIN,   /api/v1/documents/*,                  DELETE
+p, R-ADMIN,   /api/v1/archives/*,                   DELETE
+p, R-ADMIN,   /api/v1/borrows/*/approve,            POST
+p, R-ADMIN,   /api/v1/borrows/*/reject,             POST
+p, R-ADMIN,   /api/v1/borrows/*,                    GET
+# R-AUDITOR：案卷/检索只读（全局只读已由通用 /api/v1/* GET 覆盖，此处显式补 O 具体路径便于 caps 展示）。
+p, R-AUDITOR, /api/v1/archives/*,                   GET
+p, R-AUDITOR, /api/v1/documents/search,             GET
+
 # ---- 每个已认证角色都能读自身身份/能力（前端登录后引导依赖）----
 p, R-STAFF,   /api/v1/auth/me, GET
 p, R-MANAGER, /api/v1/auth/me, GET
