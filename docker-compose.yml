@@ -38,8 +38,11 @@ services:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/healthz"]
       interval: 15s
       timeout: 3s
-      start_period: 20s
-      retries: 5
+      # 后端启动先跑 golang-migrate（空库冷启动建表约 1~2 分钟），期间未 listen。
+      # start_period 必须覆盖这段迁移窗口，否则失败计入 retries → 误判 unhealthy，
+      # 依赖 backend(service_healthy) 的 frontend 会 "dependency failed to start"。
+      start_period: 180s
+      retries: 10
     restart: unless-stopped
 
   frontend:
