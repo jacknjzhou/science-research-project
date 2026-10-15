@@ -242,3 +242,48 @@ sql:
             go_type: "time.Time"
           - column: "r_claim_record.action_at"
             go_type: "time.Time"
+  - engine: "postgresql"
+    # 第六生成块：N 仓储（专家与评审）。独立 schema/queries/out；package=nstore。
+    # 铁律（Phase 1 血泪教训）：DDL 里 CREATE TABLE n_expert 未加引号，sqlc 解析折成小写，
+    # 故 rename/overrides 的 key 必须小写（n_expert/n_review_task...）；大写 key 静默 no-op。
+    schema: "db/schema/n_schema.sql"
+    queries: "db/query_n"
+    gen:
+      go:
+        package: "nstore"
+        out: "internal/modules/expertreview/store"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_pointers_for_null_types: true
+        rename:
+          n_expert: Expert
+          n_expert_group: ExpertGroup
+          n_review_task: ReviewTask
+          n_review_invitation: Invitation
+          n_review_score: Score
+          n_review_fee: ReviewFee
+          "@limit_": Limit
+          "@offset_": Offset
+        overrides:
+          - column: "n_expert.created_at"
+            go_type: "time.Time"
+          - column: "n_expert.updated_at"
+            go_type: "time.Time"
+          - column: "n_expert.last_review_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "n_review_task.created_at"
+            go_type: "time.Time"
+          - column: "n_review_task.updated_at"
+            go_type: "time.Time"
+          - column: "n_review_task.drawn_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "n_review_task.started_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "n_review_task.concluded_at"
+            go_type: { type: "time.Time", pointer: true }
+          # DDL 校正：字符串形式 `go_type: "pgtype.Numeric"` 会让 sqlc v1.27.0 生成非法
+          # `import "pgtype"`（package not in std）。改用与 E 块同款结构化形式（type + 依赖 sql_package 的 pgtype）。
+          - column: "n_review_score.total_score"
+            go_type: { type: "pgtype.Numeric" }
+          - column: "n_review_fee.amount"
+            go_type: { type: "pgtype.Numeric" }
