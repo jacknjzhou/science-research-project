@@ -24,6 +24,11 @@ services:
       ARK_S3_ACCESS_KEY: minioadmin
       ARK_S3_SECRET_KEY: minioadmin
       ARK_S3_BUCKET: ark-docs
+      # LLM（NewAPI OpenAI 兼容）：未配置时 AI 审核端点自动降级 REVIEW（不阻塞业务）
+      ARK_LLM_BASE_URL: ${ARK_LLM_BASE_URL:-http://10.26.8.43:3002}
+      ARK_LLM_API_KEY: ${ARK_LLM_API_KEY:-}
+      ARK_LLM_MODEL: ${ARK_LLM_MODEL:-gpt-4o-mini}
+      ARK_LLM_TIMEOUT_SEC: ${ARK_LLM_TIMEOUT_SEC:-30}
       # DESIGN_DIR / ARK_MIGRATIONS_DIR / ARK_AUTH_* 已在镜像 ENV 内烘好，此处可覆盖
     ports:
       - "8787:8787"                  # 便于宿主机直调 API；仅经 nginx 访问前端时可删
@@ -62,6 +67,8 @@ services:
   postgres:
     image: postgres:15-alpine
     container_name: ark-postgres
+    # 全量并行跑测试时连接数吃紧（多包并发池），开发环境放宽到 300
+    command: ["postgres", "-c", "max_connections=300"]
     environment:
       POSTGRES_USER: ark
       POSTGRES_PASSWORD: ark

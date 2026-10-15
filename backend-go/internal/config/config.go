@@ -22,6 +22,10 @@ type Config struct {
 	S3SecretKey    string
 	S3Bucket       string
 	S3UseSSL       bool
+	LLMBaseURL     string
+	LLMAPIKey      string
+	LLMModel       string
+	LLMTimeoutSec  int
 }
 
 func get(key, def string) string {
@@ -58,5 +62,9 @@ func Load() *Config {
 		S3SecretKey:    get("ARK_S3_SECRET_KEY", "minioadmin"),
 		S3Bucket:       get("ARK_S3_BUCKET", "ark-docs"),
 		S3UseSSL:       get("ARK_S3_USE_SSL", "false") == "true",
+		LLMBaseURL:     os.Getenv("ARK_LLM_BASE_URL"),
+		LLMAPIKey:      os.Getenv("ARK_LLM_API_KEY"),
+		LLMModel:       get("ARK_LLM_MODEL", "gpt-4o-mini"),
+		LLMTimeoutSec:  getInt("ARK_LLM_TIMEOUT_SEC", 30),
 	}
 }
