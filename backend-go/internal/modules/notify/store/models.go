@@ -6,7 +6,21 @@ package nfstore
 
 import (
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+type SysImportLog struct {
+	ID           int64              `json:"id"`
+	TenantID     int64              `json:"tenant_id"`
+	Module       string             `json:"module"`
+	RowCount     int32              `json:"row_count"`
+	SuccessCount int32              `json:"success_count"`
+	FailCount    int32              `json:"fail_count"`
+	OperatorID   int64              `json:"operator_id"`
+	Snapshot     []byte             `json:"snapshot"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
 
 type SysNotification struct {
 	ID        int64      `json:"id"`

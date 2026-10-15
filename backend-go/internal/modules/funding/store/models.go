@@ -57,6 +57,7 @@ type FBudget struct {
 	Mode          string         `json:"mode"`
 	TotalApproved pgtype.Numeric `json:"total_approved"`
 	TotalAdjusted pgtype.Numeric `json:"total_adjusted"`
+	PendingDelta  pgtype.Numeric `json:"pending_delta"`
 	Version       int32          `json:"version"`
 	ApprovedAt    *time.Time     `json:"approved_at"`
 	ApprovedBy    *int64         `json:"approved_by"`
@@ -79,10 +80,28 @@ type FBudgetLine struct {
 	PolicyPackID   *int64         `json:"policy_pack_id"`
 	AmountPlanned  pgtype.Numeric `json:"amount_planned"`
 	AmountAdjusted pgtype.Numeric `json:"amount_adjusted"`
+	PendingDelta   pgtype.Numeric `json:"pending_delta"`
 	AmountFrozen   pgtype.Numeric `json:"amount_frozen"`
 	AmountUsed     pgtype.Numeric `json:"amount_used"`
 	AmountReleased pgtype.Numeric `json:"amount_released"`
 	Remaining      pgtype.Numeric `json:"remaining"`
+}
+
+type FCarryover struct {
+	ID         int64              `json:"id"`
+	Code       *string            `json:"code"`
+	TenantID   int64              `json:"tenant_id"`
+	Status     string             `json:"status"`
+	Deleted    int16              `json:"deleted"`
+	CreatorID  int64              `json:"creator_id"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+	Remark     *string            `json:"remark"`
+	ProjectID  int64              `json:"project_id"`
+	FiscalYear int32              `json:"fiscal_year"`
+	TargetYear int32              `json:"target_year"`
+	Amount     pgtype.Numeric     `json:"amount"`
+	IncomeID   *int64             `json:"income_id"`
 }
 
 type FExpense struct {
@@ -193,6 +212,28 @@ type FIndirectFee struct {
 	PolicyPackID      *int64         `json:"policy_pack_id"`
 }
 
+type FOutward struct {
+	ID              int64              `json:"id"`
+	Code            *string            `json:"code"`
+	TenantID        int64              `json:"tenant_id"`
+	Status          string             `json:"status"`
+	Deleted         int16              `json:"deleted"`
+	CreatorID       int64              `json:"creator_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	Remark          *string            `json:"remark"`
+	ProjectID       int64              `json:"project_id"`
+	BudgetID        *int64             `json:"budget_id"`
+	BudgetLineID    *int64             `json:"budget_line_id"`
+	Amount          pgtype.Numeric     `json:"amount"`
+	ToUnit          string             `json:"to_unit"`
+	Reason          *string            `json:"reason"`
+	FirstApprovedBy *int64             `json:"first_approved_by"`
+	FirstApprovedAt pgtype.Timestamptz `json:"first_approved_at"`
+	ApprovedBy      *int64             `json:"approved_by"`
+	ApprovedAt      pgtype.Timestamptz `json:"approved_at"`
+}
+
 type FSubject struct {
 	ID            int64          `json:"id"`
 	Code          *string        `json:"code"`
@@ -214,4 +255,24 @@ type FSubject struct {
 	SortNo        int32          `json:"sort_no"`
 	EffectiveFrom *time.Time     `json:"effective_from"`
 	EffectiveTo   *time.Time     `json:"effective_to"`
+}
+
+type FWarnConfig struct {
+	ID                int64              `json:"id"`
+	TenantID          int64              `json:"tenant_id"`
+	Status            string             `json:"status"`
+	Deleted           int16              `json:"deleted"`
+	CreatorID         int64              `json:"creator_id"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	Remark            *string            `json:"remark"`
+	ProjectCategoryID *int64             `json:"project_category_id"`
+	WarnKind          string             `json:"warn_kind"`
+	ThresholdPct      pgtype.Numeric     `json:"threshold_pct"`
+	AheadDays         *int32             `json:"ahead_days"`
+	Level             string             `json:"level"`
+	Channel           string             `json:"channel"`
+	CronExpr          *string            `json:"cron_expr"`
+	Template          *string            `json:"template"`
+	Enabled           bool               `json:"enabled"`
 }

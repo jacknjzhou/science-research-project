@@ -79,6 +79,9 @@ type Output struct {
 	TitleHash           *string        `json:"title_hash"`
 	MasterOutputID      *int64         `json:"master_output_id"`
 	DepartmentID        *int64         `json:"department_id"`
+	Stage               string         `json:"stage"`
+	AnnualFeeDue        pgtype.Date    `json:"annual_fee_due"`
+	AgencyID            *int64         `json:"agency_id"`
 	LegalEntityID       int64          `json:"legal_entity_id"`
 	SecurityLevel       string         `json:"security_level"`
 	PolicyPackID        *int64         `json:"policy_pack_id"`
@@ -99,6 +102,15 @@ type OutputProject struct {
 	ProjectID       int64              `json:"project_id"`
 	RelationType    string             `json:"relation_type"`
 	ContributionPct pgtype.Numeric     `json:"contribution_pct"`
+}
+
+type RAgency struct {
+	ID        int64              `json:"id"`
+	TenantID  int64              `json:"tenant_id"`
+	Name      string             `json:"name"`
+	Contact   *string            `json:"contact"`
+	Deleted   int16              `json:"deleted"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type RAwardExt struct {
@@ -162,6 +174,37 @@ type RDataset struct {
 	CitationCount int32              `json:"citation_count"`
 }
 
+type RJournalLevel struct {
+	ID        int64              `json:"id"`
+	TenantID  int64              `json:"tenant_id"`
+	Code      string             `json:"code"`
+	Name      string             `json:"name"`
+	PaperType *string            `json:"paper_type"`
+	Indexed   bool               `json:"indexed"`
+	Deleted   int16              `json:"deleted"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type RJournalLevelSource struct {
+	ID       int64  `json:"id"`
+	TenantID int64  `json:"tenant_id"`
+	LevelID  int64  `json:"level_id"`
+	SourceID int64  `json:"source_id"`
+	YearFrom *int32 `json:"year_from"`
+	YearTo   *int32 `json:"year_to"`
+}
+
+type RJournalSource struct {
+	ID        int64              `json:"id"`
+	TenantID  int64              `json:"tenant_id"`
+	Name      string             `json:"name"`
+	Issn      *string            `json:"issn"`
+	YearFrom  *int32             `json:"year_from"`
+	YearTo    *int32             `json:"year_to"`
+	Deleted   int16              `json:"deleted"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type RPaperExt struct {
 	ID            int64              `json:"id"`
 	Code          *string            `json:"code"`
@@ -176,6 +219,7 @@ type RPaperExt struct {
 	OutputID      int64              `json:"output_id"`
 	JournalName   *string            `json:"journal_name"`
 	JournalIssn   *string            `json:"journal_issn"`
+	LevelCode     *string            `json:"level_code"`
 	Volume        *string            `json:"volume"`
 	Issue         *string            `json:"issue"`
 	PageRange     *string            `json:"page_range"`
@@ -191,6 +235,18 @@ type RPaperExt struct {
 	WosRecordID   *string            `json:"wos_record_id"`
 	ScopusID      *string            `json:"scopus_id"`
 	CnkiID        *string            `json:"cnki_id"`
+}
+
+type RPaperReprint struct {
+	ID          int64              `json:"id"`
+	TenantID    int64              `json:"tenant_id"`
+	OutputID    int64              `json:"output_id"`
+	Name        string             `json:"name"`
+	Type        *string            `json:"type"`
+	ReprintDate pgtype.Date        `json:"reprint_date"`
+	Remark      *string            `json:"remark"`
+	Deleted     int16              `json:"deleted"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type RPatentExt struct {
@@ -220,6 +276,33 @@ type RPatentExt struct {
 	MaintainYears   *int32             `json:"maintain_years"`
 	LicenseStatus   *string            `json:"license_status"`
 	IsTransferable  bool               `json:"is_transferable"`
+}
+
+type RPatentFee struct {
+	ID        int64              `json:"id"`
+	TenantID  int64              `json:"tenant_id"`
+	PatentID  int64              `json:"patent_id"`
+	Year      int32              `json:"year"`
+	Amount    pgtype.Numeric     `json:"amount"`
+	PaidAt    pgtype.Date        `json:"paid_at"`
+	Status    string             `json:"status"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type RPushItem struct {
+	ID       int64              `json:"id"`
+	TenantID int64              `json:"tenant_id"`
+	Type     string             `json:"type"`
+	SourceDb string             `json:"source_db"`
+	Title    string             `json:"title"`
+	Authors  []byte             `json:"authors"`
+	Year     *int32             `json:"year"`
+	RawDoi   *string            `json:"raw_doi"`
+	Status   string             `json:"status"`
+	PushedAt pgtype.Timestamptz `json:"pushed_at"`
+	DedupKey string             `json:"dedup_key"`
+	OutputID *int64             `json:"output_id"`
+	Deleted  int16              `json:"deleted"`
 }
 
 type RSoftwareExt struct {

@@ -108,7 +108,7 @@ VALUES
    $14::text, $15::bigint,
    $16::bigint,
    COALESCE($17::text,'INTERNAL'), $18::text)
-RETURNING id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, output_type, title, title_en, abstract, publish_date, authors, external_author_names, affiliations, project_ids, language, source, is_claimed, claim_status, match_confidence, simhash, title_hash, master_output_id, department_id, legal_entity_id, security_level, policy_pack_id
+RETURNING id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, output_type, title, title_en, abstract, publish_date, authors, external_author_names, affiliations, project_ids, language, source, is_claimed, claim_status, match_confidence, simhash, title_hash, master_output_id, department_id, stage, annual_fee_due, agency_id, legal_entity_id, security_level, policy_pack_id
 `
 
 type CreateOutputParams struct {
@@ -187,6 +187,9 @@ func (q *Queries) CreateOutput(ctx context.Context, arg CreateOutputParams) (Out
 		&i.TitleHash,
 		&i.MasterOutputID,
 		&i.DepartmentID,
+		&i.Stage,
+		&i.AnnualFeeDue,
+		&i.AgencyID,
 		&i.LegalEntityID,
 		&i.SecurityLevel,
 		&i.PolicyPackID,
@@ -195,7 +198,7 @@ func (q *Queries) CreateOutput(ctx context.Context, arg CreateOutputParams) (Out
 }
 
 const getOutput = `-- name: GetOutput :one
-SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, output_type, title, title_en, abstract, publish_date, authors, external_author_names, affiliations, project_ids, language, source, is_claimed, claim_status, match_confidence, simhash, title_hash, master_output_id, department_id, legal_entity_id, security_level, policy_pack_id FROM R_OUTPUT WHERE id = $1 AND deleted = 0
+SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, output_type, title, title_en, abstract, publish_date, authors, external_author_names, affiliations, project_ids, language, source, is_claimed, claim_status, match_confidence, simhash, title_hash, master_output_id, department_id, stage, annual_fee_due, agency_id, legal_entity_id, security_level, policy_pack_id FROM R_OUTPUT WHERE id = $1 AND deleted = 0
 `
 
 func (q *Queries) GetOutput(ctx context.Context, id int64) (Output, error) {
@@ -230,6 +233,9 @@ func (q *Queries) GetOutput(ctx context.Context, id int64) (Output, error) {
 		&i.TitleHash,
 		&i.MasterOutputID,
 		&i.DepartmentID,
+		&i.Stage,
+		&i.AnnualFeeDue,
+		&i.AgencyID,
 		&i.LegalEntityID,
 		&i.SecurityLevel,
 		&i.PolicyPackID,
@@ -238,7 +244,7 @@ func (q *Queries) GetOutput(ctx context.Context, id int64) (Output, error) {
 }
 
 const listMyOutputs = `-- name: ListMyOutputs :many
-SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, output_type, title, title_en, abstract, publish_date, authors, external_author_names, affiliations, project_ids, language, source, is_claimed, claim_status, match_confidence, simhash, title_hash, master_output_id, department_id, legal_entity_id, security_level, policy_pack_id FROM R_OUTPUT
+SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, output_type, title, title_en, abstract, publish_date, authors, external_author_names, affiliations, project_ids, language, source, is_claimed, claim_status, match_confidence, simhash, title_hash, master_output_id, department_id, stage, annual_fee_due, agency_id, legal_entity_id, security_level, policy_pack_id FROM R_OUTPUT
 WHERE deleted = 0
   AND authors @> jsonb_build_array(jsonb_build_object('user_id', $1::bigint))
   AND ($2::text IS NULL OR output_type = $2::text)
@@ -300,6 +306,9 @@ func (q *Queries) ListMyOutputs(ctx context.Context, arg ListMyOutputsParams) ([
 			&i.TitleHash,
 			&i.MasterOutputID,
 			&i.DepartmentID,
+			&i.Stage,
+			&i.AnnualFeeDue,
+			&i.AgencyID,
 			&i.LegalEntityID,
 			&i.SecurityLevel,
 			&i.PolicyPackID,
@@ -316,7 +325,7 @@ func (q *Queries) ListMyOutputs(ctx context.Context, arg ListMyOutputsParams) ([
 
 const listOutputs = `-- name: ListOutputs :many
 
-SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, output_type, title, title_en, abstract, publish_date, authors, external_author_names, affiliations, project_ids, language, source, is_claimed, claim_status, match_confidence, simhash, title_hash, master_output_id, department_id, legal_entity_id, security_level, policy_pack_id FROM R_OUTPUT
+SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, output_type, title, title_en, abstract, publish_date, authors, external_author_names, affiliations, project_ids, language, source, is_claimed, claim_status, match_confidence, simhash, title_hash, master_output_id, department_id, stage, annual_fee_due, agency_id, legal_entity_id, security_level, policy_pack_id FROM R_OUTPUT
 WHERE deleted = 0
   AND ($1::text IS NULL OR output_type = $1::text)
   AND ($2::text IS NULL OR status = $2::text)
@@ -397,6 +406,9 @@ func (q *Queries) ListOutputs(ctx context.Context, arg ListOutputsParams) ([]Out
 			&i.TitleHash,
 			&i.MasterOutputID,
 			&i.DepartmentID,
+			&i.Stage,
+			&i.AnnualFeeDue,
+			&i.AgencyID,
 			&i.LegalEntityID,
 			&i.SecurityLevel,
 			&i.PolicyPackID,

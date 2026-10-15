@@ -84,6 +84,26 @@ func (q *Queries) CountIncomes(ctx context.Context, arg CountIncomesParams) (int
 	return count, err
 }
 
+const countIncomesClaimedByFlowNos = `-- name: CountIncomesClaimedByFlowNos :one
+
+SELECT count(*) FROM F_INCOME
+WHERE tenant_id = $1 AND bank_flow_no = ANY($2::text[])
+  AND claim_status <> 'UNCLAIMED' AND deleted = 0
+`
+
+type CountIncomesClaimedByFlowNosParams struct {
+	TenantID int64    `json:"tenant_id"`
+	FlowNos  []string `json:"flow_nos"`
+}
+
+// T13 导入撤销：批次内仍 UNCLAIMED 的行删除；已认领行计数>0 则整体拒绝（handler 判断）。
+func (q *Queries) CountIncomesClaimedByFlowNos(ctx context.Context, arg CountIncomesClaimedByFlowNosParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countIncomesClaimedByFlowNos, arg.TenantID, arg.FlowNos)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createIncome = `-- name: CreateIncome :one
 
 INSERT INTO F_INCOME (tenant_id, status, creator_id, legal_entity_id, receipt_no, receipt_date, amount, payer_name, payer_bank, purpose_text, bank_flow_no, claim_status)
@@ -146,6 +166,25 @@ func (q *Queries) CreateIncome(ctx context.Context, arg CreateIncomeParams) (FIn
 		&i.VoucherUrl,
 	)
 	return i, err
+}
+
+const deleteImportedIncomes = `-- name: DeleteImportedIncomes :execrows
+DELETE FROM F_INCOME
+WHERE tenant_id = $1 AND bank_flow_no = ANY($2::text[])
+  AND claim_status = 'UNCLAIMED' AND deleted = 0
+`
+
+type DeleteImportedIncomesParams struct {
+	TenantID int64    `json:"tenant_id"`
+	FlowNos  []string `json:"flow_nos"`
+}
+
+func (q *Queries) DeleteImportedIncomes(ctx context.Context, arg DeleteImportedIncomesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteImportedIncomes, arg.TenantID, arg.FlowNos)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getIncome = `-- name: GetIncome :one

@@ -131,6 +131,41 @@ p, R-LEADER,  /api/v1/output/*,                  GET
 p, R-FINANCE, /api/v1/output,                    GET
 p, R-FINANCE, /api/v1/output/*,                  GET
 
+# ---- P5 成果治理（T16/T17/T18）：期刊源库/级别/转载、网推推送池、专利生命周期 ----
+# 铁律：keyMatch2 需尾斜杠命中，裸路径（列表/新建）单独成条。
+# R-MANAGER：治理全权（期刊源/级别维护+挂接、推送池导入/忽略、专利阶段/年费、代理机构、转载登记）
+p, R-MANAGER, /api/v1/journal-sources,           GET
+p, R-MANAGER, /api/v1/journal-sources,           POST
+p, R-MANAGER, /api/v1/journal-levels,            GET
+p, R-MANAGER, /api/v1/journal-levels,            POST
+p, R-MANAGER, /api/v1/journal-levels/resolve,    GET
+p, R-MANAGER, /api/v1/journal-levels/*/sources,  POST
+p, R-MANAGER, /api/v1/papers/*/reprints,         GET
+p, R-MANAGER, /api/v1/papers/*/reprints,         POST
+p, R-MANAGER, /api/v1/push-items,                GET
+p, R-MANAGER, /api/v1/push-items/*/import,       POST
+p, R-MANAGER, /api/v1/push-items/*/ignore,       POST
+p, R-MANAGER, /api/v1/patents/*/stage,           POST
+p, R-MANAGER, /api/v1/patents/*/fees,            GET
+p, R-MANAGER, /api/v1/patents/*/fees,            POST
+p, R-MANAGER, /api/v1/agencies,                  GET
+p, R-MANAGER, /api/v1/agencies,                  POST
+# 研究员：读期刊源/级别/解析、推送池列表、自己论文转载读（登记归主管治理）
+p, R-STAFF,   /api/v1/journal-sources,           GET
+p, R-STAFF,   /api/v1/journal-levels,            GET
+p, R-STAFF,   /api/v1/journal-levels/resolve,    GET
+p, R-STAFF,   /api/v1/push-items,                GET
+p, R-STAFF,   /api/v1/papers/*/reprints,         GET
+# 领导/财务：只读
+p, R-LEADER,  /api/v1/journal-sources,           GET
+p, R-LEADER,  /api/v1/journal-levels,            GET
+p, R-LEADER,  /api/v1/journal-levels/resolve,    GET
+p, R-LEADER,  /api/v1/push-items,                GET
+p, R-FINANCE, /api/v1/journal-sources,           GET
+p, R-FINANCE, /api/v1/journal-levels,            GET
+p, R-FINANCE, /api/v1/journal-levels/resolve,    GET
+p, R-FINANCE, /api/v1/push-items,                GET
+
 # ---- 专家评审域（N）：主管读写专家库+建/抽/邀/开/结论/评审费，专家评审应允/打分，领导审批结论，审计全局只读沿用通用规则 ----
 # 铁律：keyMatch2 `*` 需前缀斜杠才命中，故裸 /api/v1/experts、/api/v1/reviews（列表/新建）单独成条。
 # 计划校正：补列表 GET（GET /experts、GET /reviews）+ R-EXPERT 读评审(含 /detail)，使端点真实可达。

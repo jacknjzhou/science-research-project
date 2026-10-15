@@ -160,7 +160,7 @@ func (q *Queries) ListClaimRecordsByOutput(ctx context.Context, outputID int64) 
 
 const listPendingClaim = `-- name: ListPendingClaim :many
 
-SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, output_type, title, title_en, abstract, publish_date, authors, external_author_names, affiliations, project_ids, language, source, is_claimed, claim_status, match_confidence, simhash, title_hash, master_output_id, department_id, legal_entity_id, security_level, policy_pack_id FROM R_OUTPUT
+SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, output_type, title, title_en, abstract, publish_date, authors, external_author_names, affiliations, project_ids, language, source, is_claimed, claim_status, match_confidence, simhash, title_hash, master_output_id, department_id, stage, annual_fee_due, agency_id, legal_entity_id, security_level, policy_pack_id FROM R_OUTPUT
 WHERE deleted = 0
   AND claim_status IN ('UNCLAIMED','PENDING','DOUBTFUL')
   AND authors @> jsonb_build_array(jsonb_build_object('user_id', $1::bigint))
@@ -222,6 +222,9 @@ func (q *Queries) ListPendingClaim(ctx context.Context, arg ListPendingClaimPara
 			&i.TitleHash,
 			&i.MasterOutputID,
 			&i.DepartmentID,
+			&i.Stage,
+			&i.AnnualFeeDue,
+			&i.AgencyID,
 			&i.LegalEntityID,
 			&i.SecurityLevel,
 			&i.PolicyPackID,

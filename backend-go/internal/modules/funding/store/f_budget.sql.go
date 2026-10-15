@@ -15,7 +15,7 @@ const adjustBudget = `-- name: AdjustBudget :one
 UPDATE F_BUDGET
 SET total_adjusted = total_adjusted + $2, version = version + 1, updated_at = now()
 WHERE id = $1 AND status = 'EXECUTING' AND deleted = 0
-RETURNING id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, mode, total_approved, total_adjusted, version, approved_at, approved_by, policy_pack_id
+RETURNING id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, mode, total_approved, total_adjusted, pending_delta, version, approved_at, approved_by, policy_pack_id
 `
 
 type AdjustBudgetParams struct {
@@ -42,6 +42,7 @@ func (q *Queries) AdjustBudget(ctx context.Context, arg AdjustBudgetParams) (FBu
 		&i.Mode,
 		&i.TotalApproved,
 		&i.TotalAdjusted,
+		&i.PendingDelta,
 		&i.Version,
 		&i.ApprovedAt,
 		&i.ApprovedBy,
@@ -65,10 +66,49 @@ func (q *Queries) AdjustLine(ctx context.Context, arg AdjustLineParams) error {
 	return err
 }
 
+const appendBudgetPending = `-- name: AppendBudgetPending :execrows
+UPDATE F_BUDGET
+SET pending_delta = pending_delta + $2, status = 'ADJUSTING', updated_at = now()
+WHERE id = $1 AND deleted = 0 AND status = 'EXECUTING'
+`
+
+type AppendBudgetPendingParams struct {
+	ID           int64          `json:"id"`
+	PendingDelta pgtype.Numeric `json:"pending_delta"`
+}
+
+// T14 预算追加（F-23）：提交追加申请（pending_delta 累计，行级同步累计）
+func (q *Queries) AppendBudgetPending(ctx context.Context, arg AppendBudgetPendingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, appendBudgetPending, arg.ID, arg.PendingDelta)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const appendLinePending = `-- name: AppendLinePending :execrows
+UPDATE F_BUDGET_LINE
+SET pending_delta = pending_delta + $2, updated_at = now()
+WHERE id = $1 AND deleted = 0
+`
+
+type AppendLinePendingParams struct {
+	ID           int64          `json:"id"`
+	PendingDelta pgtype.Numeric `json:"pending_delta"`
+}
+
+func (q *Queries) AppendLinePending(ctx context.Context, arg AppendLinePendingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, appendLinePending, arg.ID, arg.PendingDelta)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const approveBudget = `-- name: ApproveBudget :one
 UPDATE F_BUDGET SET status = 'EXECUTING', approved_at = now(), approved_by = $2, updated_at = now()
 WHERE id = $1 AND status = 'SUBMITTED' AND deleted = 0
-RETURNING id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, mode, total_approved, total_adjusted, version, approved_at, approved_by, policy_pack_id
+RETURNING id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, mode, total_approved, total_adjusted, pending_delta, version, approved_at, approved_by, policy_pack_id
 `
 
 type ApproveBudgetParams struct {
@@ -95,12 +135,64 @@ func (q *Queries) ApproveBudget(ctx context.Context, arg ApproveBudgetParams) (F
 		&i.Mode,
 		&i.TotalApproved,
 		&i.TotalAdjusted,
+		&i.PendingDelta,
 		&i.Version,
 		&i.ApprovedAt,
 		&i.ApprovedBy,
 		&i.PolicyPackID,
 	)
 	return i, err
+}
+
+const approveBudgetAppend = `-- name: ApproveBudgetAppend :one
+UPDATE F_BUDGET
+SET total_approved = total_approved + pending_delta, pending_delta = 0,
+    version = version + 1, status = 'EXECUTING', updated_at = now()
+WHERE id = $1 AND deleted = 0 AND status = 'ADJUSTING'
+RETURNING id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, mode, total_approved, total_adjusted, pending_delta, version, approved_at, approved_by, policy_pack_id
+`
+
+// 追加批复：预算/行 pending_delta 并入正式口径，版本 +1
+func (q *Queries) ApproveBudgetAppend(ctx context.Context, id int64) (FBudget, error) {
+	row := q.db.QueryRow(ctx, approveBudgetAppend, id)
+	var i FBudget
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.TenantID,
+		&i.Status,
+		&i.Deleted,
+		&i.CreatorID,
+		&i.ModifierID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Remark,
+		&i.ProjectID,
+		&i.LegalEntityID,
+		&i.Mode,
+		&i.TotalApproved,
+		&i.TotalAdjusted,
+		&i.PendingDelta,
+		&i.Version,
+		&i.ApprovedAt,
+		&i.ApprovedBy,
+		&i.PolicyPackID,
+	)
+	return i, err
+}
+
+const approveLinesAppend = `-- name: ApproveLinesAppend :execrows
+UPDATE F_BUDGET_LINE
+SET amount_adjusted = amount_adjusted + pending_delta, pending_delta = 0, updated_at = now()
+WHERE budget_id = $1 AND pending_delta <> 0 AND deleted = 0
+`
+
+func (q *Queries) ApproveLinesAppend(ctx context.Context, budgetID int64) (int64, error) {
+	result, err := q.db.Exec(ctx, approveLinesAppend, budgetID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const commitSpend = `-- name: CommitSpend :exec
@@ -143,7 +235,7 @@ const createBudget = `-- name: CreateBudget :one
 
 INSERT INTO F_BUDGET (tenant_id, status, creator_id, project_id, legal_entity_id, mode, total_approved, total_adjusted)
 VALUES ($1, 'DRAFT', $2, $3, $4, $5, $6, 0)
-RETURNING id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, mode, total_approved, total_adjusted, version, approved_at, approved_by, policy_pack_id
+RETURNING id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, mode, total_approved, total_adjusted, pending_delta, version, approved_at, approved_by, policy_pack_id
 `
 
 type CreateBudgetParams struct {
@@ -182,6 +274,7 @@ func (q *Queries) CreateBudget(ctx context.Context, arg CreateBudgetParams) (FBu
 		&i.Mode,
 		&i.TotalApproved,
 		&i.TotalAdjusted,
+		&i.PendingDelta,
 		&i.Version,
 		&i.ApprovedAt,
 		&i.ApprovedBy,
@@ -193,7 +286,7 @@ func (q *Queries) CreateBudget(ctx context.Context, arg CreateBudgetParams) (FBu
 const createBudgetLine = `-- name: CreateBudgetLine :one
 INSERT INTO F_BUDGET_LINE (tenant_id, status, creator_id, budget_id, subject_id, amount_planned)
 VALUES ($1, 'ACTIVE', $2, $3, $4, $5)
-RETURNING id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, budget_id, subject_id, policy_pack_id, amount_planned, amount_adjusted, amount_frozen, amount_used, amount_released, remaining
+RETURNING id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, budget_id, subject_id, policy_pack_id, amount_planned, amount_adjusted, pending_delta, amount_frozen, amount_used, amount_released, remaining
 `
 
 type CreateBudgetLineParams struct {
@@ -230,6 +323,7 @@ func (q *Queries) CreateBudgetLine(ctx context.Context, arg CreateBudgetLinePara
 		&i.PolicyPackID,
 		&i.AmountPlanned,
 		&i.AmountAdjusted,
+		&i.PendingDelta,
 		&i.AmountFrozen,
 		&i.AmountUsed,
 		&i.AmountReleased,
@@ -255,7 +349,7 @@ func (q *Queries) FreezeLine(ctx context.Context, arg FreezeLineParams) error {
 }
 
 const getBudget = `-- name: GetBudget :one
-SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, mode, total_approved, total_adjusted, version, approved_at, approved_by, policy_pack_id FROM F_BUDGET WHERE id = $1 AND deleted = 0
+SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, mode, total_approved, total_adjusted, pending_delta, version, approved_at, approved_by, policy_pack_id FROM F_BUDGET WHERE id = $1 AND deleted = 0
 `
 
 func (q *Queries) GetBudget(ctx context.Context, id int64) (FBudget, error) {
@@ -277,6 +371,7 @@ func (q *Queries) GetBudget(ctx context.Context, id int64) (FBudget, error) {
 		&i.Mode,
 		&i.TotalApproved,
 		&i.TotalAdjusted,
+		&i.PendingDelta,
 		&i.Version,
 		&i.ApprovedAt,
 		&i.ApprovedBy,
@@ -286,7 +381,7 @@ func (q *Queries) GetBudget(ctx context.Context, id int64) (FBudget, error) {
 }
 
 const getLine = `-- name: GetLine :one
-SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, budget_id, subject_id, policy_pack_id, amount_planned, amount_adjusted, amount_frozen, amount_used, amount_released, remaining FROM F_BUDGET_LINE WHERE id = $1 AND deleted = 0
+SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, budget_id, subject_id, policy_pack_id, amount_planned, amount_adjusted, pending_delta, amount_frozen, amount_used, amount_released, remaining FROM F_BUDGET_LINE WHERE id = $1 AND deleted = 0
 `
 
 func (q *Queries) GetLine(ctx context.Context, id int64) (FBudgetLine, error) {
@@ -308,6 +403,7 @@ func (q *Queries) GetLine(ctx context.Context, id int64) (FBudgetLine, error) {
 		&i.PolicyPackID,
 		&i.AmountPlanned,
 		&i.AmountAdjusted,
+		&i.PendingDelta,
 		&i.AmountFrozen,
 		&i.AmountUsed,
 		&i.AmountReleased,
@@ -317,7 +413,7 @@ func (q *Queries) GetLine(ctx context.Context, id int64) (FBudgetLine, error) {
 }
 
 const getLineForUpdate = `-- name: GetLineForUpdate :one
-SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, budget_id, subject_id, policy_pack_id, amount_planned, amount_adjusted, amount_frozen, amount_used, amount_released, remaining FROM F_BUDGET_LINE WHERE id = $1 AND deleted = 0 FOR UPDATE
+SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, budget_id, subject_id, policy_pack_id, amount_planned, amount_adjusted, pending_delta, amount_frozen, amount_used, amount_released, remaining FROM F_BUDGET_LINE WHERE id = $1 AND deleted = 0 FOR UPDATE
 `
 
 func (q *Queries) GetLineForUpdate(ctx context.Context, id int64) (FBudgetLine, error) {
@@ -339,6 +435,7 @@ func (q *Queries) GetLineForUpdate(ctx context.Context, id int64) (FBudgetLine, 
 		&i.PolicyPackID,
 		&i.AmountPlanned,
 		&i.AmountAdjusted,
+		&i.PendingDelta,
 		&i.AmountFrozen,
 		&i.AmountUsed,
 		&i.AmountReleased,
@@ -348,7 +445,7 @@ func (q *Queries) GetLineForUpdate(ctx context.Context, id int64) (FBudgetLine, 
 }
 
 const listBudgets = `-- name: ListBudgets :many
-SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, mode, total_approved, total_adjusted, version, approved_at, approved_by, policy_pack_id FROM F_BUDGET
+SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, mode, total_approved, total_adjusted, pending_delta, version, approved_at, approved_by, policy_pack_id FROM F_BUDGET
 WHERE deleted = 0 AND tenant_id = $1::bigint
   AND ($2::bigint IS NULL OR project_id = $2::bigint)
   AND ($3::text IS NULL OR status = $3::text)
@@ -395,6 +492,7 @@ func (q *Queries) ListBudgets(ctx context.Context, arg ListBudgetsParams) ([]FBu
 			&i.Mode,
 			&i.TotalApproved,
 			&i.TotalAdjusted,
+			&i.PendingDelta,
 			&i.Version,
 			&i.ApprovedAt,
 			&i.ApprovedBy,
@@ -411,7 +509,7 @@ func (q *Queries) ListBudgets(ctx context.Context, arg ListBudgetsParams) ([]FBu
 }
 
 const listLinesByBudget = `-- name: ListLinesByBudget :many
-SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, budget_id, subject_id, policy_pack_id, amount_planned, amount_adjusted, amount_frozen, amount_used, amount_released, remaining FROM F_BUDGET_LINE
+SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, budget_id, subject_id, policy_pack_id, amount_planned, amount_adjusted, pending_delta, amount_frozen, amount_used, amount_released, remaining FROM F_BUDGET_LINE
 WHERE budget_id = $1 AND deleted = 0
 ORDER BY id
 `
@@ -441,6 +539,7 @@ func (q *Queries) ListLinesByBudget(ctx context.Context, budgetID int64) ([]FBud
 			&i.PolicyPackID,
 			&i.AmountPlanned,
 			&i.AmountAdjusted,
+			&i.PendingDelta,
 			&i.AmountFrozen,
 			&i.AmountUsed,
 			&i.AmountReleased,
@@ -489,7 +588,7 @@ func (q *Queries) SetBudgetCode(ctx context.Context, arg SetBudgetCodeParams) er
 const submitBudget = `-- name: SubmitBudget :one
 UPDATE F_BUDGET SET status = 'SUBMITTED', updated_at = now()
 WHERE id = $1 AND status = 'DRAFT' AND deleted = 0
-RETURNING id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, mode, total_approved, total_adjusted, version, approved_at, approved_by, policy_pack_id
+RETURNING id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, legal_entity_id, mode, total_approved, total_adjusted, pending_delta, version, approved_at, approved_by, policy_pack_id
 `
 
 func (q *Queries) SubmitBudget(ctx context.Context, id int64) (FBudget, error) {
@@ -511,6 +610,7 @@ func (q *Queries) SubmitBudget(ctx context.Context, id int64) (FBudget, error) {
 		&i.Mode,
 		&i.TotalApproved,
 		&i.TotalAdjusted,
+		&i.PendingDelta,
 		&i.Version,
 		&i.ApprovedAt,
 		&i.ApprovedBy,

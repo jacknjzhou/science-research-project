@@ -6,6 +6,17 @@
 -- authors/affiliations/project_ids 是 jsonb，默认 '[]'，此处显式给出以便 @> 匹配用例可命中。
 -- match_confidence NUMERIC(6,4)：高置信(0.92)与可疑(0.41)各覆盖一条，验证 min_confidence 过滤分支。
 
+-- 幂等前置：清掉本域旧种子与测试遗留（先删引用方，后删被引用的 R_OUTPUT）。
+DELETE FROM R_CLAIM_RECORD        WHERE tenant_id IN (1, 2);
+DELETE FROM R_PAPER_REPRINT       WHERE tenant_id IN (1, 2);
+DELETE FROM R_PUSH_ITEM           WHERE tenant_id IN (1, 2);
+DELETE FROM R_PATENT_FEE          WHERE tenant_id IN (1, 2);
+DELETE FROM R_AGENCY              WHERE tenant_id IN (1, 2);
+DELETE FROM R_JOURNAL_LEVEL_SOURCE WHERE tenant_id IN (1, 2);
+DELETE FROM R_JOURNAL_LEVEL       WHERE tenant_id IN (1, 2);
+DELETE FROM R_JOURNAL_SOURCE      WHERE tenant_id IN (1, 2);
+DELETE FROM R_OUTPUT              WHERE tenant_id IN (1, 2);
+
 INSERT INTO R_OUTPUT
   (code, tenant_id, status, creator_id, output_type, title, title_en,
    publish_date, authors, external_author_names, affiliations, project_ids,

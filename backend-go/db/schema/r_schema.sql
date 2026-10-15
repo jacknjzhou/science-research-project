@@ -37,6 +37,9 @@ CREATE TABLE R_OUTPUT (
   title_hash           VARCHAR(64),                                  -- 规范化标题哈希（去重主键候选）
   master_output_id     BIGINT,                                       -- 合并仲裁：指向保留的主记录（NULL=本身为主）
   department_id        BIGINT,                                       -- 第一完成人所属部门（sys_org.id 逻辑引用）
+  stage                VARCHAR(16) NOT NULL DEFAULT 'PRE_APPLY',     -- T18 专利阶段（仅 PATENT 有效）
+  annual_fee_due       DATE,                                         -- T18 年费到期日
+  agency_id            BIGINT,                                       -- T18 代理机构 R_AGENCY(id)
   -- 治理三字段（§2.1 v1.1；成果涉密/法人隔离，见 detail §7）
   legal_entity_id      BIGINT       NOT NULL,
   security_level       VARCHAR(16)  NOT NULL DEFAULT 'INTERNAL'
@@ -57,6 +60,7 @@ CREATE TABLE R_PAPER_EXT (
   output_id            BIGINT       NOT NULL UNIQUE REFERENCES R_OUTPUT(id),
   journal_name         VARCHAR(256),
   journal_issn         VARCHAR(32),
+  level_code           VARCHAR(32),  -- 刊物级别冗余快照（T16 resolve）
   volume               VARCHAR(32),
   issue                VARCHAR(32),
   page_range           VARCHAR(64),
@@ -250,4 +254,82 @@ CREATE TABLE R_OUTPUT_PROJECT (
   relation_type        VARCHAR(32)  NOT NULL DEFAULT 'CONTRIBUTION'
                        CHECK (relation_type IN ('PRIMARY','CONTRIBUTION','CITED')),
   contribution_pct     NUMERIC(6,4)                             -- 成果对该项目的贡献占比
+);
+
+-- T16 期刊源库 / 刊物级别 / 转载（P5）
+CREATE TABLE R_JOURNAL_SOURCE (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    name VARCHAR(256) NOT NULL,
+    issn VARCHAR(32),
+    year_from INT,
+    year_to INT,
+    deleted SMALLINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE R_JOURNAL_LEVEL (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    code VARCHAR(32) NOT NULL,
+    name VARCHAR(128) NOT NULL,
+    paper_type VARCHAR(32),
+    indexed BOOLEAN NOT NULL DEFAULT TRUE,
+    deleted SMALLINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE R_JOURNAL_LEVEL_SOURCE (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    level_id BIGINT NOT NULL REFERENCES R_JOURNAL_LEVEL(id),
+    source_id BIGINT NOT NULL REFERENCES R_JOURNAL_SOURCE(id),
+    year_from INT,
+    year_to INT
+);
+CREATE TABLE R_PAPER_REPRINT (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    output_id BIGINT NOT NULL REFERENCES R_OUTPUT(id),
+    name VARCHAR(256) NOT NULL,
+    type VARCHAR(32),
+    reprint_date DATE,
+    remark TEXT,
+    deleted SMALLINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- T17 网推成果推送池
+CREATE TABLE R_PUSH_ITEM (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    type VARCHAR(16) NOT NULL,
+    source_db VARCHAR(32) NOT NULL,
+    title VARCHAR(512) NOT NULL,
+    authors JSONB NOT NULL DEFAULT '[]'::jsonb,
+    year INT,
+    raw_doi VARCHAR(128),
+    status VARCHAR(16) NOT NULL DEFAULT 'PUSHED',
+    pushed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    dedup_key VARCHAR(64) NOT NULL,
+    output_id BIGINT,
+    deleted SMALLINT NOT NULL DEFAULT 0
+);
+
+-- T18 专利扩展（挂在 R_OUTPUT 上）
+CREATE TABLE R_PATENT_FEE (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    patent_id BIGINT NOT NULL REFERENCES R_OUTPUT(id),
+    year INT NOT NULL,
+    amount NUMERIC(18,2) NOT NULL DEFAULT 0,
+    paid_at DATE,
+    status VARCHAR(16) NOT NULL DEFAULT 'UNPAID',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE R_AGENCY (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    name VARCHAR(256) NOT NULL,
+    contact VARCHAR(256),
+    deleted SMALLINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
