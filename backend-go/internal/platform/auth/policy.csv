@@ -264,3 +264,29 @@ p, R-FINANCE, /api/v1/funding/*,                    GET
 p, R-FINANCE, /api/v1/indirect-fees,                GET
 p, R-FINANCE, /api/v1/indirect-fees,                POST
 p, R-FINANCE, /api/v1/expense/ai-invoice-review,    POST
+
+# ---- 通知中心（NF）：全员读写自己的收件箱 ----
+p, R-STAFF,   /api/v1/notifications,              GET
+p, R-STAFF,   /api/v1/notifications/*,            GET
+p, R-STAFF,   /api/v1/notifications/*,            POST
+p, R-MANAGER, /api/v1/notifications,              GET
+p, R-MANAGER, /api/v1/notifications/*,            GET
+p, R-MANAGER, /api/v1/notifications/*,            POST
+p, R-LEADER,  /api/v1/notifications,              GET
+p, R-LEADER,  /api/v1/notifications/*,            GET
+p, R-LEADER,  /api/v1/notifications/*,            POST
+p, R-FINANCE, /api/v1/notifications,              GET
+p, R-FINANCE, /api/v1/notifications/*,            GET
+p, R-FINANCE, /api/v1/notifications/*,            POST
+p, R-EXPERT,  /api/v1/notifications,              GET
+p, R-EXPERT,  /api/v1/notifications/*,            GET
+p, R-EXPERT,  /api/v1/notifications/*,            POST
+p, R-ETHICS,  /api/v1/notifications,              GET
+p, R-ETHICS,  /api/v1/notifications/*,            GET
+p, R-ETHICS,  /api/v1/notifications/*,            POST
+
+# ---- 数据决策域（D）：大屏经费聚合（管理/领导/财务/审计/研究员只读）----
+p, R-MANAGER, /api/v1/dashboard/*,                  GET
+p, R-LEADER,  /api/v1/dashboard/*,                  GET
+p, R-FINANCE, /api/v1/dashboard/*,                  GET
+p, R-STAFF,   /api/v1/dashboard/*,                  GET

@@ -7,7 +7,10 @@ import (
 	"github.com/eplugger/ark/internal/config"
 	"github.com/eplugger/ark/internal/modules/activity"
 	"github.com/eplugger/ark/internal/modules/archive"
+	"github.com/eplugger/ark/internal/modules/dataops"
 	"github.com/eplugger/ark/internal/modules/expertreview"
+	"github.com/eplugger/ark/internal/modules/funding"
+	"github.com/eplugger/ark/internal/modules/notify"
 	"github.com/eplugger/ark/internal/modules/output"
 	"github.com/eplugger/ark/internal/modules/p"
 	"github.com/eplugger/ark/internal/modules/performance"
@@ -15,6 +18,7 @@ import (
 	"github.com/eplugger/ark/internal/modules/sysadmin"
 	"github.com/eplugger/ark/internal/platform/auth"
 	"github.com/eplugger/ark/internal/platform/httpx"
+	"github.com/eplugger/ark/internal/platform/llm"
 	"github.com/eplugger/ark/internal/platform/middleware"
 	"github.com/eplugger/ark/internal/platform/oapi"
 	"github.com/eplugger/ark/internal/platform/storage"
@@ -70,6 +74,19 @@ func Build(d RouterDeps) *gin.Engine {
 		// O 唯一持有 storage.Storage：d.Storage 为 nil 时端点内 guardStorage 返回 50301，
 		// 保证无 MinIO 宿主仍可编译/可路由。
 		archive.Register(api, archive.NewHandler(d.Pool, d.Storage))
+		// NF 通知中心 + F 经费闭环：notify 实现 funding.Notifier，装配期注入（触达 best-effort）。
+		notifH := notify.NewHandler(d.Pool)
+		notify.Register(api, notifH)
+		fundH := funding.NewHandler(d.Pool)
+		fundH.SetNotifier(notifH)
+		// LLM（NewAPI OpenAI 兼容）：未配置时 AI 审核端点自动降级 REVIEW。
+		if d.Cfg.LLMBaseURL != "" {
+			fundH.SetLLM(llm.New(d.Cfg.LLMBaseURL, d.Cfg.LLMAPIKey, d.Cfg.LLMModel,
+				time.Duration(d.Cfg.LLMTimeoutSec)*time.Second))
+		}
+		funding.Register(api, fundH)
+		// D 数据决策：大屏经费真聚合（F-18）。
+		dataops.Register(api, dataops.NewHandler(d.Pool))
 	}
 
 	// 兜底：命中契约但未手工实现的路由 → passthrough（NoRoute 不经分组中间件，M0 可接受）

@@ -409,3 +409,24 @@ sql:
             go_type: { type: "time.Time", pointer: true }
           - column: "e_project.actual_end_date"
             go_type: { type: "time.Time", pointer: true }
+  - engine: "postgresql"
+    # NF 仓储（通知中心）。sys_user/role 最小定义仅编译期解析用。
+    schema: "db/schema/nf_schema.sql"
+    queries: "db/query_nf"
+    gen:
+      go:
+        package: "nfstore"
+        out: "internal/modules/notify/store"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_pointers_for_null_types: true
+        rename:
+          "@limit_": Limit
+          "@offset_": Offset
+        overrides:
+          - column: "sys_notification.read_at"
+            go_type: { type: "time.Time", pointer: true }
+          - column: "sys_notification.created_at"
+            go_type: "time.Time"
+          - column: "sys_user_role.expires_at"
+            go_type: { type: "time.Time", pointer: true }
