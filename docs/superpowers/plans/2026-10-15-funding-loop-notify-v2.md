@@ -17,7 +17,17 @@
 | T0-T7（基建 + F 域闭环） | ✅ 全绿并 commit（e713a10/07ba5ca/ba535a3） |
 | T8-T10（通知中心 + LLM + 大屏） | ✅ 全绿并 commit（7a22484/12c1410/ab8a0fc/9fe528c）；docker 端到端冒烟通过：staff 建报销→提交→manager 收 TODO 通知→APPROVE→staff 收结果→已读闭环 |
 | T11-T12（前端对接 + 全量验证） | ✅ 已 commit（955a7c9）：App 铃铛轮询+收件箱面板、ExpenseView 真契约（EXECUTING 预算驱动 + snake_case payload）、BigscreenView alerts 适配；vue-tsc+build 全绿；headless Chrome 冒烟 4/4 PASS |
-| P4-P9（T13..T25） | ⬜ 待开工（下一步：T13 Excel 导入导出底座） |
+| P4（T13-T15 Excel 底座/外拨结转/科目预警） | ✅ 已 commit（a214a6a，含 T13-T15 漏交 store 生成物补提） |
+| P5（T16-T18 成果治理） | ✅ 已 commit（a214a6a） |
+| P6（T19 两级审核 / T20 任务中心） | ✅ 已 commit（ca6df95 / 1cc0d44） |
+| P7（T21 分类预警 / T22 PDF 解析） | ✅ 已 commit（f8f1edf；模板渲染遗漏补提 e64cee3） |
+| P8（T23 三维监控 / T24 画像真数据） | ✅ 已 commit（a2f1f0d） |
+| P9（T25 申报计划+形式审查） | ✅ 已 commit（dc441fc）：时间窗守卫/两级审批/to-project 幂等/auto-stop |
+| **T13-T25 全量回归** | ✅ 31+ 包 `-p 1` 全绿（ARK_TEST_DATABASE_URL 测试库，migration 已至 version 12） |
+
+**遗留事项**（后续可另开任务）：
+- 契约同步：T13-T25 新端点尚未写入 design/*.openapi.yaml。
+- T25 CreateApplication 的 sqlc 坑：`COALESCE($4,0)` 会推断成 `Column4 interface{}`，须全命名参数 `sqlc.arg('apply_amount')::numeric`。
 
 **冒烟踩坑沉淀**（冒烟/联调必读）：
 - 种子账号：admin/Admin@123456、manager/Manager@123456、staff/Staff@123456。
@@ -27,7 +37,6 @@
 - **列表端点统一返回 `{list,total,page,size}` 分页结构**（/subjects、/budgets/:id/lines、/expenses、/notifications 均如此），前端必须取 `.list`——本轮前端 bug 根因。
 - 前端 headless 冒烟脚本：/tmp/fe-smoke.cjs（playwright + chromium-1228 executablePath）。
 
-**下一步第一件事**：P4 T13 Excel 导入导出底座（migration 000004 sys_import_log → dataio 模块）。
 
 ---
 
