@@ -101,3 +101,8 @@ func ratToNum(r *big.Rat) (n pgtype.Numeric) {
 
 // defaultEntity：批量导入/缺省主法人 id（与 seed 保持一致）。
 const defaultEntity int64 = 1
+
+// strconvI int64 → string（T14 outward/carryover 通知文案用）。
+func strconvI(n int64) string { return strconv.FormatInt(n, 10) }
+
+// setCode best-effort 写业务编号（codeOf 生成 OUT/CRO/INC 前缀；失败静默，编号非关键路径）。

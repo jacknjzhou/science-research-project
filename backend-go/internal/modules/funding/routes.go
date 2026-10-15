@@ -37,4 +37,13 @@ func Register(r gin.IRoutes, h *Handler) {
 	r.GET("/indirect-fees", h.ListIndirectFees)
 	// F-15 AI 审核（仅建议）
 	r.POST("/expense/ai-invoice-review", h.AiInvoiceReview)
+	// T14 外拨 / 结转 / 预算追加
+	r.POST("/outwards", h.CreateOutward)
+	r.GET("/outwards", h.ListOutwards)
+	r.POST("/outwards/:id/approval", h.OutwardAction)
+	r.POST("/carryovers", h.CreateCarryover)
+	r.GET("/carryovers", h.ListCarryovers)
+	r.POST("/carryovers/:id/approval", h.CarryoverAction)
+	r.POST("/budgets/:id/append", h.AppendBudget)
+	r.POST("/budgets/:id/append/approve", h.ApproveBudgetAppend)
 }

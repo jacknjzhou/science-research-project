@@ -144,3 +144,11 @@ func ToAPIApproval(a fstore.FExpenseApproval) map[string]any {
 		"status": a.Status, "acted_at": fmtTimePtr(a.ActedAt),
 	}
 }
+
+// fmtTz pgtype.Timestamptz → RFC3339（NULL → ""）。
+func fmtTz(t pgtype.Timestamptz) string {
+	if !t.Valid {
+		return ""
+	}
+	return t.Time.Format(time.RFC3339)
+}

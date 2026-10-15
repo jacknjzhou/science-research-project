@@ -305,3 +305,66 @@ func (h *Handler) LineBalance(c *gin.Context) {
 	}
 	httpx.WriteOK(c, ToAPILine(l))
 }
+
+// —— T14 预算追加（F-23）——
+
+type appendLineIn struct {
+	LineID int64  `json:"line_id" binding:"required"`
+	Delta  string `json:"delta" binding:"required"`
+	Reason *string `json:"reason"`
+}
+
+// AppendBudget POST /budgets/:id/append {lines:[{line_id,delta,reason}]}
+// EXECUTING 预算进入 ADJUSTING；行级 pending_delta 与预算级 pending_delta 同步累计。
+func (h *Handler) AppendBudget(c *gin.Context) {
+	d := auth.DomainFrom(c)
+	var b struct {
+		Lines []appendLineIn `json:"lines" binding:"required,min=1"`
+	}
+	if err := c.ShouldBindJSON(&b); err != nil {
+		httpx.WriteErr(c, http.StatusBadRequest, 40001, "参数错误："+err.Error())
+		return
+	}
+	sum := "0"
+	for _, l := range b.Lines {
+		if moneyRat(l.Delta).Sign() <= 0 {
+			httpx.WriteErr(c, http.StatusBadRequest, 40001, "delta 须为正数")
+			return
+		}
+		sum = addMoney(sum, l.Delta)
+	}
+	n, err := h.q.AppendBudgetPending(c, fstore.AppendBudgetPendingParams{ID: pathID(c), PendingDelta: strToNum(sum)})
+	if err != nil || n == 0 {
+		httpx.WriteErr(c, http.StatusConflict, 40901, "仅 EXECUTING 预算可追加")
+		return
+	}
+	for _, l := range b.Lines {
+		if _, err := h.q.AppendLinePending(c, fstore.AppendLinePendingParams{ID: l.LineID, PendingDelta: strToNum(l.Delta)}); err != nil {
+			httpx.WriteErr(c, http.StatusInternalServerError, 50002, "行级追加失败："+err.Error())
+			return
+		}
+	}
+	// 触达 R-LEADER 终审（best-effort）
+	h.notifyRole("R-LEADER", "TODO", "预算追加待批复",
+		"预算 #"+strconvI(pathID(c))+" 追加申请 ¥"+sum+"，待领导批复", "budget/"+strconvI(pathID(c))+"/append", d.TenantID)
+	httpx.WriteOK(c, gin.H{"budget_id": pathID(c), "pending_delta": sum})
+}
+
+// ApproveBudgetAppend POST /budgets/:id/append/approve
+// 批复：total_approved += pending_delta、行级 amount_adjusted 并入、version+1 → 回 EXECUTING。
+func (h *Handler) ApproveBudgetAppend(c *gin.Context) {
+	bud, err := h.q.ApproveBudgetAppend(c, pathID(c))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			httpx.WriteErr(c, http.StatusConflict, 40901, "仅 ADJUSTING 状态可批复追加")
+			return
+		}
+		httpx.WriteErr(c, http.StatusInternalServerError, 50002, "批复失败："+err.Error())
+		return
+	}
+	if _, err := h.q.ApproveLinesAppend(c, bud.ID); err != nil {
+		httpx.WriteErr(c, http.StatusInternalServerError, 50002, "行级并入失败："+err.Error())
+		return
+	}
+	httpx.WriteOK(c, ToAPIBudget(bud))
+}

@@ -76,3 +76,27 @@ WHERE id = $1 AND deleted = 0;
 UPDATE F_BUDGET_LINE
 SET amount_frozen = amount_frozen - $2, amount_released = amount_released + $2, updated_at = now()
 WHERE id = $1 AND deleted = 0;
+
+-- T14 预算追加（F-23）：提交追加申请（pending_delta 累计，行级同步累计）
+-- name: AppendBudgetPending :execrows
+UPDATE F_BUDGET
+SET pending_delta = pending_delta + $2, status = 'ADJUSTING', updated_at = now()
+WHERE id = $1 AND deleted = 0 AND status = 'EXECUTING';
+
+-- name: AppendLinePending :execrows
+UPDATE F_BUDGET_LINE
+SET pending_delta = pending_delta + $2, updated_at = now()
+WHERE id = $1 AND deleted = 0;
+
+-- 追加批复：预算/行 pending_delta 并入正式口径，版本 +1
+-- name: ApproveBudgetAppend :one
+UPDATE F_BUDGET
+SET total_approved = total_approved + pending_delta, pending_delta = 0,
+    version = version + 1, status = 'EXECUTING', updated_at = now()
+WHERE id = $1 AND deleted = 0 AND status = 'ADJUSTING'
+RETURNING *;
+
+-- name: ApproveLinesAppend :execrows
+UPDATE F_BUDGET_LINE
+SET amount_adjusted = amount_adjusted + pending_delta, pending_delta = 0, updated_at = now()
+WHERE budget_id = $1 AND pending_delta <> 0 AND deleted = 0;

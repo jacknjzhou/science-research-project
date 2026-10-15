@@ -44,6 +44,7 @@ CREATE TABLE F_BUDGET (
                   CHECK (mode IN ('预算制','包干制')),         -- 经费管理模式（字典可配，PRD 2.8）
   total_approved  NUMERIC(18,2) NOT NULL DEFAULT 0,           -- 批复总额
   total_adjusted  NUMERIC(18,2) NOT NULL DEFAULT 0,           -- 调整后总额
+  pending_delta   NUMERIC(18,2) NOT NULL DEFAULT 0,           -- 追加审批中金额（T14）
   version         INT          NOT NULL DEFAULT 1,            -- 预算版本号（调整递增）
   approved_at     TIMESTAMPTZ,
   approved_by     BIGINT,                                     -- 批复人 user_id
@@ -70,6 +71,7 @@ CREATE TABLE F_BUDGET_LINE (
   -- 余额 remaining = (amount_planned + amount_adjusted) - amount_frozen - amount_used - amount_released
   amount_planned   NUMERIC(18,2) NOT NULL DEFAULT 0,               -- 计划额（编制）
   amount_adjusted  NUMERIC(18,2) NOT NULL DEFAULT 0,               -- 调整增减额（可为负）
+  pending_delta    NUMERIC(18,2) NOT NULL DEFAULT 0,               -- 追加审批中金额（T14）
   amount_frozen    NUMERIC(18,2) NOT NULL DEFAULT 0,               -- 冻结额（报销提交即冻结，F-10）
   amount_used      NUMERIC(18,2) NOT NULL DEFAULT 0,               -- 已扣减额（付款实扣，F-10）
   amount_released  NUMERIC(18,2) NOT NULL DEFAULT 0,               -- 已释放额（驳回/退回解冻，F-10）
@@ -236,4 +238,47 @@ CREATE TABLE E_PROJECT (
   policy_pack_id   BIGINT,                                   -- 命中制度包快照 -> common sys_policy_pack.id（复算依据，PRD 2.10）
   security_level   VARCHAR(16)  NOT NULL DEFAULT 'INTERNAL'
                    CHECK (security_level IN ('PUBLIC','INTERNAL','SECRET','TOP_SECRET')) -- 涉密等级（PRD 2.13）
+);
+
+-- T14 外拨（F-24）：经费拨付外单位，两级审批后从预算行实扣
+CREATE TABLE F_OUTWARD (
+    id                 BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    code               VARCHAR(64),
+    tenant_id          BIGINT NOT NULL,
+    status             VARCHAR(16) NOT NULL DEFAULT 'PENDING'
+                       CHECK (status IN ('PENDING','APPROVED','REJECTED')),
+    deleted            SMALLINT NOT NULL DEFAULT 0,
+    creator_id         BIGINT NOT NULL,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    remark             TEXT,
+    project_id         BIGINT NOT NULL,
+    budget_id          BIGINT,
+    budget_line_id     BIGINT,
+    amount             NUMERIC(18,2) NOT NULL,
+    to_unit            VARCHAR(256) NOT NULL,
+    reason             TEXT,
+    first_approved_by  BIGINT,
+    first_approved_at  TIMESTAMPTZ,
+    approved_by        BIGINT,
+    approved_at        TIMESTAMPTZ
+);
+
+-- T14 结转（F-25）：结题项目余额结转下年度，批复后生成 F_INCOME 行
+CREATE TABLE F_CARRYOVER (
+    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    code         VARCHAR(64),
+    tenant_id    BIGINT NOT NULL,
+    status       VARCHAR(16) NOT NULL DEFAULT 'PENDING'
+                 CHECK (status IN ('PENDING','APPROVED','REJECTED')),
+    deleted      SMALLINT NOT NULL DEFAULT 0,
+    creator_id   BIGINT NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    remark       TEXT,
+    project_id   BIGINT NOT NULL,
+    fiscal_year  INT NOT NULL,
+    target_year  INT NOT NULL,
+    amount       NUMERIC(18,2) NOT NULL,
+    income_id    BIGINT
 );
