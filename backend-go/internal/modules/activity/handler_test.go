@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/eplugger/ark/internal/platform/db"
 	"github.com/eplugger/ark/internal/platform/httpx"
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // M0 无鉴权中间件，手工塞数据域（V handler 需 tenant_id + user_id）。
@@ -21,6 +23,27 @@ func injectDomain(c *gin.Context) {
 	c.Set(auth.CtxTenantID, int64(1))
 	c.Set(auth.CtxUserID, int64(1001))
 	c.Next()
+}
+
+// runSeedV 幂等清本域表后再执行 testdata/seed_v.sql，让测可在任意空库/半脏库反复跑。
+// （seed_v.sql 提供 tenant=1 未删 2 行：A=DRAFT 用于状态机测，B=SUBMITTED。）
+func runSeedV(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	for _, trunc := range []string{
+		`DELETE FROM v_activity_participant WHERE tenant_id IN (1,2)`,
+		`DELETE FROM v_activity WHERE tenant_id IN (1,2)`,
+	} {
+		if _, err := pool.Exec(ctx, trunc); err != nil {
+			t.Fatalf("清理失败 %q: %v", trunc, err)
+		}
+	}
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "testdata", "seed_v.sql"))
+	if err != nil {
+		t.Fatalf("seed_v 读取失败: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(b)); err != nil {
+		t.Fatalf("seed_v 执行失败: %v", err)
+	}
 }
 
 func newTestEngine(t *testing.T) *gin.Engine {
@@ -32,6 +55,7 @@ func newTestEngine(t *testing.T) *gin.Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runSeedV(t, context.Background(), pool)
 	gin.SetMode(gin.TestMode)
 	e := gin.New()
 	e.Use(httpx.TraceID(), injectDomain)
@@ -78,7 +102,7 @@ func TestGetActivity_404WhenMissing(t *testing.T) {
 func TestSubmitActivity_Transition(t *testing.T) {
 	e := newTestEngine(t)
 	// 先建一条 DRAFT
-	body := bytes.NewBufferString(`{"title":"T1 学术报告","activity_type":"LECTURE"}`)
+	body := bytes.NewBufferString(`{"title":"T1 学术报告","activity_type":"LECTURE","budget_amount":"0.00"}`)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/v1/activities", body)
 	req.Header.Set("Content-Type", "application/json")

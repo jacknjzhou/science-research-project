@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/eplugger/ark/internal/platform/httpx"
 	"github.com/eplugger/ark/internal/platform/oapi"
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // injectDomain：M0 测试里手工塞数据域（N handler 需 tenant_id + user_id 作 creator/actor）。
@@ -23,6 +25,31 @@ func injectDomain(c *gin.Context) {
 	c.Set(auth.CtxTenantID, int64(1))
 	c.Set(auth.CtxUserID, int64(100))
 	c.Next()
+}
+
+// runSeedN 幂等清 N 域表（先子后父保外键顺序），再执行 testdata/seed_n.sql；
+// seed 提供 4 位专家（含 PI user_id=100、"承担单位" org_name）供抽取回避用例反查。
+func runSeedN(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	for _, trunc := range []string{
+		`DELETE FROM n_review_fee WHERE tenant_id IN (1,2)`,
+		`DELETE FROM n_review_score WHERE tenant_id IN (1,2)`,
+		`DELETE FROM n_review_invitation WHERE tenant_id IN (1,2)`,
+		`DELETE FROM n_review_task WHERE tenant_id IN (1,2)`,
+		`DELETE FROM n_expert_group WHERE tenant_id IN (1,2)`,
+		`DELETE FROM n_expert WHERE tenant_id IN (1,2)`,
+	} {
+		if _, err := pool.Exec(ctx, trunc); err != nil {
+			t.Fatalf("清理失败 %q: %v", trunc, err)
+		}
+	}
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "testdata", "seed_n.sql"))
+	if err != nil {
+		t.Fatalf("seed_n 读取失败: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(b)); err != nil {
+		t.Fatalf("seed_n 执行失败: %v", err)
+	}
 }
 
 // newTestEngine：DB-gated。缺 ARK_TEST_DATABASE_URL → SKIP。注入 seed_n.sql 后可跑。
@@ -37,6 +64,7 @@ func newTestEngine(t *testing.T) *gin.Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runSeedN(t, context.Background(), pool)
 	gin.SetMode(gin.TestMode)
 	e := gin.New()
 	e.Use(httpx.TraceID(), injectDomain)

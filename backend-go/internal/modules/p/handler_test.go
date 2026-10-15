@@ -6,18 +6,36 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/eplugger/ark/internal/platform/auth"
 	"github.com/eplugger/ark/internal/platform/db"
 	"github.com/eplugger/ark/internal/platform/httpx"
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // 手工把数据域塞进 context（M0 阶段鉴权中间件尚未接入，见任务9）
 func injectDomain(c *gin.Context) {
 	c.Set(auth.CtxTenantID, int64(1))
 	c.Next()
+}
+
+// runSeedP 幂等清 p_application 后执行 testdata/seed_p.sql；
+// seed 提供 tenant=1 未删 2 行、tenant=2 1 行、tenant=1 已删 1 行，覆盖过滤测期望。
+func runSeedP(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `DELETE FROM p_application WHERE tenant_id IN (1,2)`); err != nil {
+		t.Fatalf("清理 p_application 失败: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "testdata", "seed_p.sql"))
+	if err != nil {
+		t.Fatalf("seed_p 读取失败: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(b)); err != nil {
+		t.Fatalf("seed_p 执行失败: %v", err)
+	}
 }
 
 func newTestEngine(t *testing.T) *gin.Engine {
@@ -29,6 +47,7 @@ func newTestEngine(t *testing.T) *gin.Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runSeedP(t, context.Background(), pool)
 	gin.SetMode(gin.TestMode)
 	e := gin.New()
 	e.Use(httpx.TraceID(), injectDomain)

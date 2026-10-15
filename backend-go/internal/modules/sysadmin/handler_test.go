@@ -35,6 +35,14 @@ func newTestEngine(t *testing.T) *gin.Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 幂等清测余：TestCreateUser_DuplicateUsername409 会插入 tester1，重跑必须先清。
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+		DELETE FROM sys_user_role WHERE user_id IN (SELECT id FROM sys_user WHERE username='tester1');
+		DELETE FROM sys_user WHERE username='tester1';
+	`); err != nil {
+		t.Fatalf("清 tester1 失败: %v", err)
+	}
 	enf, err := auth.NewEnforcer("../../platform/auth/model.conf", "../../platform/auth/policy.csv")
 	if err != nil {
 		t.Fatal(err)
