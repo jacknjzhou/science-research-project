@@ -1055,11 +1055,11 @@ func (q *Queries) StatsByType(ctx context.Context, tenantID int64) ([]StatsByTyp
 
 const transitionStatus = `-- name: TransitionStatus :one
 UPDATE v_activity SET
-  status = $4,
-  submit_at  = CASE WHEN $4 = 'SUBMITTED'  THEN now() ELSE submit_at  END,
-  approve_at = CASE WHEN $4 IN ('APPROVED') THEN now() ELSE approve_at END,
-  archive_at = CASE WHEN $4 = 'ARCHIVED'   THEN now() ELSE archive_at END,
-  cancel_at  = CASE WHEN $4 = 'CANCELLED'  THEN now() ELSE cancel_at  END,
+  status = $4::varchar,
+  submit_at  = CASE WHEN $4::varchar = 'SUBMITTED'  THEN now() ELSE submit_at  END,
+  approve_at = CASE WHEN $4::varchar IN ('APPROVED') THEN now() ELSE approve_at END,
+  archive_at = CASE WHEN $4::varchar = 'ARCHIVED'   THEN now() ELSE archive_at END,
+  cancel_at  = CASE WHEN $4::varchar = 'CANCELLED'  THEN now() ELSE cancel_at  END,
   modifier_id = $5,
   updated_at = now()
 WHERE id = $1 AND tenant_id = $2 AND deleted = 0 AND status = $3
@@ -1075,7 +1075,7 @@ type TransitionStatusParams struct {
 	ID         int64  `json:"id"`
 	TenantID   int64  `json:"tenant_id"`
 	Status     string `json:"status"`
-	Status_2   string `json:"status_2"`
+	Column4    string `json:"column_4"`
 	ModifierID *int64 `json:"modifier_id"`
 }
 
@@ -1120,12 +1120,14 @@ type TransitionStatusRow struct {
 }
 
 // 通用状态迁移：由 handler 校验 from→to 合法后调用；set 对应时间戳列（按 to 选）用 CASE 落。
+// 注：$4 同时出现在 SET 目标与 CASE 比较中，若不显式 ::varchar，PG 型推会在 varchar(32) 与
+// unknown 之间得出"不一致类型"（SQLSTATE 42P08）。此处统一 ::varchar 消歧义。
 func (q *Queries) TransitionStatus(ctx context.Context, arg TransitionStatusParams) (TransitionStatusRow, error) {
 	row := q.db.QueryRow(ctx, transitionStatus,
 		arg.ID,
 		arg.TenantID,
 		arg.Status,
-		arg.Status_2,
+		arg.Column4,
 		arg.ModifierID,
 	)
 	var i TransitionStatusRow

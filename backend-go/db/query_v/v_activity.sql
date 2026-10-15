@@ -81,12 +81,14 @@ RETURNING id, code, tenant_id, status, security_level, activity_type, level, hos
 
 -- name: TransitionStatus :one
 -- 通用状态迁移：由 handler 校验 from→to 合法后调用；set 对应时间戳列（按 to 选）用 CASE 落。
+-- 注：$4 同时出现在 SET 目标与 CASE 比较中，若不显式 ::varchar，PG 型推会在 varchar(32) 与
+-- unknown 之间得出"不一致类型"（SQLSTATE 42P08）。此处统一 ::varchar 消歧义。
 UPDATE v_activity SET
-  status = $4,
-  submit_at  = CASE WHEN $4 = 'SUBMITTED'  THEN now() ELSE submit_at  END,
-  approve_at = CASE WHEN $4 IN ('APPROVED') THEN now() ELSE approve_at END,
-  archive_at = CASE WHEN $4 = 'ARCHIVED'   THEN now() ELSE archive_at END,
-  cancel_at  = CASE WHEN $4 = 'CANCELLED'  THEN now() ELSE cancel_at  END,
+  status = $4::varchar,
+  submit_at  = CASE WHEN $4::varchar = 'SUBMITTED'  THEN now() ELSE submit_at  END,
+  approve_at = CASE WHEN $4::varchar IN ('APPROVED') THEN now() ELSE approve_at END,
+  archive_at = CASE WHEN $4::varchar = 'ARCHIVED'   THEN now() ELSE archive_at END,
+  cancel_at  = CASE WHEN $4::varchar = 'CANCELLED'  THEN now() ELSE cancel_at  END,
   modifier_id = $5,
   updated_at = now()
 WHERE id = $1 AND tenant_id = $2 AND deleted = 0 AND status = $3

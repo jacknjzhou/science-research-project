@@ -314,7 +314,7 @@ func (h *Handler) transition(c *gin.Context, to string) {
 		return
 	}
 	r, err := h.q.TransitionStatus(c, vstore.TransitionStatusParams{
-		ID: id, TenantID: d.TenantID, Status: cur.Status, Status_2: to, ModifierID: &d.UserID,
+		ID: id, TenantID: d.TenantID, Status: cur.Status, Column4: to, ModifierID: &d.UserID,
 	})
 	if err != nil {
 		httpx.WriteErr(c, 409, 40901, "状态迁移失败")
@@ -354,7 +354,7 @@ func (h *Handler) ApproveActivity(c *gin.Context) {
 		ActivityID: id, ReviewLevel: level, ReviewerID: d.UserID, Action: body.Action, Opinion: body.Opinion, TenantID: d.TenantID,
 	})
 	r, err := h.q.TransitionStatus(c, vstore.TransitionStatusParams{
-		ID: id, TenantID: d.TenantID, Status: cur.Status, Status_2: to, ModifierID: &d.UserID,
+		ID: id, TenantID: d.TenantID, Status: cur.Status, Column4: to, ModifierID: &d.UserID,
 	})
 	if err != nil {
 		httpx.WriteErr(c, 409, 40901, "状态迁移失败")
