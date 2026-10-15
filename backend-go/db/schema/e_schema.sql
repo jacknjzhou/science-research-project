@@ -271,3 +271,32 @@ CREATE TABLE E_PROJECT_CATEGORY (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- T25 申报计划 + 申报单（两级审批 → 转立项草稿）
+CREATE TABLE E_APPLY_PLAN (
+    id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    tenant_id     BIGINT NOT NULL,
+    name          VARCHAR(256) NOT NULL,
+    category_id   BIGINT,
+    source        VARCHAR(64),
+    start_at      DATE NOT NULL,
+    end_at        DATE NOT NULL,
+    need_review   BOOLEAN NOT NULL DEFAULT TRUE,
+    guide_file_id BIGINT,
+    status        VARCHAR(16) NOT NULL DEFAULT 'DRAFT',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE E_APPLICATION (
+    id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    tenant_id      BIGINT NOT NULL,
+    plan_id        BIGINT NOT NULL,
+    project_name   VARCHAR(512) NOT NULL,
+    apply_amount   NUMERIC(18,2) NOT NULL DEFAULT 0,
+    applicant_id   BIGINT NOT NULL,
+    attachment_ids JSONB NOT NULL DEFAULT '[]',
+    status         VARCHAR(32) NOT NULL DEFAULT 'SUBMITTED',
+    project_id     BIGINT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);

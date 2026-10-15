@@ -422,3 +422,18 @@ p, R-LEADER,  /api/v1/funding/warn-configs,          POST
 p, R-LEADER,  /api/v1/funding/warn-configs/*,        PUT
 p, R-FINANCE, /api/v1/funding/warn-configs,          GET
 p, R-STAFF,   /api/v1/funding/warn-configs,          GET
+
+# ---- T25 申报计划 + 申报单（管理员管理计划，全员可读；STAFF 提交申报；两级审批；转立项） ----
+p, R-MANAGER, /api/v1/apply-plans,                    GET
+p, R-MANAGER, /api/v1/apply-plans,                    POST
+p, R-MANAGER, /api/v1/apply-plans/auto-stop,          POST
+p, R-MANAGER, /api/v1/apply-plans/*,                  GET
+p, R-MANAGER, /api/v1/apply-plans/*,                  POST
+p, R-MANAGER, /api/v1/applications/*/approve,         POST
+p, R-MANAGER, /api/v1/applications/*/to-project,      POST
+p, R-LEADER,  /api/v1/apply-plans,                    GET
+p, R-LEADER,  /api/v1/apply-plans/*,                  GET
+p, R-LEADER,  /api/v1/applications/*/approve,         POST
+p, R-STAFF,   /api/v1/apply-plans,                    GET
+p, R-STAFF,   /api/v1/apply-plans/*,                  GET
+p, R-STAFF,   /api/v1/apply-plans/*/applications,     POST

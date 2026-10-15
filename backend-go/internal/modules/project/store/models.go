@@ -34,6 +34,35 @@ type ChangeRequest struct {
 	SnapshotRef    *string            `json:"snapshot_ref"`
 }
 
+type EApplication struct {
+	ID            int64              `json:"id"`
+	TenantID      int64              `json:"tenant_id"`
+	PlanID        int64              `json:"plan_id"`
+	ProjectName   string             `json:"project_name"`
+	ApplyAmount   pgtype.Numeric     `json:"apply_amount"`
+	ApplicantID   int64              `json:"applicant_id"`
+	AttachmentIds []byte             `json:"attachment_ids"`
+	Status        string             `json:"status"`
+	ProjectID     *int64             `json:"project_id"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type EApplyPlan struct {
+	ID          int64              `json:"id"`
+	TenantID    int64              `json:"tenant_id"`
+	Name        string             `json:"name"`
+	CategoryID  *int64             `json:"category_id"`
+	Source      *string            `json:"source"`
+	StartAt     pgtype.Date        `json:"start_at"`
+	EndAt       pgtype.Date        `json:"end_at"`
+	NeedReview  bool               `json:"need_review"`
+	GuideFileID *int64             `json:"guide_file_id"`
+	Status      string             `json:"status"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
 type EArchiveChecklist struct {
 	ID             int64              `json:"id"`
 	Code           *string            `json:"code"`

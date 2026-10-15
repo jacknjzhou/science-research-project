@@ -27,5 +27,15 @@ func Register(r gin.IRoutes, h *Handler) {
 	r.POST("/projects/:id/category", h.AttachProjectCategory)
 	// T22 任务书 PDF 解析（回填表单用，不落库）
 	r.POST("/projects/extract-taskbook", h.ExtractTaskbook)
+	// T25 申报计划 + 申报单
+	r.GET("/apply-plans", h.ListApplyPlans)
+	r.POST("/apply-plans", h.CreateApplyPlan)
+	r.POST("/apply-plans/:id/start", h.StartApplyPlan)
+	r.POST("/apply-plans/:id/stop", h.StopApplyPlan)
+	r.POST("/apply-plans/auto-stop", h.AutoStopPlans)
+	r.POST("/apply-plans/:id/applications", h.CreateApplication)
+	r.GET("/apply-plans/:id/applications", h.ListApplications)
+	r.POST("/applications/:id/approve", h.ApproveApplication)
+	r.POST("/applications/:id/to-project", h.ToProject)
 	r.POST("/project/:id/final-accept", h.CreateFinalAccept)
 }
