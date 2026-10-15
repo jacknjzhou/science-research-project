@@ -23,7 +23,7 @@ export interface SpecDoc {
 const MODULE_CODES: Record<string, string> = {
   '01': 'P', '02': 'E', '03': 'F', '04': 'R', '05': 'T', '06': 'C',
   '07': 'S', '08': 'D', '09': 'G', '10': 'A', '11': 'X', '12': 'U',
-  '13': 'V', '14': 'M',
+  '13': 'V', '14': 'M', '15': 'N',
 }
 
 // Vite glob：把 schema 目录下所有 yaml 以原始文本导入
