@@ -1,10 +1,66 @@
 <script setup lang="ts">
-import { ref, computed, reactive } from 'vue'
+import { ref, computed, reactive, watch, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { auth } from '@/api/auth'
+import { api } from '@/api/client'
 
 const router = useRouter()
 const route = useRoute()
+
+// —— 通知中心（NF）铃铛：unread-count 30s 轮询 + 收件箱面板 ——
+interface Notification { id: number; typ: string; title: string; content: string | null; biz_ref: string | null; read: boolean; created_at: string }
+const unread = ref(0)
+const notifOpen = ref(false)
+const notifList = ref<Notification[]>([])
+const notifLoading = ref(false)
+let pollTimer: number | undefined
+
+async function loadUnread() {
+  if (!auth.isAuthed) return
+  try {
+    const d = await api.get<{ unread: number }>('/notifications/unread-count')
+    unread.value = d?.unread ?? 0
+  } catch { /* 静默：铃铛轮询失败不打扰 */ }
+}
+async function openNotif() {
+  notifOpen.value = !notifOpen.value
+  if (!notifOpen.value || !auth.isAuthed) return
+  notifLoading.value = true
+  try {
+    const d = await api.get<{ list: Notification[] }>('/notifications', { page: 1, size: 6 })
+    notifList.value = d?.list ?? []
+  } catch { notifList.value = [] } finally { notifLoading.value = false }
+}
+async function markRead(n: Notification) {
+  if (n.read) return
+  try {
+    await api.post(`/notifications/${n.id}/read`)
+    n.read = true
+    unread.value = Math.max(0, unread.value - 1)
+  } catch { /* ignore */ }
+}
+async function markAllRead() {
+  try {
+    await api.post('/notifications/read-all')
+    notifList.value.forEach((n) => (n.read = true))
+    unread.value = 0
+  } catch { /* ignore */ }
+}
+const TYP_META: Record<string, { ic: string; cls: string }> = {
+  TODO: { ic: '◉', cls: 'warn' }, MESSAGE: { ic: '✉', cls: 'info' },
+  WARNING: { ic: '⚠', cls: 'bad' }, ANNOUNCE: { ic: '📢', cls: 'ok' },
+}
+watch(() => auth.isAuthed, (on) => {
+  window.clearInterval(pollTimer)
+  if (on) {
+    loadUnread()
+    pollTimer = window.setInterval(loadUnread, 30_000)
+  } else {
+    unread.value = 0
+    notifOpen.value = false
+  }
+}, { immediate: true })
+onBeforeUnmount(() => window.clearInterval(pollTimer))
 
 // 登录浮层：未登录即显示；带 needLogin 查询(守卫回跳)时也强制显示。
 const showLogin = computed(() => !auth.isAuthed || route.query.needLogin === '1')
@@ -163,7 +219,30 @@ function toast(m: string) {
           <input placeholder="问点什么… 例如「去年到账经费最高的三个 PI」" />
           <span class="ai-tag">AI 直达</span>
         </div>
-        <span class="bell" @click="toast('3 条未读：经费预警 ×1 · 待评审 ×2')">🔔</span>
+        <div class="bell-wrap" style="position:relative">
+          <span class="bell" @click="openNotif" title="通知中心">🔔<i v-if="unread > 0" style="position:absolute;top:-4px;right:-6px;background:var(--seal,#c0392b);color:#fff;font-style:normal;font-size:10px;min-width:16px;height:16px;line-height:16px;border-radius:8px;text-align:center;padding:0 3px">{{ unread > 99 ? '99+' : unread }}</i></span>
+          <div v-if="notifOpen" style="position:absolute;right:0;top:40px;width:340px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.14);z-index:60;overflow:hidden">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)">
+              <b style="font-size:13px">通知中心 <span style="color:var(--seal)">{{ unread }}</span> 条未读</b>
+              <span style="font-size:12px;color:var(--ai);cursor:pointer" @click="markAllRead">全部已读</span>
+            </div>
+            <div style="max-height:320px;overflow:auto">
+              <div v-if="notifLoading" style="padding:18px;text-align:center;font-size:12px;color:var(--ink-mute)">加载中…</div>
+              <div v-else-if="!notifList.length" style="padding:18px;text-align:center;font-size:12px;color:var(--ink-mute)">暂无通知</div>
+              <div v-for="n in notifList" :key="n.id" @click="markRead(n)"
+                   style="padding:10px 14px;border-bottom:1px solid var(--line);cursor:pointer;display:flex;gap:8px;align-items:flex-start"
+                   :style="{ background: n.read ? 'transparent' : 'rgba(192,57,43,.04)' }">
+                <span class="tag" :class="TYP_META[n.typ]?.cls || 'info'" style="flex-shrink:0;font-size:10px">{{ TYP_META[n.typ]?.ic || '•' }} {{ n.typ }}</span>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :style="{ color: n.read ? 'var(--ink-mute)' : 'var(--ink)' }">{{ n.title }}</div>
+                  <div v-if="n.content" style="font-size:11px;color:var(--ink-mute);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ n.content }}</div>
+                  <div style="font-size:10px;color:var(--ink-mute);margin-top:2px">{{ (n.created_at || '').replace('T', ' ').slice(0, 16) }}</div>
+                </div>
+                <span v-if="!n.read" style="width:7px;height:7px;border-radius:50%;background:var(--seal,#c0392b);flex-shrink:0;margin-top:5px"></span>
+              </div>
+            </div>
+          </div>
+        </div>
         <div class="role-chip" @click="doLogout" title="点击退出登录">
           <div class="av">{{ userAvatar }}</div>
           <div class="nm"><b>{{ userName }}</b><span>{{ userSub }}</span></div>

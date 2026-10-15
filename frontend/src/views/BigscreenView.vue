@@ -34,10 +34,25 @@ const metrics = ref<MetricValue[]>([])
 const DEPT_NAMES = ['制造所', '机器人所', '传感所', '材料所', '信息室', '工艺', '联合']
 const HOT_THRESHOLD = 50
 
+// 后端 alerts 为 {pre:{count},during:{count},post:{count}} 计数桶（mock 下可能是数组形式，双向兼容）。
+const ALERT_STAGE: Array<{ key: string; tag: string }> = [
+  { key: 'pre', tag: '事前·预算' },
+  { key: 'during', tag: '事中·支出' },
+  { key: 'post', tag: '事后·决算' },
+]
 const mergedAlerts = computed<Alert[]>(() => {
-  const a = f.value.alerts
+  const a = f.value.alerts as any
   if (!a) return []
-  return [...(a.during || []), ...(a.pre || []), ...(a.post || [])]
+  const out: Alert[] = []
+  for (const { key, tag } of ALERT_STAGE) {
+    const v = a[key]
+    if (Array.isArray(v)) {
+      out.push(...(v as Alert[]))
+    } else if (v && typeof v === 'object' && typeof v.count === 'number') {
+      if (v.count > 0) out.push({ level: v.count > 10 ? 'p1' : 'p2', tag, text: `${tag}环节待处理事项 ${v.count} 项，请及时跟进` })
+    }
+  }
+  return out
 })
 const aiBuckets = computed(() => f.value.aiBreakdown || [])
 const aiBucketTotal = computed(() => aiBuckets.value.reduce((s, b) => s + (b.count || 0), 0))

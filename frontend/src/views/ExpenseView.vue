@@ -3,13 +3,14 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { api, list } from '@/api/client'
 import { toNum } from '@/utils/money'
 
-// —— F 模块契约类型（camelCase）——
-interface Subject { id: number; code: string; name: string; category: string; isLeaf?: boolean }
+// —— F 模块真后端契约（snake_case，见 backend funding/mapper.go）——
+interface Subject { id: number; code: string; name: string }
+interface Budget { id: number; code: string | null; project_id: number; legal_entity_id: number; mode: string; total_approved: string; status: string }
 interface BudgetLine {
-  id: number; subjectId: number; subjectName: string
-  amountPlanned: string; amountUsed: string; remaining: string
+  id: number; budget_id: number; subject_id: number
+  amount_planned: string; amount_frozen: string; amount_used: string; remaining: string
 }
-interface ExpenseRow { id: number; code: string; amount: string; status: string; aiVerdict?: string | null }
+interface ExpenseRow { id: number; code: string | null; amount: string; status: string; ai_verdict: string | null; expense_type: string }
 interface AiIssue { rule: string; reason: string; clauseRef?: string }
 interface AiReviewResult { verdict: string; confidence: number; issues?: AiIssue[] }
 
@@ -20,36 +21,42 @@ const loading = ref(true)
 const submitting = ref(false)
 
 const subjects = ref<Subject[]>([])
+const budgets = ref<Budget[]>([])
+const budgetId = ref<number | null>(null)
 const water = ref<BudgetLine[]>([])
 const recent = ref<ExpenseRow[]>([])
 const aiResult = ref<AiReviewResult | null>(null)
 
-const PROJECTS = [
-  { id: 87, label: 'PRJ-2024-00087 磨抛关键技术（可支 ¥268万）' },
-  { id: 103, label: 'PRJ-2025-00103 触觉感知（可支 ¥19万）' },
-]
 const PAY_METHODS = ['公务卡转账（默认）', '对公转账', '现金/备用金']
 const TYPE_BY_SUBJECT: Record<string, string> = {
   '材料费': 'MATERIAL', '设备费': 'EQUIPMENT', '差旅费': 'TRAVEL',
   '测试化验加工费': 'OTHER', '劳务费': 'LABOR', '间接费用': 'OTHER',
 }
+const today = () => new Date().toISOString().slice(0, 10)
 
-interface LineItem { id: number; subjectId: number | null; amount: number; note: string }
+interface LineItem { id: number; subjectId: number | null; amount: number; note: string; invoiceNo: string }
 let lineSeq = 1
 const form = reactive({
-  projectId: 87,
+  budgetId: null as number | null,
   subjectId: null as number | null,
   payMethod: PAY_METHODS[0],
-  reason: 'M6 样机集成耗材采购（砂轮/夹柄/冷却液）；出差参加学会年会并对接联合验证单位。',
+  reason: 'M6 样机集成耗材采购；出差参加学会年会并对接联合验证单位。',
+  invoiceDate: today(),
 })
 const lines = ref<LineItem[]>([
-  { id: lineSeq++, subjectId: null, amount: 23400, note: '砂轮耗材 · XX精密工具公司（专票 04412317）' },
-  { id: lineSeq++, subjectId: null, amount: 1860, note: '北京→沈阳往返机票（行程单 20260928）' },
+  { id: lineSeq++, subjectId: null, amount: 23400, note: '砂轮耗材 · XX精密工具公司', invoiceNo: '' },
+  { id: lineSeq++, subjectId: null, amount: 1860, note: '北京→沈阳往返机票', invoiceNo: '' },
 ])
+
+const curBudget = computed(() => budgets.value.find((b) => b.id === form.budgetId) || budgets.value[0] || null)
+const projectLabel = computed(() => {
+  const b = curBudget.value
+  return b ? `项目 #${b.project_id} · ${b.mode} · 批复 ¥${num(b.total_approved).toLocaleString('zh-CN')}` : '—'
+})
 
 const totalAmount = computed(() => lines.value.reduce((a, l) => a + (Number(l.amount) || 0), 0))
 
-function addLine() { lines.value.push({ id: lineSeq++, subjectId: form.subjectId, amount: 0, note: '' }) }
+function addLine() { lines.value.push({ id: lineSeq++, subjectId: form.subjectId, amount: 0, note: '', invoiceNo: '' }) }
 function removeLine(id: number) { lines.value = lines.value.filter((l) => l.id !== id) }
 function simulateOcr() {
   addLine()
@@ -60,28 +67,39 @@ function simulateOcr() {
 
 // 水位条：used/planned
 function waterPct(l: BudgetLine) {
-  const planned = num(l.amountPlanned)
-  return planned ? Math.min(100, Math.round((num(l.amountUsed) / planned) * 100)) : 0
+  const planned = num(l.amount_planned)
+  return planned ? Math.min(100, Math.round((num(l.amount_used) / planned) * 100)) : 0
+}
+function subjectName(sid: number) {
+  return subjects.value.find((s) => s.id === sid)?.name || ('科目 #' + sid)
 }
 const STATUS_META: Record<string, { tag: string; cls: string }> = {
   PAID: { tag: '已支付', cls: 'ok' }, VOUCHER_SYNCED: { tag: '已支付', cls: 'ok' },
   HUMAN_REVIEW: { tag: '财务复核', cls: 'info' }, AI_REVIEW: { tag: 'AI 预审', cls: 'info' },
-  SUBMITTED: { tag: '出纳待付', cls: 'info' },
-  RETURNED: { tag: '财务复核', cls: 'warn' }, REJECTED: { tag: 'AI 驳回', cls: 'bad' },
+  SUBMITTED: { tag: '待审批', cls: 'info' }, UNDER_REVIEW: { tag: '审批中', cls: 'info' },
+  APPROVED: { tag: '已批准', cls: 'ok' },
+  RETURNED: { tag: '已退回', cls: 'warn' }, REJECTED: { tag: '已驳回', cls: 'bad' },
   DRAFT: { tag: '草稿', cls: 'warn' },
 }
 
 async function load() {
   loading.value = true
   try {
-    const [subs, w, rec] = await Promise.all([
-      api.get<Subject[]>('/subjects', { category: 'DIRECT' }).catch(() => [] as Subject[]),
-      api.get<BudgetLine[]>('/budgets/8801/lines').catch(() => [] as BudgetLine[]),
-      list<ExpenseRow>('/expenses', { applicantUserId: 1001, size: 4 }).catch(() => ({ rows: [] as ExpenseRow[], total: 0 })),
+    const [subs, bud, rec] = await Promise.all([
+      api.get<{ list: Subject[] }>('/subjects').catch(() => null),
+      list<Budget>('/budgets', { status: 'EXECUTING', size: 10 }).catch(() => ({ rows: [] as Budget[], total: 0 })),
+      list<ExpenseRow>('/expenses', { size: 4 }).catch(() => ({ rows: [] as ExpenseRow[], total: 0 })),
     ])
-    subjects.value = Array.isArray(subs) ? subs.filter((s) => s.isLeaf !== false) : []
+    subjects.value = subs?.list ?? []
+    budgets.value = bud.rows ?? []
+    if (!form.budgetId && budgets.value.length) form.budgetId = budgets.value[0].id
     if (!form.subjectId && subjects.value.length) form.subjectId = subjects.value[0].id
-    water.value = Array.isArray(w) ? w : []
+    if (form.budgetId) {
+      const w = await api.get<{ list: BudgetLine[] }>(`/budgets/${form.budgetId}/lines`).catch(() => null)
+      water.value = w?.list ?? []
+    } else {
+      water.value = []
+    }
     recent.value = rec.rows ?? []
   } catch (e: any) {
     toast('数据加载失败：' + (e?.message || e))
@@ -91,30 +109,45 @@ async function load() {
 }
 onMounted(load)
 
+async function switchBudget() {
+  if (!form.budgetId) { water.value = []; return }
+  loading.value = true
+  try {
+    const w = await api.get<{ list: BudgetLine[] }>(`/budgets/${form.budgetId}/lines`).catch(() => null)
+    water.value = w?.list ?? []
+  } finally { loading.value = false }
+}
+
 async function submit() {
   if (submitting.value) return
+  const b = curBudget.value
+  if (!b) { toast('暂无执行中的预算，无法提交报销'); return }
   if (!totalAmount.value) { toast('请至少填写一条报销明细'); return }
   submitting.value = true
   try {
     const subject = subjects.value.find((s) => s.id === form.subjectId)
+    const invNo = lines.value.map((l) => l.invoiceNo.trim()).find(Boolean) || null
     const payload = {
-      projectId: form.projectId,
-      budgetLineId: subject ? subject.id : null,
+      project_id: b.project_id,
+      legal_entity_id: b.legal_entity_id,
+      budget_line_id: water.value.find((w) => w.subject_id === form.subjectId)?.id ?? null,
       amount: totalAmount.value.toFixed(2),
-      expenseType: TYPE_BY_SUBJECT[subject?.name || ''] || 'OTHER',
-      submitMode: '预算制',
+      expense_type: TYPE_BY_SUBJECT[subject?.name || ''] || 'OTHER',
+      submit_mode: b.mode || '预算制',
       description: form.reason,
-      invoiceIds: lines.value.map((_, i) => 9004412317 + i),
+      invoice_no: invNo,
+      invoice_date: form.invoiceDate || null,
     }
-    const created = await api.post<{ id: number; code: string }>('/expenses', payload)
+    const created = await api.post<{ id: number; code: string | null }>('/expenses', payload)
     const expenseId = created?.id
     if (expenseId) {
-      await api.post(`/expenses/${expenseId}/submit`).catch(() => null)
+      await api.post(`/expenses/${expenseId}/submit`).catch((e) => toast('提交待审失败：' + (e?.message || e)))
       aiResult.value = await api.post<AiReviewResult>('/expense/ai-invoice-review', {
-        expenseId, invoiceIds: payload.invoiceIds,
+        expense_id: expenseId, invoice_ids: lines.value.map((_, i) => 9004412317 + i),
       }).catch(() => null)
+      toast(`报销单已提交（单号 ${created?.code || '#' + expenseId}）· 审批链已路由，待科研管理岗审批`)
+      await load()
     }
-    toast(`报销单已提交，AI 预审…${created?.code ? '（' + created.code + '）' : ''}`)
   } catch (e: any) {
     toast('提交失败：' + (e?.message || e))
   } finally {
@@ -137,7 +170,7 @@ function saveDraft() { toast('草稿已保存，可在「我的报销」继续�
     <div class="grid g21">
       <!-- 左：报销信息 -->
       <div class="card">
-        <div class="card-h"><h4>报销信息</h4><span class="mono" style="font-size:11px;color:var(--ink-mute)">单号 EXP-2026-1204（草稿）</span></div>
+        <div class="card-h"><h4>报销信息</h4><span class="mono" style="font-size:11px;color:var(--ink-mute)">{{ projectLabel }}</span></div>
         <div class="card-b">
           <div class="expense-drop" @click="simulateOcr">
             <div class="big-ic">🧾</div>
@@ -165,7 +198,10 @@ function saveDraft() { toast('草稿已保存，可在「我的报销」继续�
                 </select>
                 <div class="money-input" style="width:150px"><input type="number" v-model.number="l.amount" placeholder="0.00"></div>
               </div>
-              <input v-model="l.note" placeholder="事由 / 发票号" style="padding:6px 8px;border:1px solid var(--line);border-radius:4px;font-size:11px;color:var(--ink-mute)">
+              <div style="display:flex;gap:8px">
+                <input v-model="l.note" placeholder="事由说明" style="flex:1;padding:6px 8px;border:1px solid var(--line);border-radius:4px;font-size:11px;color:var(--ink-mute)">
+                <input v-model="l.invoiceNo" placeholder="发票号（选填）" style="width:150px;padding:6px 8px;border:1px solid var(--line);border-radius:4px;font-size:11px;color:var(--ink-mute)">
+              </div>
             </div>
             <span class="tag ai" v-if="l.amount > 20000">AI 合规 0.97</span>
             <span class="tag warn" v-else-if="l.amount > 0">AI 提示 0.82</span>
@@ -175,9 +211,10 @@ function saveDraft() { toast('草稿已保存，可在「我的报销」继续�
           <!-- 主表单 -->
           <div class="form-grid" style="margin-top:6px">
             <div class="fg">
-              <label>归属项目 <em>*</em></label>
-              <select v-model.number="form.projectId">
-                <option v-for="p in PROJECTS" :key="p.id" :value="p.id">{{ p.label }}</option>
+              <label>预算（执行中） <em>*</em></label>
+              <select v-model.number="form.budgetId" @change="switchBudget">
+                <option v-if="!budgets.length" :value="null">暂无执行中预算</option>
+                <option v-for="b in budgets" :key="b.id" :value="b.id">{{ b.code || '预算 #' + b.id }} · 项目 {{ b.project_id }} · {{ b.mode }}</option>
               </select>
             </div>
             <div class="fg">
@@ -192,10 +229,8 @@ function saveDraft() { toast('草稿已保存，可在「我的报销」继续�
               <input :value="totalAmount.toLocaleString('zh-CN', { minimumFractionDigits: 2 })" readonly>
             </div>
             <div class="fg">
-              <label>支付方式</label>
-              <select v-model="form.payMethod">
-                <option v-for="m in PAY_METHODS" :key="m" :value="m">{{ m }}</option>
-              </select>
+              <label>发票日期</label>
+              <input type="date" v-model="form.invoiceDate">
             </div>
             <div class="fg" style="grid-column:span 2">
               <label>事由说明 <em>*</em></label>
@@ -228,7 +263,7 @@ function saveDraft() { toast('草稿已保存，可在「我的报销」继续�
           <div v-if="loading"><div class="bar"><i style="width:20%"></i></div></div>
           <div v-for="l in water" :key="l.id">
             <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px">
-              <span>{{ l.subjectName }}</span>
+              <span>{{ subjectName(l.subject_id) }}</span>
               <b class="mono" :style="{ color: waterPct(l) >= 75 ? 'var(--warn)' : undefined }">{{ waterPct(l) }}%</b>
             </div>
             <div class="bar" :class="waterPct(l) >= 75 ? 'b-warn' : 'b-ok'"><i :style="{ width: waterPct(l) + '%' }"></i></div>
