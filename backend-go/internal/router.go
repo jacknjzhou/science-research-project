@@ -6,6 +6,7 @@ import (
 	"github.com/casbin/casbin/v2"
 	"github.com/eplugger/ark/internal/config"
 	"github.com/eplugger/ark/internal/modules/activity"
+	"github.com/eplugger/ark/internal/modules/output"
 	"github.com/eplugger/ark/internal/modules/p"
 	"github.com/eplugger/ark/internal/modules/performance"
 	"github.com/eplugger/ark/internal/modules/project"
@@ -59,6 +60,7 @@ func Build(d RouterDeps) *gin.Engine {
 		activity.Register(api, activity.NewHandler(d.Pool))
 		performance.Register(api, performance.NewHandler(d.Pool))
 		project.Register(api, project.NewHandler(d.Pool))
+		output.Register(api, output.NewHandler(d.Pool))
 	}
 
 	// 兜底：命中契约但未手工实现的路由 → passthrough（NoRoute 不经分组中间件，M0 可接受）
