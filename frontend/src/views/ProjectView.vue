@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import type { CSSProperties } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, list } from '@/api/client'
@@ -179,10 +179,116 @@ function switchTab(key: TabKey) {
   tab.value = key
   ensureTab(key)
 }
+// —— 发起变更向导（E-07，契约 POST /project/{id}/change-request）——
+// 后端 changeRequestBody 为 snake_case：change_type/old_value/new_value/reason；
+// 响应 ToAPIChangeRequest：status/approval_status/impact_analysis/conflict_flag。
+interface ChangeRequestResult {
+  id: number; code?: string | null; status: string; approval_status?: string
+  change_type: string; reason?: string | null
+  impact_analysis?: { budgetDiff?: any[]; milestoneImpact?: any[]; resignTaskBook?: boolean } | null
+  conflict_flag?: number
+  [k: string]: any
+}
+type ChangeType = 'DELAY' | 'BUDGET' | 'MEMBER' | 'TITLE' | 'SCOPE'
+const CHANGE_TYPES: { key: ChangeType; label: string; desc: string }[] = [
+  { key: 'DELAY', label: '项目延期', desc: '调整结题日期' },
+  { key: 'BUDGET', label: '预算调整', desc: '科目间调剂批复金额' },
+  { key: 'MEMBER', label: '成员变更', desc: '课题组人员增删' },
+  { key: 'TITLE', label: '题目变更', desc: '修改项目名称' },
+  { key: 'SCOPE', label: '范围变更', desc: '调整研究内容与考核指标' },
+]
+const changeOpen = ref(false)
+const changeType = ref<ChangeType | ''>('')
+const changeReason = ref('')
+const changeSubmitting = ref(false)
+const changeResult = ref<ChangeRequestResult | null>(null)
+const changeError = ref('')
+// 动态表单字段（按类型取用）
+const fEnd = ref('')            // DELAY：新结题日期
+const fNewTitle = ref('')       // TITLE
+const fSubject = ref('')        // BUDGET：科目（默认取第一个经费用行）
+const fAmount = ref('')         // BUDGET：新批复金额（万元）
+const fMemberAction = ref<'ADD' | 'REMOVE'>('ADD')
+const fMemberName = ref('')
+const fMemberRole = ref('参与人员')
+const fScope = ref('')          // SCOPE
+
+function openChange() {
+  changeType.value = ''
+  changeReason.value = ''
+  changeResult.value = null
+  changeError.value = ''
+  fEnd.value = (detail.value?.end_date || '').slice(0, 10)
+  fNewTitle.value = detail.value?.title || ''
+  fSubject.value = detail.value?.funding_lines?.[0]?.subject || '设备费'
+  fAmount.value = ''
+  fMemberAction.value = 'ADD'
+  fMemberName.value = ''
+  fMemberRole.value = '参与人员'
+  fScope.value = ''
+  changeOpen.value = true
+}
+const changeReady = computed(() => {
+  switch (changeType.value) {
+    case 'DELAY': return !!fEnd.value
+    case 'TITLE': return !!fNewTitle.value.trim() && fNewTitle.value.trim() !== detail.value?.title
+    case 'BUDGET': return !!fSubject.value && !!fAmount.value && !isNaN(Number(fAmount.value))
+    case 'MEMBER': return !!fMemberName.value.trim()
+    case 'SCOPE': return !!fScope.value.trim()
+    default: return false
+  }
+})
+function buildChangePayload(): { change_type: string; old_value: any; new_value: any; reason: string } | null {
+  const d = detail.value
+  switch (changeType.value) {
+    case 'DELAY':
+      return { change_type: 'DELAY', old_value: { end_date: d?.end_date || null }, new_value: { end_date: fEnd.value }, reason: changeReason.value }
+    case 'BUDGET': {
+      const line = (d?.funding_lines || []).find((f) => f.subject === fSubject.value)
+      return { change_type: 'BUDGET', old_value: { subject: fSubject.value, approved: line?.approved ?? null }, new_value: { subject: fSubject.value, approved: String(Number(fAmount.value)) }, reason: changeReason.value }
+    }
+    case 'MEMBER':
+      return { change_type: 'MEMBER', old_value: { members: d?.members || [] }, new_value: { action: fMemberAction.value, name: fMemberName.value.trim(), role: fMemberRole.value }, reason: changeReason.value }
+    case 'TITLE':
+      return { change_type: 'TITLE', old_value: { title: d?.title || '' }, new_value: { title: fNewTitle.value.trim() }, reason: changeReason.value }
+    case 'SCOPE':
+      return { change_type: 'SCOPE', old_value: { scope: '见申报书/任务书' }, new_value: { scope: fScope.value.trim() }, reason: changeReason.value }
+  }
+  return null
+}
+async function submitChange() {
+  if (!changeReady.value || changeSubmitting.value || !id) return
+  changeSubmitting.value = true
+  changeError.value = ''
+  try {
+    const payload = buildChangePayload()!
+    const res = await api.post<ChangeRequestResult>(`/project/${id}/change-request`, payload)
+    changeResult.value = res
+    toast(`变更申请已提交（单号 ${res.code || res.id}，状态 ${res.status}）`)
+  } catch (e: any) {
+    changeError.value = e?.message || String(e)
+  } finally {
+    changeSubmitting.value = false
+  }
+}
+const CHANGE_STATUS_TEXT: Record<string, string> = {
+  SUBMITTED: '已提交 · 待审批', APPROVING: '审批中（两级）', EFFECTIVE: '已生效', APPROVED: '已通过', REJECTED: '已驳回',
+}
+function changeTagCls(s?: string) {
+  if (s === 'EFFECTIVE' || s === 'APPROVED') return 'ok'
+  if (s === 'REJECTED') return 'bad'
+  return 'warn'
+}
+
 onMounted(async () => {
   await loadDetail()
   ensureTab(tab.value)
+  window.addEventListener('keydown', onKey)
 })
+onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+function onKey(e: KeyboardEvent) {
+  if (e.key === 'Escape' && changeOpen.value) changeOpen.value = false
+}
 </script>
 
 <template>
@@ -197,7 +303,7 @@ onMounted(async () => {
       </div>
       <div style="display:flex;gap:10px">
         <button class="btn ghost" @click="$router.push({ name: 'expense' })">＋ 发起报销</button>
-        <button class="btn" @click="toast('变更申请向导（演示）')">发起变更</button>
+        <button class="btn" @click="openChange">发起变更</button>
       </div>
     </div>
 
@@ -356,8 +462,134 @@ onMounted(async () => {
   <section class="view on" v-else>
     <div class="card"><div class="card-b" style="padding:36px;text-align:center;color:var(--ink-mute)">{{ loading ? '项目加载中…' : '项目不存在或无权访问' }}</div></div>
   </section>
+
+  <!-- 发起变更向导（teleport 到 body，遮罩点击/ESC 关闭；已提交展示回执与影响分析） -->
+  <teleport to="body">
+    <div class="ch-mask" v-if="changeOpen" @click.self="changeOpen = false" @keydown.esc="changeOpen = false">
+      <div class="ch-modal" role="dialog" aria-label="发起变更">
+        <header class="ch-head">
+          <h3>发起变更申请</h3>
+          <button class="ch-x" @click="changeOpen = false" aria-label="关闭">×</button>
+        </header>
+
+        <!-- 已提交：回执 -->
+        <div class="ch-body" v-if="changeResult">
+          <div class="ch-receipt">
+            <div class="ch-receipt-line">
+              <span class="tag" :class="changeTagCls(changeResult.status)">{{ CHANGE_STATUS_TEXT[changeResult.status] || changeResult.status }}</span>
+              <b class="mono">单号 {{ changeResult.code || changeResult.id }}</b>
+            </div>
+            <p class="ch-tip" v-if="changeResult.status === 'SUBMITTED' || changeResult.status === 'APPROVING'">
+              已进入逐级审批流，通过后{{ changeResult.change_type === 'DELAY' ? '结题日期' : changeResult.change_type === 'BUDGET' ? '预算' : changeResult.change_type === 'MEMBER' ? '成员' : '相关信息' }}将自动同步更新（E-USR-09）。
+            </p>
+            <div class="alert-line b-add" v-if="changeResult.conflict_flag === 1">
+              ⚠ <b>预算冲突：</b>该预算变更与实际支出冲突，审批通过后将被阻止生效并回退。
+            </div>
+            <template v-if="changeResult.impact_analysis">
+              <h4 class="ch-sec">影响分析</h4>
+              <div class="alert-line b-add" v-if="changeResult.impact_analysis.resignTaskBook">需重新签订任务书，请在审批通过后更新归档文档。</div>
+              <table class="tbl" v-if="(changeResult.impact_analysis?.budgetDiff || []).length">
+                <thead><tr><th v-for="(v, k) in changeResult.impact_analysis!.budgetDiff![0]" :key="k">{{ k }}</th></tr></thead>
+                <tbody><tr v-for="(row, i) in changeResult.impact_analysis!.budgetDiff" :key="i"><td class="mono" v-for="(v, k) in row" :key="k">{{ v }}</td></tr></tbody>
+              </table>
+              <ul class="ch-impact" v-if="(changeResult.impact_analysis?.milestoneImpact || []).length">
+                <li v-for="(m, i) in changeResult.impact_analysis!.milestoneImpact" :key="i">{{ m.name || m.milestone || JSON.stringify(m) }}<template v-if="m.effect || m.impact"> · {{ m.effect || m.impact }}</template></li>
+              </ul>
+              <p class="ch-tip" v-if="!(changeResult.impact_analysis?.budgetDiff || []).length && !(changeResult.impact_analysis?.milestoneImpact || []).length && !changeResult.impact_analysis?.resignTaskBook">本次变更无经费/里程碑影响。</p>
+            </template>
+            <footer class="ch-foot">
+              <button class="btn ghost" @click="changeResult = null">再发一条</button>
+              <button class="btn" @click="changeOpen = false">完成</button>
+            </footer>
+          </div>
+        </div>
+
+        <!-- 表单 -->
+        <div class="ch-body" v-else>
+          <div class="lbl" style="margin-bottom:8px">变更类型</div>
+          <div class="ch-types">
+            <button class="ch-type" :class="{ on: changeType === t.key }" v-for="t in CHANGE_TYPES" :key="t.key" type="button" @click="changeType = t.key">
+              <b>{{ t.label }}</b><span>{{ t.desc }}</span>
+            </button>
+          </div>
+
+          <template v-if="changeType">
+            <div class="ch-form">
+              <template v-if="changeType === 'DELAY'">
+                <div class="ch-field"><label>当前结题日期</label><span class="mono">{{ detail?.end_date || '—' }}</span></div>
+                <div class="ch-field"><label>变更后结题日期 *</label><input type="date" v-model="fEnd" /></div>
+              </template>
+              <template v-if="changeType === 'TITLE'">
+                <div class="ch-field"><label>当前题目</label><span>{{ detail?.title }}</span></div>
+                <div class="ch-field"><label>变更后题目 *</label><input type="text" v-model="fNewTitle" placeholder="请输入新的项目题目" /></div>
+              </template>
+              <template v-if="changeType === 'BUDGET'">
+                <div class="ch-field"><label>预算科目 *</label>
+                  <!-- funding_lines 为视图扩展字段，真后端可能为空：用输入框 + datalist 建议 -->
+                  <input list="ch-subjects" type="text" v-model="fSubject" placeholder="如：设备费 / 材料费 / 差旅费" />
+                  <datalist id="ch-subjects">
+                    <option v-for="f in (detail?.funding_lines || [])" :key="f.subject" :value="f.subject">{{ f.subject }}（批复 {{ f.approved }}）</option>
+                  </datalist>
+                </div>
+                <div class="ch-field"><label>变更后批复金额（万元） *</label><input type="number" min="0" step="0.01" v-model="fAmount" placeholder="如 95.00" /></div>
+              </template>
+              <template v-if="changeType === 'MEMBER'">
+                <div class="ch-field"><label>操作 *</label>
+                  <span class="ch-radio">
+                    <label><input type="radio" value="ADD" v-model="fMemberAction" /> 添加成员</label>
+                    <label><input type="radio" value="REMOVE" v-model="fMemberAction" /> 移除成员</label>
+                  </span>
+                </div>
+                <div class="ch-field"><label>姓名 *</label><input type="text" v-model="fMemberName" placeholder="成员姓名" /></div>
+                <div class="ch-field" v-if="fMemberAction === 'ADD'"><label>角色</label>
+                  <select v-model="fMemberRole"><option>参与人员</option><option>子课题负责人</option><option>财务联络员</option></select>
+                </div>
+              </template>
+              <template v-if="changeType === 'SCOPE'">
+                <div class="ch-field"><label>变更后研究内容与考核指标 *</label><textarea rows="4" v-model="fScope" placeholder="说明调整后的研究范围、技术路线与考核指标"></textarea></div>
+              </template>
+              <div class="ch-field"><label>变更原因 *</label><textarea rows="3" v-model="changeReason" placeholder="请说明变更缘由（将随审批单送审）"></textarea></div>
+            </div>
+            <p class="ch-tip">提交后系统自动生成影响分析并进入逐级审批；审批通过前原配置不变。</p>
+            <p class="ch-err" v-if="changeError">{{ changeError }}</p>
+            <footer class="ch-foot">
+              <button class="btn ghost" @click="changeOpen = false">取消</button>
+              <button class="btn" :disabled="!changeReady || changeSubmitting" @click="submitChange">{{ changeSubmitting ? '提交中…' : '提交变更申请' }}</button>
+            </footer>
+          </template>
+        </div>
+      </div>
+    </div>
+  </teleport>
 </template>
 
 <style scoped>
 .gauge .in span { text-transform: uppercase; }
+
+/* —— 发起变更向导弹层 —— */
+.ch-mask { position: fixed; inset: 0; background: rgba(28,25,23,.45); backdrop-filter: blur(2px); z-index: 90; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.ch-modal { width: min(680px, 94vw); max-height: 88vh; overflow: auto; background: var(--paper); border: 1px solid var(--line-hard); border-radius: 6px; box-shadow: 0 18px 50px rgba(28,25,23,.25); }
+.ch-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px 12px; border-bottom: 1px solid var(--line); }
+.ch-head h3 { margin: 0; font-family: var(--serif); font-size: 17px; }
+.ch-x { border: none; background: none; font-size: 22px; line-height: 1; cursor: pointer; color: var(--ink-mute); }
+.ch-body { padding: 18px 20px 20px; }
+.ch-types { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 16px; }
+.ch-type { display: flex; flex-direction: column; gap: 3px; padding: 10px 8px; border: 1px solid var(--line); border-radius: 4px; background: transparent; cursor: pointer; text-align: center; font-family: inherit; }
+.ch-type b { font-size: 13px; }
+.ch-type span { font-size: 10px; color: var(--ink-mute); }
+.ch-type.on { border-color: var(--seal); background: rgba(194,64,44,.06); box-shadow: inset 0 0 0 1px var(--seal); }
+.ch-form { display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px; }
+.ch-field { display: flex; flex-direction: column; gap: 5px; }
+.ch-field > label { font-size: 12px; color: var(--ink-mute); }
+.ch-field input, .ch-field select, .ch-field textarea { border: 1px solid var(--line-hard); border-radius: 4px; padding: 8px 10px; font: inherit; font-size: 13px; background: var(--paper); color: var(--ink); }
+.ch-field textarea { resize: vertical; }
+.ch-radio { display: flex; gap: 18px; font-size: 13px; }
+.ch-radio label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.ch-tip { font-size: 12px; color: var(--ink-mute); margin: 10px 0 0; }
+.ch-err { font-size: 12px; color: var(--bad); margin: 8px 0 0; }
+.ch-sec { margin: 14px 0 8px; font-size: 13px; }
+.ch-impact { margin: 8px 0 0; padding-left: 18px; font-size: 12px; line-height: 1.9; }
+.ch-receipt-line { display: flex; align-items: center; gap: 12px; }
+.ch-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+@media (max-width: 720px) { .ch-types { grid-template-columns: repeat(2, 1fr); } }
 </style>

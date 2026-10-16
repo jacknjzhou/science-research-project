@@ -1,8 +1,10 @@
 -- name: CreateChangeRequest :one
+-- 变更申请提交即送审：status=SUBMITTED（DRAFT 无法进入审批流——
+-- approve 仅接受 SUBMITTED/APPROVING），approval_status 走默认 PENDING。
 INSERT INTO E_CHANGE_REQUEST
   (code, tenant_id, status, creator_id, project_id, change_type, old_value, new_value, reason)
 VALUES
-  (sqlc.arg('code')::text, sqlc.arg('tenant_id')::bigint, 'DRAFT',
+  (sqlc.arg('code')::text, sqlc.arg('tenant_id')::bigint, 'SUBMITTED',
    sqlc.arg('creator_id')::bigint, sqlc.arg('project_id')::bigint, sqlc.arg('change_type')::text,
    sqlc.narg('old_value')::jsonb, sqlc.narg('new_value')::jsonb, sqlc.narg('reason')::text)
 RETURNING *;

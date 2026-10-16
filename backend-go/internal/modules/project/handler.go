@@ -2,6 +2,7 @@ package project
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -247,6 +248,7 @@ func (h *Handler) CreateMidCheck(c *gin.Context) {
 
 type changeRequestBody struct {
 	ChangeType string          `json:"change_type" binding:"required"`
+	Code       *string         `json:"code"`
 	OldValue   json.RawMessage `json:"old_value"`
 	NewValue   json.RawMessage `json:"new_value"`
 	Reason     *string         `json:"reason"`
@@ -265,8 +267,16 @@ func (h *Handler) CreateChangeRequest(c *gin.Context) {
 		httpx.WriteErr(c, 404, 40401, "项目不存在")
 		return
 	}
+	// code 有 (tenant_id, code) WHERE deleted=0 唯一索引：调用方未指定时生成唯一单号，
+	// 否则第二条 code='' 即撞 uk_e_change_code（50002）。
+	code := ""
+	if b.Code != nil && *b.Code != "" {
+		code = *b.Code
+	} else {
+		code = fmt.Sprintf("CR-%s-%06d", time.Now().Format("20060102"), time.Now().UnixNano()%1000000)
+	}
 	r, err := h.q.CreateChangeRequest(c, estore.CreateChangeRequestParams{
-		Code: "", TenantID: d.TenantID, CreatorID: d.UserID, ProjectID: projectID,
+		Code: code, TenantID: d.TenantID, CreatorID: d.UserID, ProjectID: projectID,
 		ChangeType: b.ChangeType, OldValue: jsonOrNil(b.OldValue), NewValue: jsonOrNil(b.NewValue),
 		Reason: b.Reason,
 	})
