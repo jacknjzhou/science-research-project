@@ -111,9 +111,36 @@ function open(p: EProject) {
   router.push({ name: 'project', params: { id: p.id } })
 }
 function pick(v: 'card' | 'list' | 'gantt') {
-  viewMode.value = 'card'
-  if (v !== 'card') toast(v === 'list' ? '表格视图（演示）' : '甘特视图见项目详情')
+  viewMode.value = v
 }
+
+// —— 列表视图 ——
+const STATUS_ZH: Record<string, string> = {
+  EXECUTING: '在研', MID_CHECK: '中检', CHANGING: '变更中', CLOSED: '已结题', APPROVED: '已立项',
+}
+
+// —— 甘特视图：时间轴取列表项目 min(start) ~ max(end)，条按起止定位，今日线标注 ——
+const gantt = computed(() => {
+  const items = projects.value.filter((p) => p.start_date && p.end_date)
+  if (!items.length) return null
+  const t = (d: string) => new Date(d).getTime()
+  const min = Math.min(...items.map((p) => t(p.start_date!)))
+  const max = Math.max(...items.map((p) => t(p.end_date!)))
+  const span = Math.max(1, max - min)
+  const now = Date.now()
+  const todayPct = now <= min ? 0 : now >= max ? 100 : ((now - min) / span) * 100
+  const bars = items.map((p) => ({
+    p,
+    leftPct: ((t(p.start_date!) - min) / span) * 100,
+    widthPct: Math.max(1.5, ((t(p.end_date!) - t(p.start_date!)) / span) * 100),
+    active: now >= t(p.start_date!) && now <= t(p.end_date!),
+  }))
+  const fmtMonth = (ts: number) => {
+    const d = new Date(ts)
+    return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}`
+  }
+  return { bars, todayPct, axis: [0, 25, 50, 75, 100].map((pct) => ({ pct, label: fmtMonth(min + (span * pct) / 100) })) }
+})
 </script>
 
 <template>
@@ -125,8 +152,8 @@ function pick(v: 'card' | 'list' | 'gantt') {
       </div>
       <div style="display:flex;gap:8px">
         <span class="chip" :class="{ on: viewMode === 'card' }" @click="pick('card')">卡片</span>
-        <span class="chip" @click="pick('list')">列表</span>
-        <span class="chip" @click="pick('gantt')">甘特</span>
+        <span class="chip" :class="{ on: viewMode === 'list' }" @click="pick('list')">列表</span>
+        <span class="chip" :class="{ on: viewMode === 'gantt' }" @click="pick('gantt')">甘特</span>
       </div>
     </div>
 
@@ -142,7 +169,56 @@ function pick(v: 'card' | 'list' | 'gantt') {
       <div class="card-b" style="padding:36px;text-align:center;color:var(--ink-mute)">暂无在研项目</div>
     </div>
 
-    <template v-else>
+    <!-- 列表视图 -->
+    <div v-else-if="viewMode === 'list'" class="card" style="overflow:auto;min-width:0">
+      <table class="tbl" style="border-collapse:collapse;font-size:13px;table-layout:fixed;width:100%">
+        <thead>
+          <tr style="text-align:left">
+            <th style="width:16%">编号</th>
+            <th style="width:30%">项目名称</th>
+            <th style="width:10%">状态</th>
+            <th style="width:8%;text-align:center">健康度</th>
+            <th style="width:16%" class="num">经费执行</th>
+            <th style="width:12%">起止</th>
+            <th style="width:8%">风险</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="p in projects" :key="p.id" style="cursor:pointer" @click="open(p)">
+            <td class="mono">{{ p.code || '—' }}</td>
+            <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="p.title">{{ p.title }}</td>
+            <td><span class="tag" :class="p.status === 'CLOSED' ? 'muted' : 'ok'">{{ STATUS_ZH[p.status] || p.status }}</span></td>
+            <td style="text-align:center" :class="healthCls(p)">{{ p.health_score }}</td>
+            <td class="mono num">{{ wan(p.spent_amount) }}万 / {{ wan(p.received_amount) }}万 · {{ execPct(p) }}%</td>
+            <td class="mono" style="font-size:12px">{{ ym(p.start_date) }}–{{ ym(p.end_date) }}</td>
+            <td>{{ p.risk_level }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 甘特视图 -->
+    <div v-else-if="viewMode === 'gantt' && gantt" class="card">
+      <div class="card-b" style="padding:16px">
+        <div class="g-axis">
+          <span v-for="a in gantt.axis" :key="a.pct" class="mono g-tick" :style="{ left: a.pct + '%' }">{{ a.label }}</span>
+        </div>
+        <div class="g-body" style="position:relative">
+          <div class="g-today" :style="{ left: gantt.todayPct + '%' }"><i>今日</i></div>
+          <div v-for="b in gantt.bars" :key="b.p.id" class="g-row" @click="open(b.p)" :title="b.p.title">
+            <div class="g-name" :style="b.p.status === 'CLOSED' ? 'opacity:.55' : undefined">{{ b.p.title }}</div>
+            <div class="g-track">
+              <div class="g-bar" :class="{ done: b.p.status === 'CLOSED' }" :style="{ left: b.leftPct + '%', width: b.widthPct + '%' }">
+                <span class="mono">{{ b.p.status === 'CLOSED' ? '已结题' : b.active ? '进行中' : '未开始' }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div v-else-if="viewMode === 'gantt'" class="card"><div class="card-b" style="color:var(--ink-mute)">当前页项目缺少起止日期，无法绘制甘特图</div></div>
+
+    <template v-else-if="viewMode === 'card'">
       <div class="grid g3">
         <div
           class="card proj-card"
@@ -198,4 +274,19 @@ function pick(v: 'card' | 'list' | 'gantt') {
 .pager { display:flex; align-items:center; gap:14px; justify-content:center; margin-top:18px; }
 .pg-info { font-size:12px; color:var(--ink-mute); }
 .pager .btn:disabled { opacity:.4; cursor:not-allowed; }
+.num { text-align:right; }
+.tbl tbody tr:hover { background:rgba(0,0,0,.03); }
+.tag.muted { background:#f0f0f0; color:#666; }
+/* —— 甘特视图 —— */
+.g-axis { position:relative; height:20px; margin-left:220px; border-bottom:1px dashed var(--line-hard, #d8d2c4); }
+.g-tick { position:absolute; transform:translateX(-50%); font-size:11px; color:var(--ink-mute); top:2px; }
+.g-body { padding:10px 0 4px; }
+.g-row { display:flex; align-items:center; gap:10px; padding:7px 0; cursor:pointer; }
+.g-row:hover .g-bar { filter:brightness(1.08); }
+.g-name { width:210px; flex:none; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.g-track { position:relative; flex:1; min-width:0; height:22px; background:repeating-linear-gradient(90deg, transparent, transparent calc(25% - 1px), var(--line, #eee) calc(25% - 1px), var(--line, #eee) 25%); border-radius:4px; }
+.g-bar { position:absolute; top:3px; height:16px; border-radius:8px; background:var(--seal, #8b2e2e); color:#fff; font-size:10px; line-height:16px; padding:0 8px; overflow:hidden; white-space:nowrap; }
+.g-bar.done { background:var(--ink-mute, #999); }
+.g-today { position:absolute; top:6px; bottom:6px; width:2px; background:var(--ai, #7a5cff); z-index:1; }
+.g-today i { position:absolute; top:-16px; left:-12px; font-size:10px; font-style:normal; color:var(--ai, #7a5cff); }
 </style>
