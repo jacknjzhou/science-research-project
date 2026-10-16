@@ -50,6 +50,34 @@ func injectDomain(c *gin.Context) {
 	c.Next()
 }
 
+// injectDomainWithRoles 指定角色注入（管理员全量视角用例）。
+func injectDomainWithRoles(roles ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Set(auth.CtxTenantID, int64(1))
+		c.Set(auth.CtxUserID, int64(1001))
+		c.Set(auth.CtxRoles, roles)
+		c.Next()
+	}
+}
+
+func newTestEngineWithRoles(t *testing.T, roles []string) *gin.Engine {
+	t.Helper()
+	u := os.Getenv("ARK_TEST_DATABASE_URL")
+	if u == "" {
+		t.Skip("未设置 ARK_TEST_DATABASE_URL")
+	}
+	pool, err := db.Connect(context.Background(), u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gin.SetMode(gin.TestMode)
+	e := gin.New()
+	e.Use(httpx.TraceID(), injectDomainWithRoles(roles...))
+	api := e.Group("/api/v1")
+	Register(api, NewHandler(pool))
+	return e
+}
+
 func newTestEngine(t *testing.T) *gin.Engine {
 	t.Helper()
 	u := os.Getenv("ARK_TEST_DATABASE_URL")
@@ -96,5 +124,45 @@ func TestGetProject_404WhenMissing(t *testing.T) {
 	e.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/project/999999999", nil))
 	if w.Code != 404 {
 		t.Fatalf("期望 404，实得 %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestListMyProjects_AdminSeesAll：R-ADMIN 全量视角——total 应等于租户全部未删项目数，
+// 且不少于纯 PI 视角（1001 名下）的 total。
+func TestListMyProjects_AdminSeesAll(t *testing.T) {
+	pool, err := db.Connect(context.Background(), os.Getenv("ARK_TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	var dbTotal int64
+	if err := pool.QueryRow(context.Background(),
+		"SELECT count(*) FROM e_project WHERE tenant_id=1 AND deleted=0").Scan(&dbTotal); err != nil {
+		t.Fatal(err)
+	}
+
+	fetchTotal := func(e *gin.Engine) int64 {
+		w := httptest.NewRecorder()
+		e.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/project/mine?page=1&size=50", nil))
+		if w.Code != 200 {
+			t.Fatalf("HTTP %d body=%s", w.Code, w.Body.String())
+		}
+		var env struct {
+			Data struct {
+				Total int64 `json:"total"`
+			} `json:"data"`
+		}
+		_ = json.Unmarshal(w.Body.Bytes(), &env)
+		return env.Data.Total
+	}
+
+	staffTotal := fetchTotal(newTestEngine(t))
+	adminTotal := fetchTotal(newTestEngineWithRoles(t, []string{"R-ADMIN"}))
+
+	if adminTotal != dbTotal {
+		t.Fatalf("admin total=%d 应等于库内未删项目数 %d", adminTotal, dbTotal)
+	}
+	if adminTotal < staffTotal {
+		t.Fatalf("admin total=%d 不应少于 PI 视角 total=%d", adminTotal, staffTotal)
 	}
 }

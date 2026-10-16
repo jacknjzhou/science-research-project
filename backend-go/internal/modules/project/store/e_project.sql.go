@@ -11,14 +11,15 @@ import (
 
 const countMyProjects = `-- name: CountMyProjects :one
 SELECT count(*) FROM E_PROJECT
-WHERE deleted = 0 AND pi_user_id = $1::bigint
+WHERE deleted = 0
+  AND ($1::bigint IS NULL OR pi_user_id = $1::bigint)
   AND ($2::text IS NULL OR status = $2::text)
   AND ($3::text IS NULL OR project_type = $3::text)
   AND ($4::text IS NULL OR title ILIKE ('%'||$4::text||'%'))
 `
 
 type CountMyProjectsParams struct {
-	PiUserID    int64   `json:"pi_user_id"`
+	PiUserID    *int64  `json:"pi_user_id"`
 	Status      *string `json:"status"`
 	ProjectType *string `json:"project_type"`
 	Kw          *string `json:"kw"`
@@ -79,7 +80,8 @@ func (q *Queries) GetProject(ctx context.Context, id int64) (Project, error) {
 
 const listMyProjects = `-- name: ListMyProjects :many
 SELECT id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, application_id, title, project_type, pi_user_id, member_ids, department_id, legal_entity_id, start_date, end_date, actual_end_date, total_budget, received_amount, spent_amount, health_score, risk_level, ethics_case_id, policy_pack_id, security_level, category_id FROM E_PROJECT
-WHERE deleted = 0 AND pi_user_id = $1::bigint
+WHERE deleted = 0
+  AND ($1::bigint IS NULL OR pi_user_id = $1::bigint)
   AND ($2::text IS NULL OR status = $2::text)
   AND ($3::text IS NULL OR project_type = $3::text)
   AND ($4::text IS NULL OR title ILIKE ('%'||$4::text||'%'))
@@ -88,7 +90,7 @@ LIMIT $6::int OFFSET $5::int
 `
 
 type ListMyProjectsParams struct {
-	PiUserID    int64   `json:"pi_user_id"`
+	PiUserID    *int64  `json:"pi_user_id"`
 	Status      *string `json:"status"`
 	ProjectType *string `json:"project_type"`
 	Kw          *string `json:"kw"`
@@ -96,6 +98,7 @@ type ListMyProjectsParams struct {
 	Limit       int32   `json:"limit_"`
 }
 
+// pi_user_id 为 NULL（R-ADMIN 全量视角）时不过滤 PI，返回租户全部未删项目。
 func (q *Queries) ListMyProjects(ctx context.Context, arg ListMyProjectsParams) ([]Project, error) {
 	rows, err := q.db.Query(ctx, listMyProjects,
 		arg.PiUserID,

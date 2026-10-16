@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { list } from '@/api/client'
+import { auth } from '@/api/auth'
 import { toNum, toWan } from '@/utils/money'
 
 // 字段对齐后端 mapper.go ToAPIProject（snake_case，NUMERIC→string）。
@@ -27,6 +28,9 @@ interface EProject {
 
 const toast = (m: string) => (window as any).toast?.(m)
 const router = useRouter()
+
+// 管理员全量视角：后端 /project/mine 对 R-ADMIN 返回租户全部项目
+const isAdmin = computed(() => auth.roles.includes('R-ADMIN'))
 
 const projects = ref<EProject[]>([])
 const total = ref(0)
@@ -147,8 +151,9 @@ const gantt = computed(() => {
   <section class="view on" id="v-projects">
     <div class="page-head">
       <div>
-        <div class="page-title">我的<em>项目</em></div>
-        <div class="page-sub">在研 {{ counts.active }} · 中检 {{ counts.mid }} · 已结题 {{ counts.closed }} · 健康度每日刷新</div>
+        <div class="page-title" v-if="isAdmin">全部<em>项目</em></div>
+        <div class="page-title" v-else>我的<em>项目</em></div>
+        <div class="page-sub">{{ isAdmin ? '管理员视角：显示系统内全部项目 · ' : '' }}在研 {{ counts.active }} · 中检 {{ counts.mid }} · 已结题 {{ counts.closed }} · 健康度每日刷新</div>
       </div>
       <div style="display:flex;gap:8px">
         <span class="chip" :class="{ on: viewMode === 'card' }" @click="pick('card')">卡片</span>

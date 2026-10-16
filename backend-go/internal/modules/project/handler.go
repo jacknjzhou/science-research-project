@@ -75,14 +75,19 @@ func jsonOrNil(b []byte) []byte {
 // ---------- 读端点 ----------
 
 // ListMyProjects 契约 GET /project/mine：PI 视角的项目分页。
+// R-ADMIN 全量视角：pi_user_id 传 NULL → 返回租户全部未删项目（管理员应看到所有信息）。
 func (h *Handler) ListMyProjects(c *gin.Context) {
 	d := auth.DomainFrom(c)
 	page, size, limit, offset := pageArgs(c)
 	status := optQuery(c, "status")
 	ptype := optQuery(c, "project_type")
 	kw := optQuery(c, "kw")
+	var pi *int64
+	if !hasRole(d.Roles, "R-ADMIN") {
+		pi = &d.UserID
+	}
 	rows, err := h.q.ListMyProjects(c, estore.ListMyProjectsParams{
-		PiUserID: d.UserID, Status: status, ProjectType: ptype, Kw: kw,
+		PiUserID: pi, Status: status, ProjectType: ptype, Kw: kw,
 		Limit: limit, Offset: offset,
 	})
 	if err != nil {
@@ -90,13 +95,23 @@ func (h *Handler) ListMyProjects(c *gin.Context) {
 		return
 	}
 	total, _ := h.q.CountMyProjects(c, estore.CountMyProjectsParams{
-		PiUserID: d.UserID, Status: status, ProjectType: ptype, Kw: kw,
+		PiUserID: pi, Status: status, ProjectType: ptype, Kw: kw,
 	})
 	list := make([]map[string]any, 0, len(rows))
 	for _, r := range rows {
 		list = append(list, ToAPIProject(r))
 	}
 	httpx.WriteOK(c, gin.H{"list": list, "total": total, "page": page, "size": size})
+}
+
+// hasRole 判定角色列表是否含指定角色。
+func hasRole(roles []string, want string) bool {
+	for _, r := range roles {
+		if r == want {
+			return true
+		}
+	}
+	return false
 }
 
 // GetProject 契约 GET /project/{id}：单个项目详情。

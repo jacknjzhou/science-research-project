@@ -1,6 +1,8 @@
 -- name: ListMyProjects :many
+-- pi_user_id 为 NULL（R-ADMIN 全量视角）时不过滤 PI，返回租户全部未删项目。
 SELECT * FROM E_PROJECT
-WHERE deleted = 0 AND pi_user_id = sqlc.arg('pi_user_id')::bigint
+WHERE deleted = 0
+  AND (sqlc.narg('pi_user_id')::bigint IS NULL OR pi_user_id = sqlc.narg('pi_user_id')::bigint)
   AND (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
   AND (sqlc.narg('project_type')::text IS NULL OR project_type = sqlc.narg('project_type')::text)
   AND (sqlc.narg('kw')::text IS NULL OR title ILIKE ('%'||sqlc.narg('kw')::text||'%'))
@@ -9,7 +11,8 @@ LIMIT sqlc.arg('limit_')::int OFFSET sqlc.arg('offset_')::int;
 
 -- name: CountMyProjects :one
 SELECT count(*) FROM E_PROJECT
-WHERE deleted = 0 AND pi_user_id = sqlc.arg('pi_user_id')::bigint
+WHERE deleted = 0
+  AND (sqlc.narg('pi_user_id')::bigint IS NULL OR pi_user_id = sqlc.narg('pi_user_id')::bigint)
   AND (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
   AND (sqlc.narg('project_type')::text IS NULL OR project_type = sqlc.narg('project_type')::text)
   AND (sqlc.narg('kw')::text IS NULL OR title ILIKE ('%'||sqlc.narg('kw')::text||'%'));
