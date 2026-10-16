@@ -13,6 +13,7 @@ import (
 	"github.com/eplugger/ark/internal/platform/db"
 	"github.com/eplugger/ark/internal/platform/migrate"
 	"github.com/eplugger/ark/internal/platform/oapi"
+	"github.com/eplugger/ark/internal/platform/seeddemo"
 	"github.com/eplugger/ark/internal/platform/storage"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -40,6 +41,16 @@ func main() {
 	// 2) 迁移到最新（golang-migrate 拥有 schema，取代 Node 时代 postgres initdb）
 	if err := migrate.Up(cfg.DatabaseURL, cfg.MigrationsDir); err != nil {
 		l.Fatal("数据库迁移失败", zap.Error(err))
+	}
+
+	// 2.5) 演示数据播种（ARK_SEED_DEMO=1 时执行；幂等，事务原子）
+	if cfg.SeedDemo {
+		sctx, scancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := seeddemo.Apply(sctx, pool); err != nil {
+			l.Fatal("演示数据播种失败", zap.Error(err))
+		}
+		scancel()
+		l.Info("演示数据播种完成（或已存在跳过）")
 	}
 
 	// 3) Casbin RBAC enforcer

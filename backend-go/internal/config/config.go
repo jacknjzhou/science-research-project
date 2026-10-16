@@ -26,6 +26,7 @@ type Config struct {
 	LLMAPIKey      string
 	LLMModel       string
 	LLMTimeoutSec  int
+	SeedDemo       bool
 }
 
 func get(key, def string) string {
@@ -66,5 +67,6 @@ func Load() *Config {
 		LLMAPIKey:      os.Getenv("ARK_LLM_API_KEY"),
 		LLMModel:       get("ARK_LLM_MODEL", "gpt-4o-mini"),
 		LLMTimeoutSec:  getInt("ARK_LLM_TIMEOUT_SEC", 30),
+		SeedDemo:       get("ARK_SEED_DEMO", "") == "1" || get("ARK_SEED_DEMO", "") == "true",
 	}
 }

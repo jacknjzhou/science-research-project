@@ -437,3 +437,28 @@ p, R-LEADER,  /api/v1/applications/*/approve,         POST
 p, R-STAFF,   /api/v1/apply-plans,                    GET
 p, R-STAFF,   /api/v1/apply-plans/*,                  GET
 p, R-STAFF,   /api/v1/apply-plans/*/applications,     POST
+
+# ---- T8 通知中心 + T20 任务中心/站内消息（全员个人功能；R-ADMIN/R-AUDITOR 已由通配覆盖） ----
+p, R-STAFF,   /api/v1/notifications,          GET
+p, R-STAFF,   /api/v1/notifications/*,        POST
+p, R-STAFF,   /api/v1/tasks,                  GET
+p, R-STAFF,   /api/v1/messages,               GET
+p, R-STAFF,   /api/v1/messages,               POST
+p, R-MANAGER, /api/v1/notifications,          GET
+p, R-MANAGER, /api/v1/notifications/*,        POST
+p, R-MANAGER, /api/v1/tasks,                  GET
+p, R-MANAGER, /api/v1/messages,               GET
+p, R-MANAGER, /api/v1/messages,               POST
+p, R-LEADER,  /api/v1/notifications,          GET
+p, R-LEADER,  /api/v1/notifications/*,        POST
+p, R-LEADER,  /api/v1/tasks,                  GET
+p, R-LEADER,  /api/v1/messages,               GET
+p, R-LEADER,  /api/v1/messages,               POST
+p, R-FINANCE, /api/v1/notifications,          GET
+p, R-FINANCE, /api/v1/notifications/*,        POST
+p, R-FINANCE, /api/v1/tasks,                  GET
+p, R-FINANCE, /api/v1/messages,               GET
+p, R-STAFF,   /api/v1/tasks/*,                GET
+p, R-MANAGER, /api/v1/tasks/*,                GET
+p, R-LEADER,  /api/v1/tasks/*,                GET
+p, R-FINANCE, /api/v1/tasks/*,                GET

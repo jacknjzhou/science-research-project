@@ -29,6 +29,8 @@ services:
       ARK_LLM_API_KEY: ${ARK_LLM_API_KEY:-}
       ARK_LLM_MODEL: ${ARK_LLM_MODEL:-gpt-4o-mini}
       ARK_LLM_TIMEOUT_SEC: ${ARK_LLM_TIMEOUT_SEC:-30}
+      # 演示数据播种：空库启动时自动写入 DEMO- 前缀演示数据（幂等；测试/生产可置 0 关闭）
+      ARK_SEED_DEMO: ${ARK_SEED_DEMO:-1}
       # DESIGN_DIR / ARK_MIGRATIONS_DIR / ARK_AUTH_* 已在镜像 ENV 内烘好，此处可覆盖
     ports:
       - "8787:8787"                  # 便于宿主机直调 API；仅经 nginx 访问前端时可删

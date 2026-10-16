@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { api } from '@/api/client'
+import { auth } from '@/api/auth'
 
 interface MetricValue {
   code: string; name: string; unit: string; version: number
@@ -64,8 +65,12 @@ async function load() {
   }
 }
 onMounted(() => {
-  load()
-  loadSummary()
+  // 未认证时挂载（登录页覆盖期）不发无 token 请求（401 白打）；认证就绪后由 watch 触发
+  if (auth.isAuthed) { load(); loadSummary() }
+})
+// 登录成功（含登录页覆盖期挂载的场景）后自动加载数据与今日待办
+watch(() => auth.isAuthed, (ok) => {
+  if (ok) { load(); loadSummary() }
 })
 </script>
 
