@@ -3,6 +3,7 @@ package p
 import (
 	"encoding/json"
 	"strconv"
+	"time"
 
 	"github.com/eplugger/ark/internal/modules/p/store"
 	"github.com/eplugger/ark/internal/platform/auth"
@@ -112,4 +113,113 @@ func optQuery(c *gin.Context, k string) *string {
 		return &v
 	}
 	return nil
+}
+
+// ---- 申报指南（P-02）-------------------------------------------------------
+
+func (h *Handler) ListGuidelines(c *gin.Context) {
+	d := auth.DomainFrom(c)
+	page, size, limit, offset := pageArgs(c)
+	params := store.ListGuidelinesParams{
+		TenantID:    d.TenantID,
+		Status:      optQuery(c, "status"),
+		ProjectType: optQuery(c, "project_type"),
+		Keyword:     optQuery(c, "keyword"),
+		Offset:      offset, Limit: limit,
+	}
+	rows, err := h.q.ListGuidelines(c, params)
+	if err != nil {
+		httpx.WriteErr(c, 500, 50001, "查询失败")
+		return
+	}
+	total, _ := h.q.CountGuidelines(c, store.CountGuidelinesParams{
+		TenantID: d.TenantID, Status: params.Status, ProjectType: params.ProjectType, Keyword: params.Keyword,
+	})
+	list := make([]map[string]any, 0, len(rows))
+	for _, r := range rows {
+		list = append(list, ToAPIGuideline(r))
+	}
+	httpx.WriteOK(c, gin.H{"list": list, "total": total, "page": page, "size": size})
+}
+
+func (h *Handler) GetGuideline(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	r, err := h.q.GetGuideline(c, id)
+	if err != nil {
+		httpx.WriteErr(c, 404, 40401, "记录不存在")
+		return
+	}
+	httpx.WriteOK(c, ToAPIGuideline(r))
+}
+
+// UpsertGuideline POST /apply/guidelines —— 按 (tenant_id, code) upsert；契约仅
+// R-MANAGER/R-ADMIN 可写（policy 由 /api/v1/apply/* POST 现有规则覆盖）。
+func (h *Handler) UpsertGuideline(c *gin.Context) {
+	d := auth.DomainFrom(c)
+	var body struct {
+		Code              string           `json:"code" binding:"required"`
+		Title             string           `json:"title" binding:"required"`
+		ProjectType       string           `json:"project_type" binding:"required"`
+		Status            string           `json:"status"`
+		FundingSource     *string          `json:"funding_source"`
+		Remark            *string          `json:"remark"`
+		ContentRich       *string          `json:"content_rich"`
+		TotalEnvelope     *string          `json:"total_envelope"`
+		ApplyStartAt      *time.Time       `json:"apply_start_at"`
+		ApplyEndAt        *time.Time       `json:"apply_end_at"`
+		TargetDisciplines json.RawMessage  `json:"target_disciplines"`
+		AttachmentIds     json.RawMessage  `json:"attachment_ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		httpx.WriteErr(c, 400, 40001, "请求参数错误")
+		return
+	}
+	status := body.Status
+	if status == "" {
+		status = "DRAFT"
+	}
+	if status != "DRAFT" && status != "PUBLISHED" && status != "CLOSED" {
+		httpx.WriteErr(c, 400, 40002, "status 非法")
+		return
+	}
+	td := body.TargetDisciplines
+	if len(td) == 0 {
+		td = json.RawMessage("[]")
+	}
+	atts := body.AttachmentIds
+	if len(atts) == 0 {
+		atts = json.RawMessage("[]")
+	}
+	var envelope pgtype.Numeric
+	if body.TotalEnvelope != nil && *body.TotalEnvelope != "" {
+		if err := envelope.Scan(*body.TotalEnvelope); err != nil {
+			httpx.WriteErr(c, 400, 40002, "总盘子金额格式错误")
+			return
+		}
+	}
+	ts := func(t *time.Time) pgtype.Timestamptz {
+		if t == nil {
+			return pgtype.Timestamptz{}
+		}
+		return pgtype.Timestamptz{Time: *t, Valid: true}
+	}
+	// publish_at：首次以 PUBLISHED 落库时取当前时刻；否则由 DB 冲突分支保留首publish。
+	var publishAt pgtype.Timestamptz
+	if status == "PUBLISHED" {
+		publishAt = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
+	}
+	r, err := h.q.UpsertGuideline(c, store.UpsertGuidelineParams{
+		TenantID: d.TenantID, Code: &body.Code, Status: status,
+		CreatorID: d.UserID, ModifierID: &d.UserID,
+		Title: body.Title, ProjectType: body.ProjectType,
+		FundingSource: body.FundingSource, Remark: body.Remark, ContentRich: body.ContentRich,
+		TargetDisciplines: td, AttachmentIds: atts,
+		ApplyStartAt: ts(body.ApplyStartAt), ApplyEndAt: ts(body.ApplyEndAt),
+		TotalEnvelope: envelope, PublishAt: publishAt,
+	})
+	if err != nil {
+		httpx.WriteErr(c, 500, 50002, "保存失败")
+		return
+	}
+	httpx.WriteOK(c, ToAPIGuideline(r))
 }

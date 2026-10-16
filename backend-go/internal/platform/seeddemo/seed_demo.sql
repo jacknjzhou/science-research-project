@@ -1,6 +1,6 @@
 -- seed_demo.sql · 演示数据播种（env ARK_SEED_DEMO=1 时由 cmd/server 启动执行；非 migration）
 -- 幂等：e_project 已有 DEMO- 前缀项目则整体跳过。租户 1；用户引用按 username 定位（admin=PI 兼岗、manager、staff、finance）。
--- 数据覆盖：法人 ×2 / 项目分类 ×2 / 科目 ×4 / 项目 ×4 / 任务 ×4 / 里程碑 ×3 / 预算+行 / 到账 / 成果 ×5 / 申报计划+申报单 ×2。
+-- 数据覆盖：法人 ×2 / 项目分类 ×2 / 科目 ×4 / 项目 ×4 / 任务 ×4 / 里程碑 ×3 / 预算+行 / 到账 / 成果 ×5 / 申报计划+申报单 ×2 / 申报指南 ×6。
 DO $seed$
 DECLARE
   uid_admin   bigint;
@@ -192,3 +192,84 @@ BEGIN
   VALUES (1, ap1, '大型风电叶片磨抛机器人系统关键技术研究', 1200000.00, uid_manager, 'COLLEGE_PASSED');
 END
 $seed$;
+
+-- 第二块：申报指南（独立幂等护栏——已有 DEMO 项目时第一块整体 RETURN，
+-- 指南增量补种仍可执行；用户按 username 重新定位，不依赖第一块变量）。
+DO $seedgl$
+DECLARE
+  uid_manager bigint;
+BEGIN
+  IF EXISTS (SELECT 1 FROM p_guideline WHERE code LIKE 'DEMO-GL-%') THEN
+    RETURN;
+  END IF;
+  SELECT id INTO uid_manager FROM sys_user WHERE username='manager' AND tenant_id=1;
+
+  -- 申报指南 ×6：PUBLISHED 窗口内 ×4 / 未开始 ×1 / 已截止 CLOSED ×1
+  INSERT INTO p_guideline (tenant_id, code, status, creator_id, title, project_type, funding_source,
+                           target_disciplines, apply_start_at, apply_end_at, total_envelope, content_rich, remark, publish_at)
+  VALUES (1, 'DEMO-GL-001', 'PUBLISHED', uid_manager,
+          '2026 年度国家自然科学基金 · 面上项目 / 青年科学基金', 'NSFC', '国家自然科学基金委员会',
+          jsonb_build_array(jsonb_build_object('code','ME','label','机械工程'), jsonb_build_object('code','ROBOT','label','机器人学')),
+          CURRENT_DATE - 45, CURRENT_DATE + 12, 500000.00,
+          '## 支持方向' || chr(10) ||
+          '面向机械工程与机器人学前沿，优先支持：磨抛/装配等作业机器人的力位混合控制、复杂曲面自适应加工工艺、机器人化智能装备研制。' || chr(10) || chr(10) ||
+          '## 资助强度' || chr(10) ||
+          '面上项目 ≤ 50 万元/项，青年科学基金 ≤ 30 万元/项，研究期限 3 年。' || chr(10) || chr(10) ||
+          '## 申报条件' || chr(10) ||
+          '1. 具有高级专业技术职务或博士学位；' || chr(10) ||
+          '2. 在研+申请国家级项目总数 ≤ 2 项（限项要求）；' || chr(10) ||
+          '3. 涉及生命/医学内容的须完成伦理前置审查。' || chr(10) || chr(10) ||
+          '## 材料要求' || chr(10) ||
+          '申请书通过院级申报计划（2026 年度国家自然科学基金申报）提交，经形式审查 → 学院推荐 → 校级汇总三级流程报送基金委。',
+          '在研+申请 ≤ 2；需伦理前置', now() - INTERVAL '45 days'),
+         (1, 'DEMO-GL-002', 'PUBLISHED', uid_manager,
+          '「智能机器人」重点专项 2026 年度第三批公开申报（揭榜挂帅）', 'KJBP', '科学技术部',
+          jsonb_build_array(jsonb_build_object('code','ROBOT','label','机器人学')),
+          CURRENT_DATE - 30, CURRENT_DATE + 24, 240000000.00,
+          '## 榜单任务' || chr(10) ||
+          '本批次围绕工业机器人核心部件、特种机器人整机与应用示范方向发布 8 项榜单任务，专项总盘子 2.4 亿元。' || chr(10) || chr(10) ||
+          '## 组织形式' || chr(10) ||
+          '揭榜挂帅：须由企业牵头组建产学研联合体，研究院可作为联合单位承担关键技术攻关任务。' || chr(10) || chr(10) ||
+          '## 预算要求' || chr(10) ||
+          '预算制管理，间接费用比例不超过直接费用扣除设备购置费后的 20%。',
+          '需牵头单位资质 · 间接费用 20%', now() - INTERVAL '30 days'),
+         (1, 'DEMO-GL-003', 'PUBLISHED', uid_manager,
+          '启元研究院 2026 年度「探索者计划」自立项目（第三批）', 'ZIGE', '院科研管理部',
+          jsonb_build_array(jsonb_build_object('code','AI','label','人工智能')),
+          CURRENT_DATE - 25, CURRENT_DATE + 2, 800000.00,
+          '## 定位' || chr(10) ||
+          '面向 35 岁以下青年研究人员设立的自由探索类项目，鼓励原创性、非共识选题。' || chr(10) || chr(10) ||
+          '## 资助强度' || chr(10) ||
+          '单项 ≤ 80 万元，经费包干制（免编明细预算），研究期限 2 年。' || chr(10) || chr(10) ||
+          '## 申报方式' || chr(10) ||
+          '通过院级申报计划提交一页纸建议书 + 3 页技术路线；AI 起草的申报内容须按 PRD 8.1 标注 AI 起草水印。',
+          '包干制 · 面向 35 岁以下', now() - INTERVAL '25 days'),
+         (1, 'DEMO-GL-004', 'PUBLISHED', uid_manager,
+          '企业横向委托 · 复杂曲面智能磨抛产线联合攻关', 'HENGXIANG', '某高端装备集团',
+          jsonb_build_array(jsonb_build_object('code','ME','label','机械工程')),
+          CURRENT_DATE - 15, CURRENT_DATE + 16, 3600000.00,
+          '## 委托背景' || chr(10) ||
+          '委托方产线存在曲面磨抛一致性差、人工打磨占比高两大痛点，拟联合攻关自适应磨抛工艺与产线集成。' || chr(10) || chr(10) ||
+          '## 合同要点' || chr(10) ||
+          '合同金额 360 万元，分三期到账；需签署技术协议与保密条款，知识产权按贡献比例共享。' || chr(10) || chr(10) ||
+          '## 走向提示' || chr(10) ||
+          '横向课题走合同审批流（P-18），立项后自动生成合同台账与经费到账计划。',
+          '横向 · 走合同审批', now() - INTERVAL '15 days'),
+         (1, 'DEMO-GL-005', 'PUBLISHED', uid_manager,
+          '省重点研发（产业政策引导）2026 年度 · 高端装备专项', 'PROV', '省工业和信息化厅',
+          jsonb_build_array(jsonb_build_object('code','ME','label','机械工程')),
+          CURRENT_DATE + 5, CURRENT_DATE + 40, 1500000.00,
+          '## 支持方向' || chr(10) ||
+          '高端装备专项聚焦智能成套装备、关键基础件两类方向，单项 ≤ 150 万元，省市配套 1:1。' || chr(10) || chr(10) ||
+          '## 申报条件' || chr(10) ||
+          '需产学研联合体（企业牵头或参与），自筹经费比例不低于 50%。',
+          '配套 1:1 · 需产学研联合体', now() - INTERVAL '5 days'),
+         (1, 'DEMO-GL-006', 'CLOSED', uid_manager,
+          '省自然科学基金 2027 年度集中接收（创新研究群体 / 重点项目）', 'PROV', '省科技厅',
+          jsonb_build_array(jsonb_build_object('code','AI','label','人工智能')),
+          CURRENT_DATE - 120, CURRENT_DATE - 20, 3000000.00,
+          '## 说明' || chr(10) ||
+          '本批次已截止。重点 ≤ 100 万元/项，创新研究群体 300 万元/项。形式审查由科研办统一办理，下一批次预计 2027 年 3 月开放。',
+          '已截止 · 下一批次 2027-03', now() - INTERVAL '120 days');
+END
+$seedgl$;

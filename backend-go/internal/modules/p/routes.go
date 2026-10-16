@@ -10,6 +10,11 @@ import "github.com/gin-gonic/gin"
 // 这里直接在 r 上以 /apply 相对路径注册三条路由——当 r 为 *RouterGroup(基础路径 /api/v1) 时，
 // 实际整路径同样是 /api/v1/apply/...，且继承该分组的鉴权/幂等中间件，行为与 Group("/apply") 完全一致。
 func Register(r gin.IRoutes, h *Handler) {
+	// 申报指南（P-02）
+	r.GET("/apply/guidelines", h.ListGuidelines)
+	r.POST("/apply/guidelines", h.UpsertGuideline)
+	r.GET("/apply/guidelines/:id", h.GetGuideline)
+	// 申报书（P-05）
 	r.GET("/apply/applications", h.ListApplications)
 	r.POST("/apply/applications", h.CreateApplication)
 	r.GET("/apply/applications/:id", h.GetApplication)

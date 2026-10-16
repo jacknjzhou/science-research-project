@@ -89,3 +89,28 @@ func TestListApplications_ConformsToContract(t *testing.T) {
 		t.Fatalf("响应 data 不合契约: %v", errs)
 	}
 }
+
+// TestListGuidelines_ConformsToContract 需要 Postgres：校验指南列表响应对契约合规。
+func TestListGuidelines_ConformsToContract(t *testing.T) {
+	u := os.Getenv("ARK_TEST_DATABASE_URL")
+	if u == "" {
+		t.Skip("未设置 ARK_TEST_DATABASE_URL")
+	}
+	e := newGuidelineTestEngine(t)
+	spec := mustSpec(t)
+	op := spec.Find("GET", "/apply/guidelines")
+	if op == nil {
+		t.Fatal("未找到 GET /apply/guidelines")
+	}
+	dataSchema := oapi.ResolveDataSchema(op)
+
+	w := httptest.NewRecorder()
+	e.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/apply/guidelines", nil))
+	var env map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &env)
+
+	errs := oapi.Validate(env["data"], dataSchema)
+	if len(errs) > 0 {
+		t.Fatalf("指南列表响应不合契约: %v", errs)
+	}
+}
