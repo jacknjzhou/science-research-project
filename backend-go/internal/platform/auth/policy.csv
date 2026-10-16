@@ -245,6 +245,13 @@ p, R-ADMIN,   /api/v1/borrows/*,                    GET
 p, R-AUDITOR, /api/v1/archives/*,                   GET
 p, R-AUDITOR, /api/v1/documents/search,             GET
 
+# ---- 页面可见性矩阵授予的读兜底（PRD 2.9 配套）----
+# 管理员把档案页授予 R-STAFF（矩阵在线配置）后，页面内列表/检索读接口须可达，
+# 否则页面可达但数据必然报错；写动作仍限管理/主管（不在此列即 403 兜底）。
+p, R-STAFF,   /api/v1/archives,                     GET
+p, R-STAFF,   /api/v1/archives/*,                   GET
+p, R-STAFF,   /api/v1/documents/search,             GET
+
 # ---- 每个已认证角色都能读自身身份/能力（前端登录后引导依赖）----
 p, R-STAFF,   /api/v1/auth/me, GET
 p, R-MANAGER, /api/v1/auth/me, GET

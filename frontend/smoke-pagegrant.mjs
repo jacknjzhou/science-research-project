@@ -76,6 +76,23 @@ try {
   if (!(await menuHas(page, '资产与耗材台账'))) fail('finance 菜单未恢复资产页')
   ok('finance 菜单已恢复「资产与耗材台账」')
 
+  // 4) 矩阵授予超越静态表（回归：守卫不得再用静态 meta.roles 硬门禁拦矩阵授权）
+  //    当前矩阵配置：archive 含 R-STAFF、performance 不含 R-STAFF。
+  //    staff 菜单应显示「科研档案」且点击可达；「科研绩效评价」应隐藏。
+  await logout(page)
+  await login(page, 'staff', 'Staff@123456')
+  await page.waitForTimeout(800)
+  if (!(await menuHas(page, '科研档案'))) fail('staff 菜单应显示科研档案（矩阵已授予）')
+  if (await menuHas(page, '科研绩效评价')) fail('staff 菜单不应显示科研绩效评价（矩阵未授予）')
+  await page.locator('.nav-item:has-text("科研档案")').click()
+  await page.waitForTimeout(1500)
+  if (page.url().includes('/forbidden')) fail('矩阵授予的页面被守卫拦到 /forbidden')
+  // 页面内数据接口也须可达（矩阵授予 ⇒ 读兜底），否则页面空报错
+  await page.waitForSelector('.crumb', { timeout: 5000 })
+  const crumb = await page.locator('.crumb').innerText()
+  if (!crumb.includes('科研档案')) fail(`未落在档案页，crumb=${crumb.replace(/\n/g, ' ')}`)
+  ok('staff 点击「科研档案」正常可达（路由 + 页面数据接口均放行）')
+
   console.log('\nSMOKE PASS · 页面可见性矩阵在线配置闭环')
 } finally {
   await browser.close()

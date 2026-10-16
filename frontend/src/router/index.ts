@@ -66,10 +66,10 @@ router.beforeEach(async (to) => {
       return { path: '/dash', query: { needLogin: '1' } }
     }
   }
-  if (to.meta.roles && to.meta.roles.length > 0 && !auth.hasAnyRole(to.meta.roles)) {
-    return { path: '/forbidden' }
-  }
-  // 页面可见性统一判定（PRD 2.9）：在线矩阵优先，grants 不可用时退回静态 meta.roles。
+  // 页面可见性统一判定（PRD 2.9）：在线矩阵为唯一权威（可授可收），
+  // grants 不可用时 canSeePage 内部退回静态 meta.roles fallback——
+  // 不在此处再叠加静态 meta.roles 硬门禁，否则矩阵授予的权限会被旧表拦下，
+  // 出现「菜单在（矩阵判定）、点进去 403（静态判定）」的双镜像错位。
   if (!auth.canSeePage(to.name as string, to.meta.roles)) {
     return { path: '/forbidden' }
   }
