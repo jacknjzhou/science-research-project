@@ -16,6 +16,7 @@ import (
 	"github.com/eplugger/ark/internal/platform/oapi"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // ---------- mapper 测试样例（contract_test.go 用） ----------
@@ -60,7 +61,9 @@ func injectDomainWithRoles(roles ...string) gin.HandlerFunc {
 	}
 }
 
-func newTestEngineWithRoles(t *testing.T, roles []string) *gin.Engine {
+// testPool 统一取测试库连接：未设置 ARK_TEST_DATABASE_URL 时 **skip**（CI 无库单测路径必须安全，
+// 不得 panic/失败）；返回的连接由 t.Cleanup 关闭，避免多引擎用例泄漏连接池。
+func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	u := os.Getenv("ARK_TEST_DATABASE_URL")
 	if u == "" {
@@ -70,6 +73,13 @@ func newTestEngineWithRoles(t *testing.T, roles []string) *gin.Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+func newTestEngineWithRoles(t *testing.T, roles []string) *gin.Engine {
+	t.Helper()
+	pool := testPool(t)
 	gin.SetMode(gin.TestMode)
 	e := gin.New()
 	e.Use(httpx.TraceID(), injectDomainWithRoles(roles...))
@@ -80,14 +90,7 @@ func newTestEngineWithRoles(t *testing.T, roles []string) *gin.Engine {
 
 func newTestEngine(t *testing.T) *gin.Engine {
 	t.Helper()
-	u := os.Getenv("ARK_TEST_DATABASE_URL")
-	if u == "" {
-		t.Skip("未设置 ARK_TEST_DATABASE_URL")
-	}
-	pool, err := db.Connect(context.Background(), u)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pool := testPool(t)
 	gin.SetMode(gin.TestMode)
 	e := gin.New()
 	e.Use(httpx.TraceID(), injectDomain)
@@ -130,11 +133,7 @@ func TestGetProject_404WhenMissing(t *testing.T) {
 // TestListMyProjects_AdminSeesAll：R-ADMIN 全量视角——total 应等于租户全部未删项目数，
 // 且不少于纯 PI 视角（1001 名下）的 total。
 func TestListMyProjects_AdminSeesAll(t *testing.T) {
-	pool, err := db.Connect(context.Background(), os.Getenv("ARK_TEST_DATABASE_URL"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
+	pool := testPool(t)
 	var dbTotal int64
 	if err := pool.QueryRow(context.Background(),
 		"SELECT count(*) FROM e_project WHERE tenant_id=1 AND deleted=0").Scan(&dbTotal); err != nil {
