@@ -5,10 +5,11 @@ import { api, list } from '@/api/client'
 interface AppRow {
   id: number; code?: string; title?: string; project_type?: string; status?: string
   apply_code?: string; pi_name?: string; member_count?: number; duration_months?: number
-  total_budget?: string; updated_at?: string
+  total_budget?: string; updated_at?: string; attachment_ids?: string[]
 }
 interface Doc { section_code: string; content_rich?: string; word_count?: number; doc_version?: number }
 interface BudgetRow {
+  application_id?: number
   subject_code?: string; subject_name: string; amount?: string
   ai_compliance_flag?: string; ai_compliance_reason?: string
 }
@@ -44,9 +45,28 @@ const msgs = ref<Msg[]>([])
 
 const heroSections = computed(() => SECTIONS.filter((s) => s.hero))
 const budgetSection = computed(() => SECTIONS.find((s) => s.budget))
+// 全部可编辑文本节（§1-§8；limit>0 即文本节，§9 附件节除外）
+const textSections = computed(() => SECTIONS.filter((s) => s.limit > 0))
 
-const filled = computed(() => SECTIONS.filter((s) => (contents[s.code] || '').trim().length > 0).length)
+const filled = computed(() => SECTIONS.filter((s) =>
+  s.limit === 0
+    ? (app.value?.attachment_ids?.length ?? 0) > 0
+    : (contents[s.code] || '').trim().length > 0,
+).length)
 const pct = computed(() => Math.round((filled.value / SECTIONS.length) * 100))
+
+// 目录跳转：滚动到对应节并高亮
+function jumpTo(i: number) {
+  activeSection.value = i
+  document.getElementById('sec-' + SECTIONS[i].code)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+// 各节编辑框行高（按字数上限适配）
+function rowsFor(s: SectionMeta): number {
+  if (s.code === 'background') return 7
+  if (s.limit >= 1500) return 5
+  if (s.limit >= 800) return 4
+  return 3
+}
 
 const barCls = computed(() => (pct.value >= 70 ? 'b-ok' : pct.value >= 40 ? 'b-warn' : 'b-bad'))
 const directSum = computed(() => budget.value.reduce((a, b) => a + (Number(b.amount) || 0), 0))
@@ -56,11 +76,14 @@ function wordOf(code: string) {
   return (contents[code] || '').length
 }
 function moneyWan(v?: string) {
-  return v ? (Number(v) / 10000).toFixed(1) : '—'
+  const n = Number(v)
+  if (!v || !isFinite(n)) return '—'
+  return (n / 10000).toFixed(1)
 }
 function percentOf(b: BudgetRow) {
-  if (!b.amount) return '—'
-  return Math.round((Number(b.amount) / baseBudget.value) * 100) + '%'
+  const n = Number(b.amount)
+  if (!b.amount || !isFinite(n)) return '—'
+  return Math.round((n / baseBudget.value) * 100) + '%'
 }
 const FLAG: Record<string, { cls: string; txt: string }> = {
   OK: { cls: 'ok', txt: '✓ 合规' },
@@ -93,7 +116,9 @@ async function load() {
       SECTIONS.forEach((s) => (contents[s.code] = ''))
       ;(docs || []).forEach((d) => { contents[d.section_code] = d.content_rich || '' })
       version.value = Math.max(1, ...(docs || []).map((d) => d.doc_version || 1))
-      budget.value = bud || []
+      // passthrough 兜底的 budget 端点返回样例行（跨申报单），按 application_id 过滤；
+      // 真实预算行端点实现后此过滤无副作用
+      budget.value = (bud || []).filter((b) => !b.application_id || b.application_id === a.id)
       seedChat()
     }
   } catch (e: any) {
@@ -167,9 +192,9 @@ async function saveSection(code: string) {
   }
 }
 async function saveDraft() {
-  await Promise.all(heroSections.value.map((s) => saveSection(s.code)))
+  await Promise.all(textSections.value.map((s) => saveSection(s.code)))
   version.value += 1
-  toast('草稿已保存 v' + version.value)
+  toast('草稿已保存 v' + version.value + '（' + textSections.value.length + ' 节）')
 }
 async function submitPrecheck() {
   if (!app.value) return
@@ -202,7 +227,7 @@ async function submitPrecheck() {
             :class="{ on: i === activeSection }"
             v-for="(s, i) in SECTIONS"
             :key="s.code"
-            @click="activeSection = i"
+            @click="jumpTo(i)"
           >
             {{ s.toc }}<span class="dot" :class="{ filled: (contents[s.code] || '').trim().length > 0 }"></span>
           </div>
@@ -232,33 +257,51 @@ async function submitPrecheck() {
           </div>
           <div class="divider-double"></div>
 
-          <template v-for="s in heroSections" :key="s.code">
-            <h6><span class="sec-no">{{ s.no }}</span>{{ s.label }}</h6>
+          <!-- §1-§8 全部可编辑文本节（§8 预算说明后接预算执行表） -->
+          <template v-for="s in textSections" :key="s.code">
+            <h6 :id="'sec-' + s.code"><span class="sec-no">{{ s.no }}</span>{{ s.label }}</h6>
             <textarea
               class="ed-text"
-              :rows="s.code === 'background' ? 7 : s.code === 'objective' ? 4 : 3"
+              :rows="rowsFor(s)"
               v-model="contents[s.code]"
               :placeholder="s.code === 'content' ? '点击右侧 AI 助手起草本节，或手动输入…' : ''"
               @blur="saveSection(s.code)"
             ></textarea>
             <div class="word-count">{{ wordOf(s.code) }} / {{ s.limit }} 字</div>
+
+            <template v-if="s.budget">
+              <table class="tbl">
+                <thead><tr><th>科目</th><th>金额(万)</th><th>占比</th><th>AI 合规审查</th></tr></thead>
+                <tbody>
+                  <tr v-if="!budget.length"><td colspan="4" style="opacity:.6;padding:14px">暂无预算行——请在「经费概览」或申报计划中编制预算后回填</td></tr>
+                  <tr v-for="(b, i) in budget" :key="i">
+                    <td>{{ b.subject_name }}</td>
+                    <td class="mono">{{ moneyWan(b.amount) }}</td>
+                    <td class="mono">{{ percentOf(b) }}</td>
+                    <td><span class="tag" :class="flagTag(b).cls">{{ flagTag(b).txt }}</span></td>
+                  </tr>
+                </tbody>
+              </table>
+              <div class="compliance-card">⚠ <b>AI 预算检查：</b>劳务费接近占比上限，若后续调增其他科目可能触发超限。依据：《国家自然科学基金资助项目资金管理办法》财教〔2021〕177 号 第十四条。<b style="color:var(--ai);cursor:pointer" @click="toast('查看条款原文（演示）')">查看条款原文 →</b></div>
+            </template>
           </template>
 
-          <template v-if="budgetSection">
-            <h6><span class="sec-no">{{ budgetSection.no }}</span>{{ budgetSection.label }}</h6>
-            <table class="tbl">
-              <thead><tr><th>科目</th><th>金额(万)</th><th>占比</th><th>AI 合规审查</th></tr></thead>
-              <tbody>
-                <tr v-for="(b, i) in budget" :key="i">
-                  <td>{{ b.subject_name }}</td>
-                  <td class="mono">{{ moneyWan(b.amount) }}</td>
-                  <td class="mono">{{ percentOf(b) }}</td>
-                  <td><span class="tag" :class="flagTag(b).cls">{{ flagTag(b).txt }}</span></td>
-                </tr>
-              </tbody>
-            </table>
-            <div class="compliance-card">⚠ <b>AI 预算检查：</b>劳务费接近占比上限，若后续调增其他科目可能触发超限。依据：《国家自然科学基金资助项目资金管理办法》财教〔2021〕177 号 第十四条。<b style="color:var(--ai);cursor:pointer" @click="toast('查看条款原文（演示）')">查看条款原文 →</b></div>
-          </template>
+          <!-- §9 附件材料：清单来自申报单 attachment_ids（线上为对象存储 id；上传走档案库） -->
+          <h6 :id="'sec-attachments'"><span class="sec-no">§9</span>附件材料</h6>
+          <div class="att-list">
+            <div class="att-item" v-for="(a, i) in (app.attachment_ids || [])" :key="i">
+              <span>📎 {{ a }}</span>
+              <button class="btn ghost sm" @click="toast('预览附件（演示）')">预览</button>
+            </div>
+            <div v-if="!(app.attachment_ids || []).length" class="att-empty">
+              暂未上传附件。代表作全文、合作协议、伦理批件等请先在<a style="color:var(--ai);cursor:pointer" @click="$router.push({ name: 'archive' })">科研档案</a>入库，或联系科研秘书上传。
+            </div>
+            <div class="att-check">
+              ◈ <b>形式审查清单</b>：代表作全文 {{ (app.attachment_ids || []).length ? '✓' : '缺' }} ·
+              合作协议 {{ (app.attachment_ids || []).length >= 2 ? '✓' : '缺' }} ·
+              伦理批件 <b style="color:var(--ok)">已关联 ✓</b>
+            </div>
+          </div>
         </div>
 
         <!-- 右侧 AI 面板 -->
@@ -299,4 +342,13 @@ async function submitPrecheck() {
 .ai-bubble.warn { background: var(--paper-deep); }
 .ai-input input:disabled { opacity: 0.6; }
 .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* §9 附件材料 */
+.att-list { border: 1px dashed var(--line-hard); border-radius: 4px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.att-item { display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
+.att-empty { font-size: 12px; color: var(--ink-mute); line-height: 1.8; }
+.att-check { font-size: 12px; border-top: 1px solid var(--line); padding-top: 8px; color: var(--ink-soft); }
+
+/* 目录跳转锚点不被吸顶遮挡 */
+h6[id] { scroll-margin-top: 12px; }
 </style>

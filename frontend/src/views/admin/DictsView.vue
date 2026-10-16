@@ -239,6 +239,15 @@ async function removeItem(it: DictItem) {
   }
 }
 
+// 生效期展示：两端皆空显示 —；单端空显示 …
+function effText(it: DictItem): string {
+  const f = it.effective_from || ''
+  const t = it.effective_to || ''
+  if (!f && !t) return '—'
+  return `${f || '…'} ~ ${t || '…'}`
+}
+const extText = (it: DictItem) => (it.ext ? JSON.stringify(it.ext) : '')
+
 onMounted(reloadDicts)
 </script>
 
@@ -263,9 +272,9 @@ onMounted(reloadDicts)
               :style="{ cursor: 'pointer', background: d.id === activeId ? 'var(--paper-deep)' : '' }">
             <td class="mono">{{ d.code }}</td>
             <td>{{ d.name }}</td>
-            <td style="white-space:nowrap">
-              <button class="btn sm" v-if="canWrite" @click.stop="openDictEdit(d)">编辑</button>
-              <button class="btn sm" v-if="canWrite" @click.stop="removeDict(d)">删</button>
+            <td class="ops">
+              <button class="btn sm mini" v-if="canWrite" @click.stop="openDictEdit(d)">编辑</button>
+              <button class="btn sm mini danger" v-if="canWrite" @click.stop="removeDict(d)">删</button>
             </td>
           </tr>
           <tr v-if="!dicts.length"><td colspan="3" style="opacity:.6;padding:16px">{{ dictLoading ? '加载中…' : '暂无字典' }}</td></tr>
@@ -288,19 +297,20 @@ onMounted(reloadDicts)
           </thead>
           <tbody>
             <tr v-for="(it, idx) in items" :key="it.id" :style="{ opacity: it.active ? 1 : 0.45 }">
-              <td class="mono">
-                <button class="btn sm" :disabled="idx===0" @click="moveItem(it, -1)">↑</button>
-                <button class="btn sm" :disabled="idx===items.length-1" @click="moveItem(it, 1)">↓</button>
+              <td class="sort-cell">
+                <button class="btn sm mini" :disabled="idx===0" :title="idx===0 ? '已在顶部' : '上移'" @click="moveItem(it, -1)">↑</button>
+                <button class="btn sm mini" :disabled="idx===items.length-1" :title="idx===items.length-1 ? '已在底部' : '下移'" @click="moveItem(it, 1)">↓</button>
+                <span class="mono sort-no">{{ it.sort_no }}</span>
               </td>
               <td class="mono">{{ it.item_code }}</td>
               <td>{{ it.item_label }}</td>
-              <td class="mono" style="font-size:11px">{{ it.effective_from || '—' }} ~ {{ it.effective_to || '—' }}</td>
+              <td class="mono eff">{{ effText(it) }}</td>
               <td><span class="tag" :class="it.active ? 'ok' : 'info'">{{ it.active ? '启用' : '停用' }}</span></td>
-              <td class="mono" style="font-size:10px;max-width:160px;overflow:hidden;text-overflow:ellipsis">{{ it.ext ? JSON.stringify(it.ext) : '—' }}</td>
-              <td style="white-space:nowrap">
-                <button class="btn sm" v-if="canWrite" @click="openItemEdit(it)">编辑</button>
-                <button class="btn sm" v-if="canWrite" @click="toggleActive(it)">{{ it.active ? '停用' : '启用' }}</button>
-                <button class="btn sm" v-if="canWrite" @click="removeItem(it)">删</button>
+              <td class="mono ext" :title="extText(it) || ''">{{ extText(it) || '—' }}</td>
+              <td class="ops">
+                <button class="btn sm mini" v-if="canWrite" @click="openItemEdit(it)">编辑</button>
+                <button class="btn sm mini ghost" v-if="canWrite" @click="toggleActive(it)">{{ it.active ? '停用' : '启用' }}</button>
+                <button class="btn sm mini danger" v-if="canWrite" @click="removeItem(it)">删</button>
               </td>
             </tr>
             <tr v-if="!items.length"><td colspan="7" style="opacity:.6;padding:16px">{{ itemsLoading ? '加载中…' : activeId ? '暂无条目' : '← 选择左侧字典' }}</td></tr>
@@ -351,5 +361,21 @@ onMounted(reloadDicts)
 .fld label { font-size: 12px; color: var(--ink-mute); }
 .fld input, .fld textarea { border: 1px solid var(--line-hard); border-radius: 4px; padding: 7px 10px; font: inherit; font-size: 13px; }
 .fld textarea { font-family: var(--mono, monospace); font-size: 12px; }
-.tbl tr:hover td { background: var(--paper-deep); }
+
+/* 表格行内按钮组：压缩为迷你尺寸、强制单行，避免撑破行高/换行错位 */
+.tbl .btn.sm.mini { padding: 2px 8px; font-size: 11px; line-height: 1.5; border-radius: 3px; }
+.tbl .btn.sm.mini.ghost { background: transparent; color: var(--ink); border-color: var(--line-hard); }
+.tbl .btn.sm.mini.danger { background: var(--bad, #a33); border-color: var(--bad, #a33); }
+.sort-cell { white-space: nowrap; }
+.sort-cell .btn { margin-right: 3px; }
+.sort-no { display: inline-block; min-width: 16px; text-align: center; font-size: 10px; color: var(--ink-mute); }
+.eff { font-size: 11px; white-space: nowrap; color: var(--ink-mute); }
+.ext { font-size: 10px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-mute); }
+.ops { white-space: nowrap; }
+.ops .btn + .btn { margin-left: 4px; }
+
+/* 左目录表操作列同样压缩 */
+.tbl tr { height: auto; }
+.tbl td { vertical-align: middle; padding: 8px 10px; }
+.tbl th { padding: 8px 10px; white-space: nowrap; }
 </style>
