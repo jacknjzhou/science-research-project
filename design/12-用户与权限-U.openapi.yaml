@@ -190,6 +190,83 @@ paths:
                         type: object
                         properties:
                           list: { type: array, items: { $ref: '#/components/schemas/Role' } }
+    post:
+      tags: [role]
+      summary: 新增自定义角色（R-ADMIN；is_builtin=FALSE）
+      description: 角色编码租户内唯一；新角色需在 Casbin 策略（policy.csv）中配置 API 授权后方可实际访问接口。
+      operationId: createRole
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, name]
+              properties:
+                code: { type: string, maxLength: 32, description: R- 前缀建议 }
+                name: { type: string, maxLength: 64 }
+      responses:
+        '200':
+          description: 角色
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Role' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /admin/roles/{roleId}:
+    put:
+      tags: [role]
+      summary: 编辑角色名称（R-ADMIN；code 不可变）
+      operationId: updateRole
+      parameters:
+        - { name: roleId, in: path, required: true, schema: { type: integer, format: int64 } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 64 }
+      responses:
+        '200':
+          description: 角色
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Role' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [role]
+      summary: 删除自定义角色（R-ADMIN；内置 409，已绑定用户 409）
+      operationId: deleteRole
+      parameters:
+        - { name: roleId, in: path, required: true, schema: { type: integer, format: int64 } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200':
+          description: 操作结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { type: object, properties: { id: { type: integer, format: int64 }, deleted: { type: boolean } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /admin/users/{id}/roles:
     post:
       tags: [role]

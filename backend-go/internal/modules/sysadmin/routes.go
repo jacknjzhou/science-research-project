@@ -13,6 +13,9 @@ func Register(r gin.IRoutes, h *Handler) {
 	r.PUT("/admin/users/:id", h.UpdateUser)
 	r.DELETE("/admin/users/:id", h.DeleteUser)
 	r.GET("/admin/roles", h.ListRoles)
+	r.POST("/admin/roles", h.CreateRole)
+	r.PUT("/admin/roles/:roleId", h.UpdateRole)
+	r.DELETE("/admin/roles/:roleId", h.DeleteRole)
 	r.POST("/admin/users/:id/roles", h.AssignRole)
 	r.DELETE("/admin/users/:id/roles/:roleId", h.RevokeRole)
 
