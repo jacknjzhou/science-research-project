@@ -141,9 +141,12 @@ async function claimHigh() {
 async function assignProject(c: Output) {
   busy.value = true
   try {
-    // 演示：归属到本人主项目；真实选择器在成果详情/台账中提供。
-    await api.put(`/output/${c.id}/projects`, { project_ids: [90001], relation_type: 'ASSIGNED_TO_PROJECT' })
-    c.project_ids = [90001]
+    // 归属到本人第一个真实项目（mock 时代的 90001 在真后端不存在）
+    const mine = await list<{ id: number }>('/project/mine', { size: 1 })
+    const pid = (mine.rows[0] as { id?: number })?.id
+    if (!pid) { toast('暂无项目，请先完成项目立项'); return }
+    await api.put(`/output/${c.id}/projects`, { project_ids: [pid], relation_type: 'ASSIGNED_TO_PROJECT' })
+    c.project_ids = [pid]
     c.status = 'ASSIGNED_TO_PROJECT'
     toast('已归属项目 ✓')
   } catch (e: any) {

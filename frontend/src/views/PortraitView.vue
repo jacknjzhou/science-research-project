@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { api } from '@/api/client'
+import { auth } from '@/api/auth'
 import { toWan } from '@/utils/money'
 
 interface RadarDimension { dimension: string; value: number; normalized: number }
@@ -16,7 +17,8 @@ interface CollabEdge { staff_a_id: number; staff_b_id: number; weight: number }
 interface CollabGraph { snapshot_date: string; center_staff_id: number; nodes: CollabNode[]; edges: CollabEdge[] }
 
 const toast = (m: string) => (window as any).toast?.(m)
-const STAFF_ID = '90001'
+// 默认展示当前登录用户画像（mock 时代的 90001 已废弃）
+const STAFF_ID = String(auth.user?.id ?? '')
 
 const portrait = ref<PortraitDetail | null>(null)
 const graph = ref<CollabGraph | null>(null)

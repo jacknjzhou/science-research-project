@@ -40,8 +40,9 @@ interface EArchiveChecklist { checklistJson: ChecklistItem[]; requiredCount: num
 
 const toast = (m: string) => (window as any).toast?.(m)
 const route = useRoute()
-// :id? 可选参数缺省时是空串，用 || 回落演示英雄项目
-const id = String(route.params.id || '90001')
+// :id? 可选参数缺省时回落到「我的项目」第一个真实项目；
+// mock 时代的演示 ID 90001 在真后端不存在（404 项目不存在），已废弃。
+let id = String(route.params.id || '')
 
 type TabKey = 'info' | 'mile' | 'fund' | 'member' | 'doc'
 const TABS: { key: TabKey; label: string }[] = [
@@ -130,6 +131,12 @@ const MEMBER_COLORS = ['linear-gradient(135deg,#C2402C,#E0A06A)', 'linear-gradie
 async function loadDetail() {
   loading.value = true
   try {
+    // 路由未带 id：回落到「我的项目」第一个真实项目；空库则保持 detail=null，模板展示空态
+    if (!id) {
+      const mine = await list<{ id: number }>('/project/mine', { size: 1 })
+      id = String((mine.rows[0] as { id?: number })?.id ?? '')
+      if (!id) { loading.value = false; return }
+    }
     const [d, r] = await Promise.all([
       api.get<EProjectDetail>(`/project/${id}`),
       api.get<ERiskWarning[]>(`/project/${id}/risk-warnings`).catch(() => [] as ERiskWarning[]),

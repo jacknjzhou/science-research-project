@@ -81,8 +81,8 @@ async function load() {
   loading.value = true
   try {
     const { rows } = await list<AppRow>('/apply/applications', { status: 'DRAFT', size: 20 })
-    let a = rows[0] || null
-    if (!a) a = (await api.get<AppRow>('/apply/applications/412')) || null
+    // mock 时代的兜底 ID 412 在真后端不存在（404），已移除；无草稿时展示空态
+    const a = rows[0] || null
     if (a) {
       app.value = a
       savedAt.value = fmtTime(a.updated_at)
