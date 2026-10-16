@@ -205,8 +205,10 @@ BEGIN
   SELECT id INTO uid_manager FROM sys_user WHERE username='manager' AND tenant_id=1;
 
   -- 申报指南 ×6：PUBLISHED 窗口内 ×4 / 未开始 ×1 / 已截止 CLOSED ×1
+  -- attachment_ids：参考资料附件（演示用可读文件名；线上应为对象存储 id，O 域回链）
   INSERT INTO p_guideline (tenant_id, code, status, creator_id, title, project_type, funding_source,
-                           target_disciplines, apply_start_at, apply_end_at, total_envelope, content_rich, remark, publish_at)
+                           target_disciplines, apply_start_at, apply_end_at, total_envelope, content_rich, remark,
+                           attachment_ids, publish_at)
   VALUES (1, 'DEMO-GL-001', 'PUBLISHED', uid_manager,
           '2026 年度国家自然科学基金 · 面上项目 / 青年科学基金', 'NSFC', '国家自然科学基金委员会',
           jsonb_build_array(jsonb_build_object('code','ME','label','机械工程'), jsonb_build_object('code','ROBOT','label','机器人学')),
@@ -221,7 +223,9 @@ BEGIN
           '3. 涉及生命/医学内容的须完成伦理前置审查。' || chr(10) || chr(10) ||
           '## 材料要求' || chr(10) ||
           '申请书通过院级申报计划（2026 年度国家自然科学基金申报）提交，经形式审查 → 学院推荐 → 校级汇总三级流程报送基金委。',
-          '在研+申请 ≤ 2；需伦理前置', now() - INTERVAL '45 days'),
+          '在研+申请 ≤ 2；需伦理前置',
+          jsonb_build_array('2026年度NSFC项目指南原文.pdf', '国家自然科学基金申请书模板(2026版).docx', '形式审查自查清单.xlsx'),
+          now() - INTERVAL '45 days'),
          (1, 'DEMO-GL-002', 'PUBLISHED', uid_manager,
           '「智能机器人」重点专项 2026 年度第三批公开申报（揭榜挂帅）', 'KJBP', '科学技术部',
           jsonb_build_array(jsonb_build_object('code','ROBOT','label','机器人学')),
@@ -232,7 +236,9 @@ BEGIN
           '揭榜挂帅：须由企业牵头组建产学研联合体，研究院可作为联合单位承担关键技术攻关任务。' || chr(10) || chr(10) ||
           '## 预算要求' || chr(10) ||
           '预算制管理，间接费用比例不超过直接费用扣除设备购置费后的 20%。',
-          '需牵头单位资质 · 间接费用 20%', now() - INTERVAL '30 days'),
+          '需牵头单位资质 · 间接费用 20%',
+          jsonb_build_array('重点专项2026第三批榜单任务书.pdf', '揭榜挂帅申报要点解读.pptx'),
+          now() - INTERVAL '30 days'),
          (1, 'DEMO-GL-003', 'PUBLISHED', uid_manager,
           '启元研究院 2026 年度「探索者计划」自立项目（第三批）', 'ZIGE', '院科研管理部',
           jsonb_build_array(jsonb_build_object('code','AI','label','人工智能')),
@@ -243,7 +249,9 @@ BEGIN
           '单项 ≤ 80 万元，经费包干制（免编明细预算），研究期限 2 年。' || chr(10) || chr(10) ||
           '## 申报方式' || chr(10) ||
           '通过院级申报计划提交一页纸建议书 + 3 页技术路线；AI 起草的申报内容须按 PRD 8.1 标注 AI 起草水印。',
-          '包干制 · 面向 35 岁以下', now() - INTERVAL '25 days'),
+          '包干制 · 面向 35 岁以下',
+          jsonb_build_array('探索者计划申报须知(第三批).pdf', '一页纸建议书模板.docx'),
+          now() - INTERVAL '25 days'),
          (1, 'DEMO-GL-004', 'PUBLISHED', uid_manager,
           '企业横向委托 · 复杂曲面智能磨抛产线联合攻关', 'HENGXIANG', '某高端装备集团',
           jsonb_build_array(jsonb_build_object('code','ME','label','机械工程')),
@@ -254,7 +262,9 @@ BEGIN
           '合同金额 360 万元，分三期到账；需签署技术协议与保密条款，知识产权按贡献比例共享。' || chr(10) || chr(10) ||
           '## 走向提示' || chr(10) ||
           '横向课题走合同审批流（P-18），立项后自动生成合同台账与经费到账计划。',
-          '横向 · 走合同审批', now() - INTERVAL '15 days'),
+          '横向 · 走合同审批',
+          jsonb_build_array('横向技术开发合同示范文本.pdf', '技术协议与保密条款要点.docx'),
+          now() - INTERVAL '15 days'),
          (1, 'DEMO-GL-005', 'PUBLISHED', uid_manager,
           '省重点研发（产业政策引导）2026 年度 · 高端装备专项', 'PROV', '省工业和信息化厅',
           jsonb_build_array(jsonb_build_object('code','ME','label','机械工程')),
@@ -263,13 +273,17 @@ BEGIN
           '高端装备专项聚焦智能成套装备、关键基础件两类方向，单项 ≤ 150 万元，省市配套 1:1。' || chr(10) || chr(10) ||
           '## 申报条件' || chr(10) ||
           '需产学研联合体（企业牵头或参与），自筹经费比例不低于 50%。',
-          '配套 1:1 · 需产学研联合体', now() - INTERVAL '5 days'),
+          '配套 1:1 · 需产学研联合体',
+          jsonb_build_array('省重点研发申报指南(高端装备专项).pdf', '产学研联合体协议模板.docx'),
+          now() - INTERVAL '5 days'),
          (1, 'DEMO-GL-006', 'CLOSED', uid_manager,
           '省自然科学基金 2027 年度集中接收（创新研究群体 / 重点项目）', 'PROV', '省科技厅',
           jsonb_build_array(jsonb_build_object('code','AI','label','人工智能')),
           CURRENT_DATE - 120, CURRENT_DATE - 20, 3000000.00,
           '## 说明' || chr(10) ||
           '本批次已截止。重点 ≤ 100 万元/项，创新研究群体 300 万元/项。形式审查由科研办统一办理，下一批次预计 2027 年 3 月开放。',
-          '已截止 · 下一批次 2027-03', now() - INTERVAL '120 days');
+          '已截止 · 下一批次 2027-03',
+          jsonb_build_array('省自科基金2027集中接收指南原文.pdf'),
+          now() - INTERVAL '120 days');
 END
 $seedgl$;

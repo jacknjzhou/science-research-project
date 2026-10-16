@@ -33,6 +33,7 @@ const rows = ref<Guideline[]>([])
 const total = ref(0)
 const loading = ref(true)
 const activeType = ref('全部')
+const keyword = ref('')
 const active = ref<Guideline | null>(null) // 详情抽屉
 
 // 类型筛选：契约 project_type 为字典 item_code（与 e_project 一致）
@@ -51,9 +52,29 @@ const ICO_COLOR: Record<string, string> = {
 }
 
 const visible = computed(() => {
-  if (activeType.value === '全部') return rows.value
-  return rows.value.filter((g) => g.project_type === activeType.value)
+  let r = rows.value
+  if (activeType.value !== '全部') r = r.filter((g) => g.project_type === activeType.value)
+  const kw = keyword.value.trim().toLowerCase()
+  if (kw) {
+    r = r.filter((g) =>
+      (g.title || '').toLowerCase().includes(kw) ||
+      (g.code || '').toLowerCase().includes(kw) ||
+      (g.funding_source || '').toLowerCase().includes(kw) ||
+      (g.project_type || '').toLowerCase().includes(kw) ||
+      (TYPE_LABEL[g.project_type || ''] || '').toLowerCase().includes(kw))
+  }
+  return r
 })
+
+// 参考资料附件：按扩展名取图标（attachment_ids 为字符串数组，线上为对象存储 id，演示用可读文件名）
+function fileIco(name: string): string {
+  const ext = name.split('.').pop()?.toLowerCase() || ''
+  if (ext === 'pdf') return '📕'
+  if (ext === 'doc' || ext === 'docx') return '📘'
+  if (ext === 'xls' || ext === 'xlsx') return '📗'
+  if (ext === 'ppt' || ext === 'pptx') return '📙'
+  return '📄'
+}
 
 // 状态派生：可申报 / 即将截止(≤3天) / 未开始 / 已截止
 function st(g: Guideline): { text: string; cls: string } {
@@ -166,6 +187,7 @@ function goApply() {
         @click="activeType = t.code"
         >{{ t.code === '全部' ? `全部 (${total})` : t.label }}</span
       >
+      <input class="gl-search" v-model="keyword" placeholder="🔍 搜索指南标题 / 编号 / 单位" />
     </div>
 
     <div v-if="loading" class="card"><div class="card-b" style="text-align:center;color:var(--ink-mute)">正在加载指南…</div></div>
@@ -228,8 +250,23 @@ function goApply() {
             </template>
           </div>
 
+          <!-- 参考资料（指南原文 / 模板 / 自查清单等附件） -->
+          <div class="gl-refs" v-if="(active.attachment_ids || []).length">
+            <h4>📎 参考资料（{{ (active.attachment_ids || []).length }}）</h4>
+            <div
+              class="gl-ref"
+              v-for="f in active.attachment_ids"
+              :key="f"
+              @click="toast('附件下载为演示功能：' + f)"
+            >
+              <span class="gl-ref-ico">{{ fileIco(f) }}</span>
+              <span class="gl-ref-name">{{ f }}</span>
+              <span class="gl-ref-dl">⬇</span>
+            </div>
+          </div>
+
           <footer class="gl-foot">
-            <span class="gl-atts" v-if="(active.attachment_ids || []).length">📎 附件 {{ (active.attachment_ids || []).length }} 个</span>
+            <span class="gl-atts" v-if="(active.attachment_ids || []).length">共 {{ (active.attachment_ids || []).length }} 份参考附件</span>
             <span v-else></span>
             <div>
               <button class="btn ghost" @click="closeGuide">关闭</button>
@@ -267,4 +304,23 @@ function goApply() {
 .gl-foot { display: flex; justify-content: space-between; align-items: center; padding-top: 12px; border-top: 1px solid rgba(0,0,0,.08); }
 .gl-atts { font-size: 12px; color: var(--ink-mute, #999); }
 .gl-foot .btn { margin-left: 8px; }
+
+.gl-search {
+  margin-left: auto; padding: 7px 14px; border: 1px solid var(--line, #ddd); border-radius: 20px;
+  background: var(--paper-hi, #fff); font-size: 12.5px; width: 230px; outline: none;
+  font-family: var(--sans, inherit); color: var(--ink, #222);
+}
+.gl-search:focus { border-color: var(--seal, #8c2f2f); }
+
+.gl-refs { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line, #ddd); }
+.gl-refs h4 { margin: 0 0 8px; font-size: 13.5px; color: var(--seal, #8c2f2f); }
+.gl-ref {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px; margin-bottom: 6px;
+  border: 1px solid var(--line, #e5e5e5); border-radius: 8px; cursor: pointer;
+  transition: background .12s, border-color .12s; background: var(--paper-hi, #fff);
+}
+.gl-ref:hover { background: var(--paper-deep, #f4efe4); border-color: var(--seal, #8c2f2f); }
+.gl-ref-ico { font-size: 16px; }
+.gl-ref-name { flex: 1; font-size: 12.5px; color: var(--ink, #222); }
+.gl-ref-dl { font-size: 12px; color: var(--ink-mute, #999); }
 </style>
