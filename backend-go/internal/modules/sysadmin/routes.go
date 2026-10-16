@@ -15,4 +15,15 @@ func Register(r gin.IRoutes, h *Handler) {
 	r.GET("/admin/roles", h.ListRoles)
 	r.POST("/admin/users/:id/roles", h.AssignRole)
 	r.DELETE("/admin/users/:id/roles/:roleId", h.RevokeRole)
+
+	// 数据字典（PRD 2.8）：管理端 CRUD 仅 R-ADMIN（policy 通配），/dicts/:code 全员只读。
+	// :dictId 命名避免与 /admin/users/:id 同树 wildcard 冲突。
+	r.GET("/admin/dicts", h.ListDicts)
+	r.POST("/admin/dicts", h.UpsertDict)
+	r.GET("/admin/dicts/:dictId", h.GetDict)
+	r.DELETE("/admin/dicts/:dictId", h.DeleteDict)
+	r.POST("/admin/dicts/:dictId/items", h.UpsertDictItem)
+	r.PUT("/admin/dicts/:dictId/items/:itemId", h.UpdateDictItem)
+	r.DELETE("/admin/dicts/:dictId/items/:itemId", h.DeleteDictItem)
+	r.GET("/dicts/:code", h.GetDictByCode)
 }

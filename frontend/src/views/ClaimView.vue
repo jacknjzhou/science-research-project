@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { api, list } from '@/api/client'
 import { toPct } from '@/utils/money'
+import { useDict, toRecord } from '@/composables/useDict'
 
 // 数据模型严格对齐后端 mapper.go ToAPIOutput（design/04 Output）。
 // 展示态字段（作者串、年份、来源标签、存疑说明）在视图层从契约字段派生。
@@ -78,15 +79,18 @@ const authorsStr = (c: Output) => {
   return ext || '—'
 }
 const yearOf = (c: Output) => (c.publish_date ? c.publish_date.slice(0, 4) : '—')
-const sourceLabel = (c: Output) => SOURCE_TEXT[c.source] || c.source
+const sourceLabel = (c: Output) => SOURCE_TEXT.value[c.source] || c.source
 const typeLabel = (c: Output) => TYPE_TEXT[c.output_type] || c.output_type
 const linked = (c: Output) => (c.project_ids || []).length > 0
 const restCount = computed(() => Math.max(pendingTotal.value - items.value.length, 0))
 
-const SOURCE_TEXT: Record<string, string> = {
-  WOS: 'WoS', SCOPUS: 'Scopus', CNKI: '知网', WANFANG: '万方', CNIPA: '国家知识产权局',
-  CROSSREF: 'CrossRef', FETCH: '增量抓取', MANUAL: '手动录入', ALTMETRIC: 'Altmetric',
-}
+// 成果来源：字典 output_source（PRD 2.8），useDict 拉取 + 硬编码 fallback
+const { items: sourceDict } = useDict('output_source', [
+  { code: 'WOS', label: 'WoS' }, { code: 'SCOPUS', label: 'Scopus' }, { code: 'CNKI', label: '知网' },
+  { code: 'WANFANG', label: '万方' }, { code: 'CNIPA', label: '国家知识产权局' }, { code: 'CROSSREF', label: 'CrossRef' },
+  { code: 'FETCH', label: '增量抓取' }, { code: 'MANUAL', label: '手动录入' }, { code: 'ALTMETRIC', label: 'Altmetric' },
+])
+const SOURCE_TEXT = computed(() => toRecord(sourceDict.value))
 const TYPE_TEXT: Record<string, string> = {
   PAPER: '论文', PATENT: '专利', SOFTWARE: '软著', STANDARD: '标准',
   AWARD: '奖励', BOOK: '著作', DATASET: '数据集', CONFERENCE: '会议', HONOR: '荣誉',

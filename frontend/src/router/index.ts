@@ -37,6 +37,7 @@ const routes: RouteRecordRaw[] = [
   // —— 模块 U 管理页（新）——
   { path: '/admin/users', name: 'admin-users', meta: { zh: '用户管理', en: 'USER ADMIN', roles: ['R-ADMIN'] }, component: () => import('@/views/admin/UsersView.vue') },
   { path: '/admin/roles', name: 'admin-roles', meta: { zh: '角色与权限', en: 'ROLES & PERMISSIONS', roles: ['R-ADMIN', 'R-AUDITOR'] }, component: () => import('@/views/admin/RolesView.vue') },
+  { path: '/admin/dicts', name: 'admin-dicts', meta: { zh: '数据字典', en: 'DICTIONARIES', roles: ['R-ADMIN'] }, component: () => import('@/views/admin/DictsView.vue') },
   // —— 越权兜底 ——
   { path: '/forbidden', name: 'forbidden', meta: { zh: '无访问权限', en: 'FORBIDDEN', public: true }, component: () => import('@/views/ForbiddenView.vue') },
 ]

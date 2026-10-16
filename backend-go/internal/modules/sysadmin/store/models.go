@@ -6,7 +6,37 @@ package sysstore
 
 import (
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+type Dict struct {
+	ID         int64              `json:"id"`
+	Code       string             `json:"code"`
+	Name       string             `json:"name"`
+	TenantID   int64              `json:"tenant_id"`
+	Remark     *string            `json:"remark"`
+	Deleted    int16              `json:"deleted"`
+	CreatorID  *int64             `json:"creator_id"`
+	ModifierID *int64             `json:"modifier_id"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type DictItem struct {
+	ID            int64       `json:"id"`
+	DictID        int64       `json:"dict_id"`
+	ItemCode      string      `json:"item_code"`
+	ItemLabel     string      `json:"item_label"`
+	ParentID      *int64      `json:"parent_id"`
+	ExtJson       []byte      `json:"ext_json"`
+	SortNo        int32       `json:"sort_no"`
+	I18nJson      []byte      `json:"i18n_json"`
+	EffectiveFrom pgtype.Date `json:"effective_from"`
+	EffectiveTo   pgtype.Date `json:"effective_to"`
+	Active        bool        `json:"active"`
+	TenantID      int64       `json:"tenant_id"`
+}
 
 type SysRole struct {
 	ID        int64     `json:"id"`

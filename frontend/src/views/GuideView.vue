@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { list } from '@/api/client'
+import { useDict } from '@/composables/useDict'
 
 // 契约 Guideline（design/01-P）：真实后端字段，展示层语义字段（ico/notes/tags/状态）
 // 由下方派生函数计算，不再依赖 mock 时代的 ai_match/ico 注入。
@@ -36,17 +37,17 @@ const activeType = ref('全部')
 const keyword = ref('')
 const active = ref<Guideline | null>(null) // 详情抽屉
 
-// 类型筛选：契约 project_type 为字典 item_code（与 e_project 一致）
-const TYPES: { code: string; label: string }[] = [
-  { code: '全部', label: '全部' },
+// 类型筛选：契约 project_type 为字典 item_code（PRD 2.8），useDict 拉取 + 硬编码 fallback
+const TYPE_FALLBACK = [
   { code: 'NSFC', label: '国家自然科学基金' },
   { code: 'KJBP', label: '重点研发计划' },
   { code: 'ZIGE', label: '院自立项目' },
   { code: 'PROV', label: '省部级' },
   { code: 'HENGXIANG', label: '横向委托' },
 ]
-const TYPE_LABEL: Record<string, string> = Object.fromEntries(TYPES.map((t) => [t.code, t.label]))
-const ICO_TEXT: Record<string, string> = { NSFC: '自然', KJBP: '重点', ZIGE: '自立', PROV: '省', HENGXIANG: '横向' }
+const { items: typeDict, labelOf: typeLabelOf } = useDict('project_type', TYPE_FALLBACK)
+const TYPES = computed(() => [{ code: '全部', label: '全部' }, ...typeDict.value])
+const TYPE_LABEL = computed(() => Object.fromEntries(typeDict.value.map((t) => [t.code, t.label])))
 const ICO_COLOR: Record<string, string> = {
   NSFC: 'var(--seal)', KJBP: 'var(--ink)', ZIGE: 'var(--gold)', PROV: '#41598C', HENGXIANG: 'var(--ai)',
 }
@@ -61,7 +62,7 @@ const visible = computed(() => {
       (g.code || '').toLowerCase().includes(kw) ||
       (g.funding_source || '').toLowerCase().includes(kw) ||
       (g.project_type || '').toLowerCase().includes(kw) ||
-      (TYPE_LABEL[g.project_type || ''] || '').toLowerCase().includes(kw))
+      (typeLabelOf(g.project_type || '') || '').toLowerCase().includes(kw))
   }
   return r
 })
@@ -120,7 +121,10 @@ function dateShort(v?: string | null): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 const icoColor = (g: Guideline) => ICO_COLOR[g.project_type || ''] || 'var(--ink)'
-const icoText = (g: Guideline) => ICO_TEXT[g.project_type || ''] || (TYPE_LABEL[g.project_type || ''] || g.project_type || '指南').slice(0, 2)
+// 卡片图标：字典 ext.icon 优先，回退标签前两字
+const icoText = (g: Guideline) =>
+  (typeDict.value.find((t) => t.code === g.project_type)?.ext?.icon as string) ||
+  (typeLabelOf(g.project_type || '') || g.project_type || '指南').slice(0, 2)
 
 const openCount = computed(() => rows.value.filter(openable).length)
 

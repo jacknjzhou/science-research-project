@@ -31,6 +31,15 @@ p, R-EXPERT,  /api/v1/apply/*, GET
 p, R-EXPERT,  /api/v1/review/*, GET
 p, R-EXPERT,  /api/v1/review/*, POST
 
+# ---- 数据字典公开读取（PRD 2.8）：所有业务角色可 GET /dicts/{code} 拉下拉数据； ----
+# ---- 写维护仅 R-ADMIN（上方通配覆盖），R-AUDITOR 只读通配已覆盖。           ----
+p, R-STAFF,   /api/v1/dicts/*, GET
+p, R-MANAGER, /api/v1/dicts/*, GET
+p, R-LEADER,  /api/v1/dicts/*, GET
+p, R-FINANCE, /api/v1/dicts/*, GET
+p, R-EXPERT,  /api/v1/dicts/*, GET
+p, R-ETHICS,  /api/v1/dicts/*, GET
+
 # ---- 伦理委员会：读申报 + 伦理批复 ----
 p, R-ETHICS,  /api/v1/apply/*, GET
 p, R-ETHICS,  /api/v1/ethics/*, GET

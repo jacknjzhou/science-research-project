@@ -49,6 +49,8 @@ sql:
           sys_user: SysUser
           sys_role: SysRole
           sys_user_role: SysUserRole
+          sys_dict: Dict
+          sys_dict_item: DictItem
           "@limit_": Limit
           "@offset_": Offset
         overrides:
@@ -56,6 +58,7 @@ sql:
             go_type: "time.Time"
           - column: "sys_user.updated_at"
             go_type: "time.Time"
+          # 数据字典（PRD 2.8）：时间戳 → time.Time；DATE 生效期保 pgtype.Date（mapper dateStr）。
           - column: "sys_user.legal_entity_id"
             go_type:
               type: "int64"

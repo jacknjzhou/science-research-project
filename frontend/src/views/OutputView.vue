@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { list } from '@/api/client'
 import { toPct } from '@/utils/money'
+import { useDict, toRecord } from '@/composables/useDict'
 
 // 成果台账（module R · GET /output）。数据模型对齐后端 ToAPIOutput（snake_case）。
 interface AuthorItem { user_id: number | null; name: string; order?: number; is_corresponding?: boolean }
@@ -64,10 +65,13 @@ const TYPE_TEXT: Record<string, string> = {
   BOOK: '著作', DATASET: '数据集', CONFERENCE: '会议', NEW_VARIETY: '新品种',
   LAYOUT: '版图', APPRAISAL: '鉴定', HONOR: '荣誉',
 }
-const SOURCE_TEXT: Record<string, string> = {
-  WOS: 'WoS', SCOPUS: 'Scopus', CNKI: '知网', WANFANG: '万方', CNIPA: '国知局',
-  CROSSREF: 'CrossRef', FETCH: '抓取', MANUAL: '手动', ALTMETRIC: 'Altmetric',
-}
+// 成果来源：字典 output_source（PRD 2.8），useDict 拉取 + 硬编码 fallback
+const { items: sourceDict } = useDict('output_source', [
+  { code: 'WOS', label: 'WoS' }, { code: 'SCOPUS', label: 'Scopus' }, { code: 'CNKI', label: '知网' },
+  { code: 'WANFANG', label: '万方' }, { code: 'CNIPA', label: '国知局' }, { code: 'CROSSREF', label: 'CrossRef' },
+  { code: 'FETCH', label: '抓取' }, { code: 'MANUAL', label: '手动' }, { code: 'ALTMETRIC', label: 'Altmetric' },
+])
+const SOURCE_TEXT = computed(() => toRecord(sourceDict.value))
 const STATUS_TEXT: Record<string, string> = {
   AUTO_FETCHED: '已抓取', PENDING_CLAIM: '待认领', CLAIMED: '已认领',
   ASSIGNED_TO_PROJECT: '已归属项目', COUNTED_FOR_PERFORMANCE: '已计绩效',

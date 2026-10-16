@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { api, list } from '@/api/client'
 import { auth } from '@/api/auth'
 import { toWan } from '@/utils/money'
+import { useDict, toRecord } from '@/composables/useDict'
 
 type ActType = 'CONFERENCE' | 'LECTURE' | 'SEMINAR' | 'TRAINING' | 'OTHER'
 type Level = 'INTERNATIONAL' | 'NATIONAL' | 'PROVINCIAL' | 'CAMPUS'
@@ -35,8 +36,17 @@ interface ActivityDetail extends Activity { participants?: Participant[]; review
 const toast = (m: string) => (window as any).toast?.(m)
 
 // —— 展示映射（中文标签 + 徽章色，色用设计系统既有 tag 变体）——
-const TYPE_LABEL: Record<ActType, string> = { CONFERENCE: '学术会议', LECTURE: '讲座报告', SEMINAR: '研讨班', TRAINING: '培训', OTHER: '其他' }
-const LEVEL_LABEL: Record<Level, string> = { INTERNATIONAL: '国际', NATIONAL: '国家', PROVINCIAL: '省级', CAMPUS: '校内' }
+// 类型/级别走数据字典（PRD 2.8），useDict 拉取 + 硬编码 fallback
+const { items: actTypeDict } = useDict('activity_type', [
+  { code: 'CONFERENCE', label: '学术会议' }, { code: 'LECTURE', label: '讲座报告' },
+  { code: 'SEMINAR', label: '研讨班' }, { code: 'TRAINING', label: '培训' }, { code: 'OTHER', label: '其他' },
+])
+const { items: actLevelDict } = useDict('activity_level', [
+  { code: 'INTERNATIONAL', label: '国际' }, { code: 'NATIONAL', label: '国家' },
+  { code: 'PROVINCIAL', label: '省级' }, { code: 'CAMPUS', label: '校内' },
+])
+const TYPE_LABEL = computed(() => toRecord(actTypeDict.value))
+const LEVEL_LABEL = computed(() => toRecord(actLevelDict.value))
 const MODE_LABEL: Record<HostMode, string> = { HOST: '主办', ATTEND: '参加', SPONSOR: '承办' }
 const STATUS_LABEL: Record<Status, string> = { DRAFT: '草稿', SUBMITTED: '已提交', DEPT_REVIEW: '部门评审', APPROVED: '已批准', HELD: '已举办', ARCHIVED: '已归档', REJECTED: '已驳回', RETURNED: '已退回', CANCELLED: '已取消' }
 function statusCls(s: Status): string {
@@ -110,7 +120,7 @@ async function transition(a: Activity, verb: 'submit' | 'approve' | 'hold' | 'ar
   busy.value = true
   try {
     await api.post(`/activities/${a.id}/${verb}`, body ?? {})
-    toast(`${TYPE_LABEL[a.activity_type]}「${a.title}」已${VERB_CN[verb]} ✓`)
+    toast(`${TYPE_LABEL.value[a.activity_type]}「${a.title}」已${VERB_CN[verb]} ✓`)
     await load()
     if (drawer.value && detail.value?.id === a.id) await openDetail(a)
   } catch (e: any) {

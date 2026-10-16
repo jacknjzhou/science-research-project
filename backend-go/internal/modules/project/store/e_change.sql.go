@@ -57,7 +57,7 @@ const createChangeRequest = `-- name: CreateChangeRequest :one
 INSERT INTO E_CHANGE_REQUEST
   (code, tenant_id, status, creator_id, project_id, change_type, old_value, new_value, reason)
 VALUES
-  ($1::text, $2::bigint, 'DRAFT',
+  ($1::text, $2::bigint, 'SUBMITTED',
    $3::bigint, $4::bigint, $5::text,
    $6::jsonb, $7::jsonb, $8::text)
 RETURNING id, code, tenant_id, status, deleted, creator_id, modifier_id, created_at, updated_at, remark, project_id, change_type, old_value, new_value, reason, effective_from, approval_status, approved_at, impact_analysis, conflict_flag, snapshot_ref
@@ -74,6 +74,8 @@ type CreateChangeRequestParams struct {
 	Reason     *string `json:"reason"`
 }
 
+// 变更申请提交即送审：status=SUBMITTED（DRAFT 无法进入审批流——
+// approve 仅接受 SUBMITTED/APPROVING），approval_status 走默认 PENDING。
 func (q *Queries) CreateChangeRequest(ctx context.Context, arg CreateChangeRequestParams) (ChangeRequest, error) {
 	row := q.db.QueryRow(ctx, createChangeRequest,
 		arg.Code,

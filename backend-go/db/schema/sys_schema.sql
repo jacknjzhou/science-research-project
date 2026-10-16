@@ -42,3 +42,33 @@ CREATE TABLE sys_user_role (
   granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   expires_at TIMESTAMPTZ
 );
+
+-- 数据字典（PRD 2.8 / design 00-common.sql §2；migration 000013 追加 deleted/creator/modifier
+-- 并将 uk_dict_code 改为 deleted=0 部分唯一索引——此处为迁移后形态，运行时打真库）。
+CREATE TABLE sys_dict (
+  id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  code        VARCHAR(64) NOT NULL,
+  name        VARCHAR(128) NOT NULL,
+  tenant_id   BIGINT NOT NULL,
+  remark      TEXT,
+  deleted     SMALLINT NOT NULL DEFAULT 0,
+  creator_id  BIGINT,
+  modifier_id BIGINT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE sys_dict_item (
+  id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  dict_id      BIGINT NOT NULL REFERENCES sys_dict(id) ON DELETE CASCADE,
+  item_code    VARCHAR(64) NOT NULL,
+  item_label   VARCHAR(128) NOT NULL,
+  parent_id    BIGINT REFERENCES sys_dict_item(id),
+  ext_json     JSONB,
+  sort_no      INT NOT NULL DEFAULT 0,
+  i18n_json    JSONB,
+  effective_from DATE,
+  effective_to   DATE,
+  active       BOOLEAN NOT NULL DEFAULT TRUE,
+  tenant_id    BIGINT NOT NULL
+);

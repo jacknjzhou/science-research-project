@@ -152,6 +152,7 @@ const groups: NavGroup[] = [
   { t: '系 统', items: [
     { v: 'admin-users', ic: '⚑', label: '用户管理', roles: ['R-ADMIN'] },
     { v: 'admin-roles', ic: '⚙', label: '角色与权限', roles: ['R-ADMIN', 'R-AUDITOR'] },
+    { v: 'admin-dicts', ic: '☰', label: '数据字典', roles: ['R-ADMIN'] },
   ]},
 ]
 
