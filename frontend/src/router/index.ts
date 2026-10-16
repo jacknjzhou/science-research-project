@@ -2,6 +2,8 @@ import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-rou
 import { auth } from '@/api/auth'
 
 // meta.roles：空/缺省 = 所有已登录可见；非空 = 命中任一角色才可达（页面/路由级粒度①）。
+// 注意：本表已收敛为 fallback-only 灾备数据（矩阵加载失败时 canSeePage 退回此表）；
+// 在线配置的真源是后端 sys_page_grant（PRD 2.9，管理员在「角色与权限」页编辑）。
 // meta.public = 免登录可达（/forbidden 需要在未导航成功时也能渲染）。
 declare module 'vue-router' {
   interface RouteMeta {
@@ -65,6 +67,10 @@ router.beforeEach(async (to) => {
     }
   }
   if (to.meta.roles && to.meta.roles.length > 0 && !auth.hasAnyRole(to.meta.roles)) {
+    return { path: '/forbidden' }
+  }
+  // 页面可见性统一判定（PRD 2.9）：在线矩阵优先，grants 不可用时退回静态 meta.roles。
+  if (!auth.canSeePage(to.name as string, to.meta.roles)) {
     return { path: '/forbidden' }
   }
   return true

@@ -22,6 +22,8 @@ interface AuthState {
   roles: string[]
   caps: string[]
   ready: boolean // loadMe 成功过一次
+  grants: Record<string, string[]> // 页面可见性矩阵：page_name → role_codes（含 '*'=所有已登录）
+  grantsReady: boolean // grants 拉取成功过；false 时页面判定走静态 fallback
 }
 
 const TOKEN_KEY = 'ark_token'
@@ -32,6 +34,8 @@ const state = reactive<AuthState>({
   roles: [],
   caps: [],
   ready: false,
+  grants: {},
+  grantsReady: false,
 })
 
 function lsGet(k: string): string {
@@ -127,6 +131,24 @@ export const auth = {
     state.roles = me.roles ?? []
     state.caps = me.caps ?? []
     state.ready = true
+    // 页面可见性矩阵并行拉取（PRD 2.9）：失败不阻塞登录，走静态 fallback（canSeePage）
+    try {
+      const g = await api.get<{ grants: Array<{ page_name: string; role_code: string }> }>('/page-grants')
+      this.applyGrants(g?.grants ?? [])
+    } catch {
+      state.grants = {}
+      state.grantsReady = false
+    }
+  },
+
+  /** 把后端授权行写入本地矩阵（登录加载与矩阵保存后共用）。 */
+  applyGrants(list: Array<{ page_name: string; role_code: string }>): void {
+    const m: Record<string, string[]> = {}
+    for (const g of list) {
+      ;(m[g.page_name] ??= []).push(g.role_code)
+    }
+    state.grants = m
+    state.grantsReady = true
   },
 
   logout(): void {
@@ -135,6 +157,8 @@ export const auth = {
     state.roles = []
     state.caps = []
     state.ready = false
+    state.grants = {}
+    state.grantsReady = false
     lsSet(TOKEN_KEY, '')
   },
 
@@ -142,6 +166,23 @@ export const auth = {
   hasAnyRole(roles: string[] | undefined): boolean {
     if (!roles || roles.length === 0) return true
     return roles.some((r) => state.roles.includes(r))
+  },
+
+  /**
+   * 页面可见性统一判定（PRD 2.9 矩阵在线配置）：
+   * 1) R-ADMIN 恒可见（前端硬编码兜底，防管理员把自己关门外）；
+   * 2) 矩阵可用时白名单制——命中 '*' 或自身任一角色才可见（未配置 = 不可见）；
+   * 3) 矩阵不可用（grantsReady=false）时退回静态 meta.roles（hasAnyRole），防全站锁死。
+   * staticRoles 传路由 meta.roles / 菜单项 roles（仅作 fallback 数据源）。
+   */
+  canSeePage(name: string, staticRoles?: string[]): boolean {
+    if (state.roles.includes('R-ADMIN')) return true
+    if (state.grantsReady) {
+      const rows = state.grants[name]
+      if (!rows || rows.length === 0) return false
+      return rows.includes('*') || rows.some((r) => state.roles.includes(r))
+    }
+    return this.hasAnyRole(staticRoles)
   },
 
   /** 按钮/操作级门控：want 可用简写 "/admin/users POST"。 */

@@ -118,6 +118,8 @@ function doLogout() {
 interface NavItem { v: string; ic: string; label: string; badge?: number; roles?: string[] }
 interface NavGroup { t: string; items: NavItem[] }
 
+// 菜单 groups 的 roles 已收敛为 fallback-only 数据源（在线矩阵真源 sys_page_grant，PRD 2.9）。
+
 const groups: NavGroup[] = [
   { t: '总 览', items: [
     { v: 'dash', ic: '◈', label: '工作台驾驶舱' },
@@ -156,10 +158,10 @@ const groups: NavGroup[] = [
   ]},
 ]
 
-// 菜单可见性（粒度①）：登录后依 hasAnyRole 过滤，整组皆不可见则隐组。
+// 菜单可见性（粒度①）：统一走 canSeePage（在线矩阵优先 / grants 不可用退回静态 roles）；整组皆不可见则隐组。
 const visibleGroups = computed(() =>
   groups
-    .map((g) => ({ ...g, items: g.items.filter((it) => auth.hasAnyRole(it.roles)) }))
+    .map((g) => ({ ...g, items: g.items.filter((it) => auth.canSeePage(it.v, it.roles)) }))
     .filter((g) => g.items.length > 0),
 )
 

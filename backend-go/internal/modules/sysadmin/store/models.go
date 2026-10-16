@@ -38,6 +38,14 @@ type DictItem struct {
 	TenantID      int64       `json:"tenant_id"`
 }
 
+type PageGrant struct {
+	ID        int64              `json:"id"`
+	PageName  string             `json:"page_name"`
+	RoleCode  string             `json:"role_code"`
+	TenantID  int64              `json:"tenant_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type SysRole struct {
 	ID        int64     `json:"id"`
 	Code      string    `json:"code"`

@@ -40,6 +40,15 @@ p, R-FINANCE, /api/v1/dicts/*, GET
 p, R-EXPERT,  /api/v1/dicts/*, GET
 p, R-ETHICS,  /api/v1/dicts/*, GET
 
+# ---- 页面可见性矩阵（PRD 2.9）：全员可读（路由守卫/菜单消费）； ----
+# ---- PUT /admin/page-grants 仅 R-ADMIN（上方通配覆盖）。       ----
+p, R-STAFF,   /api/v1/page-grants, GET
+p, R-MANAGER, /api/v1/page-grants, GET
+p, R-LEADER,  /api/v1/page-grants, GET
+p, R-FINANCE, /api/v1/page-grants, GET
+p, R-EXPERT,  /api/v1/page-grants, GET
+p, R-ETHICS,  /api/v1/page-grants, GET
+
 # ---- 伦理委员会：读申报 + 伦理批复 ----
 p, R-ETHICS,  /api/v1/apply/*, GET
 p, R-ETHICS,  /api/v1/ethics/*, GET

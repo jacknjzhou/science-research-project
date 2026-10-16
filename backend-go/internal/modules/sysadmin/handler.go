@@ -14,12 +14,13 @@ import (
 )
 
 type Handler struct {
-	q   *store.Queries
-	enf *casbin.Enforcer
+	pool *pgxpool.Pool
+	q    *store.Queries
+	enf  *casbin.Enforcer
 }
 
 func NewHandler(pool *pgxpool.Pool, enf *casbin.Enforcer) *Handler {
-	return &Handler{q: store.New(pool), enf: enf}
+	return &Handler{pool: pool, q: store.New(pool), enf: enf}
 }
 
 // pageArgs 与 P 模块同款分页解析（size 上限 200）。

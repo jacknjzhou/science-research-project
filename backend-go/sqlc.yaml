@@ -51,6 +51,7 @@ sql:
           sys_user_role: SysUserRole
           sys_dict: Dict
           sys_dict_item: DictItem
+          sys_page_grant: PageGrant
           "@limit_": Limit
           "@offset_": Offset
         overrides:

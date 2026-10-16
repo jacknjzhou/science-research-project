@@ -29,4 +29,9 @@ func Register(r gin.IRoutes, h *Handler) {
 	r.PUT("/admin/dicts/:dictId/items/:itemId", h.UpdateDictItem)
 	r.DELETE("/admin/dicts/:dictId/items/:itemId", h.DeleteDictItem)
 	r.GET("/dicts/:code", h.GetDictByCode)
+
+	// 页面可见性矩阵（PRD 2.9）：GET 全员只读（路由守卫消费）；PUT 仅 R-ADMIN（policy 通配）。
+	// 裸路径 /page-grants 单独成条（gin 树 /admin 前缀不冲突）。
+	r.GET("/page-grants", h.ListPageGrants)
+	r.PUT("/admin/page-grants", h.SavePageGrants)
 }

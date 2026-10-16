@@ -72,3 +72,13 @@ CREATE TABLE sys_dict_item (
   active       BOOLEAN NOT NULL DEFAULT TRUE,
   tenant_id    BIGINT NOT NULL
 );
+
+-- 页面可见性矩阵（PRD 2.9 / migration 000014）：page_name × role_code 白名单制，
+-- role_code='*' 表示所有已登录角色；全量替换保存，uk_page_grant 防重。
+CREATE TABLE sys_page_grant (
+  id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  page_name  VARCHAR(64)  NOT NULL,
+  role_code  VARCHAR(64)  NOT NULL,
+  tenant_id  BIGINT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
