@@ -263,26 +263,28 @@ onMounted(reloadDicts)
     </div>
     <div v-if="dictErr" style="color:#c0392b;margin-bottom:8px">{{ dictErr }}</div>
 
-    <div style="display:grid;grid-template-columns:280px 1fr;gap:16px;align-items:start">
-      <!-- 左：字典目录 -->
-      <table class="tbl" width="100%" style="border-collapse:collapse">
-        <thead><tr style="text-align:left"><th>编码</th><th>名称</th><th></th></tr></thead>
-        <tbody>
-          <tr v-for="d in dicts" :key="d.id" @click="selectDict(d)"
-              :style="{ cursor: 'pointer', background: d.id === activeId ? 'var(--paper-deep)' : '' }">
-            <td class="mono">{{ d.code }}</td>
-            <td>{{ d.name }}</td>
-            <td class="ops">
-              <button class="btn sm mini" v-if="canWrite" @click.stop="openDictEdit(d)">编辑</button>
-              <button class="btn sm mini danger" v-if="canWrite" @click.stop="removeDict(d)">删</button>
-            </td>
-          </tr>
-          <tr v-if="!dicts.length"><td colspan="3" style="opacity:.6;padding:16px">{{ dictLoading ? '加载中…' : '暂无字典' }}</td></tr>
-        </tbody>
-      </table>
+    <div style="display:grid;grid-template-columns:320px minmax(0, 1fr);gap:16px;align-items:start">
+      <!-- 左：字典目录（table-layout:fixed + min-width:0，杜绝溢出与右侧重叠） -->
+      <div class="dict-pane">
+        <table class="tbl fixed" width="100%" style="border-collapse:collapse">
+          <thead><tr style="text-align:left"><th class="c-code">编码</th><th class="c-name">名称</th><th class="c-ops"></th></tr></thead>
+          <tbody>
+            <tr v-for="d in dicts" :key="d.id" @click="selectDict(d)"
+                :style="{ cursor: 'pointer', background: d.id === activeId ? 'var(--paper-deep)' : '' }">
+              <td class="mono c-code" :title="d.code">{{ d.code }}</td>
+              <td class="c-name" :title="d.name">{{ d.name }}</td>
+              <td class="ops">
+                <button class="btn sm mini" v-if="canWrite" @click.stop="openDictEdit(d)">编辑</button>
+                <button class="btn sm mini danger" v-if="canWrite" @click.stop="removeDict(d)">删</button>
+              </td>
+            </tr>
+            <tr v-if="!dicts.length"><td colspan="3" style="opacity:.6;padding:16px">{{ dictLoading ? '加载中…' : '暂无字典' }}</td></tr>
+          </tbody>
+        </table>
+      </div>
 
       <!-- 右：条目明细 -->
-      <div>
+      <div class="item-pane">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
           <b v-if="activeDict">{{ activeDict.name }} <span class="mono" style="font-size:11px;color:var(--ink-mute)">{{ activeDict.code }}</span></b>
           <span style="flex:1"></span>
@@ -318,7 +320,6 @@ onMounted(reloadDicts)
         </table>
       </div>
     </div>
-
     <!-- 字典抽屉 -->
     <div v-if="dictDrawer.open" style="position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;z-index:60">
       <div style="background:#fff;width:min(460px,92vw);max-height:88vh;overflow:auto;padding:20px;border-radius:10px">
@@ -374,8 +375,17 @@ onMounted(reloadDicts)
 .ops { white-space: nowrap; }
 .ops .btn + .btn { margin-left: 4px; }
 
-/* 左目录表操作列同样压缩 */
-.tbl tr { height: auto; }
-.tbl td { vertical-align: middle; padding: 8px 10px; }
+/* 两栏隔离：min-width:0 防网格子项溢出重叠 */
+.dict-pane, .item-pane { min-width: 0; }
+.dict-pane { overflow-x: auto; }
+
+/* 左目录表固定布局：列宽锁死，内容截断省略（title 悬浮看全文），永不撑破容器 */
+table.fixed { table-layout: fixed; }
+table.fixed td, table.fixed th { padding: 7px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+table.fixed .c-code { width: 40%; }
+table.fixed .c-name { width: 32%; }
+table.fixed .c-ops { width: 28%; }
+
+.tbl td, .tbl th { vertical-align: middle; }
 .tbl th { padding: 8px 10px; white-space: nowrap; }
 </style>
