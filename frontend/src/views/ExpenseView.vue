@@ -4,7 +4,10 @@ import { api, list } from '@/api/client'
 import { toNum } from '@/utils/money'
 
 // —— F 模块真后端契约（snake_case，见 backend funding/mapper.go）——
-interface Subject { id: number; code: string; name: string }
+interface Subject {
+  id: number; code: string | null; name: string
+  parent_id: number | null; level: number; is_leaf: boolean
+}
 interface Budget { id: number; code: string | null; project_id: number; legal_entity_id: number; mode: string; total_approved: string; status: string }
 interface BudgetLine {
   id: number; budget_id: number; subject_id: number
@@ -49,6 +52,30 @@ const lines = ref<LineItem[]>([
 ])
 
 const curBudget = computed(() => budgets.value.find((b) => b.id === form.budgetId) || budgets.value[0] || null)
+
+// —— 科目选项对齐经费配置语义（plan 2026-10-16-funding-config 配套）——
+// 末级科目（仅末级可挂预算行，非末级是树形分组节点）
+const leafSubjects = computed(() => subjects.value.filter((s) => s.is_leaf))
+// 父级路径展示：「父科目 / 子科目」
+function subjectPath(s: Subject): string {
+  if (!s.parent_id) return s.name
+  const p = subjects.value.find((x) => x.id === s.parent_id)
+  return p ? `${p.name} / ${s.name}` : s.name
+}
+// 所选预算的水位行科目（业务正确语义：报销必须挂预算行 budget_line_id，
+// 选水位外科目 budget_line_id 为 null）；无预算/水位为空时退回全部末级科目防无法填单。
+const budgetSubjects = computed(() => {
+  if (!water.value.length) return []
+  const byId = new Map(subjects.value.map((s) => [s.id, s]))
+  return water.value
+    .map((w) => ({ subj: byId.get(w.subject_id), line: w }))
+    .filter((x): x is { subj: Subject; line: BudgetLine } => !!x.subj)
+})
+const subjectOptions = computed(() =>
+  budgetSubjects.value.length
+    ? budgetSubjects.value.map((x) => ({ id: x.subj.id, label: subjectPath(x.subj), remaining: x.line.remaining }))
+    : leafSubjects.value.map((s) => ({ id: s.id, label: subjectPath(s), remaining: null as string | null })),
+)
 const projectLabel = computed(() => {
   const b = curBudget.value
   return b ? `项目 #${b.project_id} · ${b.mode} · 批复 ¥${num(b.total_approved).toLocaleString('zh-CN')}` : '—'
@@ -93,7 +120,8 @@ async function load() {
     subjects.value = subs?.list ?? []
     budgets.value = bud.rows ?? []
     if (!form.budgetId && budgets.value.length) form.budgetId = budgets.value[0].id
-    if (!form.subjectId && subjects.value.length) form.subjectId = subjects.value[0].id
+    // 默认科目：末级科目首个（非末级是分组节点，不可报销）
+    if (!form.subjectId && leafSubjects.value.length) form.subjectId = leafSubjects.value[0].id
     if (form.budgetId) {
       const w = await api.get<{ list: BudgetLine[] }>(`/budgets/${form.budgetId}/lines`).catch(() => null)
       water.value = w?.list ?? []
@@ -115,6 +143,10 @@ async function switchBudget() {
   try {
     const w = await api.get<{ list: BudgetLine[] }>(`/budgets/${form.budgetId}/lines`).catch(() => null)
     water.value = w?.list ?? []
+    // 换预算后：已选科目不在新预算的水位行内则重置为首个可选科目
+    if (water.value.length && !water.value.some((x) => x.subject_id === form.subjectId)) {
+      form.subjectId = water.value[0].subject_id
+    }
   } finally { loading.value = false }
 }
 
@@ -126,13 +158,26 @@ async function submit() {
   submitting.value = true
   try {
     const subject = subjects.value.find((s) => s.id === form.subjectId)
+    // expense_type 按根级科目匹配（子科目如「材料费/耗材」沿父链取根）
+    let rootName = subject?.name || ''
+    let p = subject
+    while (p?.parent_id) {
+      p = subjects.value.find((x) => x.id === p!.parent_id)
+      if (p) rootName = p.name
+    }
+    const line = water.value.find((w) => w.subject_id === form.subjectId)
+    if (water.value.length && !line) {
+      toast('所选科目不在当前预算的科目行内，请重新选择')
+      submitting.value = false
+      return
+    }
     const invNo = lines.value.map((l) => l.invoiceNo.trim()).find(Boolean) || null
     const payload = {
       project_id: b.project_id,
       legal_entity_id: b.legal_entity_id,
-      budget_line_id: water.value.find((w) => w.subject_id === form.subjectId)?.id ?? null,
+      budget_line_id: line?.id ?? null,
       amount: totalAmount.value.toFixed(2),
-      expense_type: TYPE_BY_SUBJECT[subject?.name || ''] || 'OTHER',
+      expense_type: TYPE_BY_SUBJECT[rootName] || 'OTHER',
       submit_mode: b.mode || '预算制',
       description: form.reason,
       invoice_no: invNo,
@@ -194,7 +239,7 @@ function saveDraft() { toast('草稿已保存，可在「我的报销」继续�
               <div style="display:flex;gap:8px;align-items:center">
                 <select v-model.number="l.subjectId" style="flex:1;padding:6px 8px;border:1px solid var(--line-hard);border-radius:4px;font-size:12px;background:#fff">
                   <option :value="null">选择科目…</option>
-                  <option v-for="s in subjects" :key="s.id" :value="s.id">{{ s.name }}</option>
+                  <option v-for="s in leafSubjects" :key="s.id" :value="s.id">{{ subjectPath(s) }}</option>
                 </select>
                 <div class="money-input" style="width:150px"><input type="number" v-model.number="l.amount" placeholder="0.00"></div>
               </div>
@@ -221,8 +266,12 @@ function saveDraft() { toast('草稿已保存，可在「我的报销」继续�
               <label>支出科目 <em>*</em></label>
               <select v-model.number="form.subjectId">
                 <option v-if="loading" :value="null">加载中…</option>
-                <option v-for="s in subjects" :key="s.id" :value="s.id">{{ s.name }}</option>
+                <option v-for="o in subjectOptions" :key="o.id" :value="o.id">
+                  {{ o.label }}<template v-if="o.remaining !== null"> · 余额 ¥{{ num(o.remaining).toLocaleString('zh-CN') }}</template>
+                </option>
+                <option v-if="!loading && !subjectOptions.length" :value="null">所选预算无可用科目行</option>
               </select>
+              <span v-if="budgetSubjects.length" style="font-size:11px;color:var(--ink-mute)">已限定为所选预算的科目行（须挂预算行核销）</span>
             </div>
             <div class="fg money-input">
               <label>报销金额 <em>*</em></label>
