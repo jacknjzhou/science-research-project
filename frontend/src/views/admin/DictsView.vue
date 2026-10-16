@@ -253,11 +253,11 @@ onMounted(reloadDicts)
 
 <template>
   <div class="card" style="padding:18px">
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
       <h3 style="margin:0">数据字典维护</h3>
       <span class="tag info">PRD 2.8 · 禁止硬编码</span>
       <input v-model="dictKeyword" placeholder="按编码/名称检索" @keyup.enter="dictPage=1;reloadDicts()"
-             style="flex:1;max-width:260px;margin-left:auto" />
+             style="width:240px;margin-left:8px" />
       <button class="btn" @click="reloadDicts">刷新</button>
       <button class="btn seal" v-if="canWrite" @click="openDictCreate">＋ 新建字典</button>
     </div>
