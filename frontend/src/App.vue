@@ -134,6 +134,7 @@ const groups: NavGroup[] = [
   ]},
   { t: '经费 · 成果', items: [
     { v: 'expense', ic: '¥', label: '报销填单', roles: ['R-STAFF', 'R-MANAGER', 'R-FINANCE'] },
+    { v: 'funding-config', ic: '⚗', label: '经费配置', roles: ['R-MANAGER', 'R-FINANCE'] },
     { v: 'claim', ic: '✧', label: '成果认领', badge: 12, roles: ['R-STAFF', 'R-MANAGER', 'R-LEADER'] },
     { v: 'output', ic: '▧', label: '成果台账', roles: ['R-STAFF', 'R-MANAGER', 'R-LEADER'] },
     { v: 'transfer', ic: '⇄', label: '转化看板', roles: ['R-MANAGER', 'R-LEADER', 'R-ADMIN'] },
