@@ -46,8 +46,9 @@ docker compose up -d --build
 | 服务 | 地址 | 说明 |
 |------|------|------|
 | 前端入口 | http://localhost:8080 | nginx 托管 SPA；`?autologin=1#/project` 可跳过登录 |
-| 后端 API | http://localhost:8787/api/v1 | 健康检查 `/healthz`，契约自省 `/api/v1/_openapi` |
+| 后端 API | http://localhost:8787/api/v1 | 健康检查 `/healthz` |
 | svc-ai | http://localhost:8900/healthz | AI 微服务；`llmConfigured:false` 即降级态 |
+| 接口在线文档 | http://localhost:8081 | Swagger UI 浏览 design/ 全部 16 份 OpenAPI 契约（下拉切模块） |
 
 演示账号（启动时 `seed_demo` 幂等播种）：`admin / Admin@123456`。
 
@@ -88,6 +89,14 @@ uvicorn svc_ai.main:app --port 8900
 - **认证**：`Authorization: Bearer <JWT>`；写接口支持 `Idempotency-Key` 幂等头
 - **AI 端点降级契约**：LLM 未配置或上游不可达 → HTTP 200 `{verdict:"REVIEW", confidence:0, reasons:["llm-unavailable"]}`，不阻塞业务；AI 永不自动定密（X 域）
 - **多法人/密级**：业务表携带 `legal_entity_id / security_level`；涉密对象在非 SECRET_NET 网络域不可见（`X-Network-Zone` 头），关键涉密操作须 `X-MFA-Assert` 二次鉴别
+
+### 接口在线文档（三处入口）
+
+| 入口 | 地址 | 内容 |
+|------|------|------|
+| 契约文档（推荐） | `http://localhost:8081`（compose 的 `api-docs` 服务） | design/ 全部 16 份 OpenAPI 3.0.3 原文，Swagger UI 下拉切换；这是接口的唯一真源 |
+| Django 主体自省 | `http://localhost:8787/api/v1/docs`（dev 默认开；生产设 `ARK_API_DOCS=1`） | django-ninja 自动生成的 Swagger UI（运行时路由） |
+| svc-ai 自省 | `http://localhost:8900/docs`（另有 `/redoc`、`/openapi.json`） | FastAPI 原生文档 |
 
 ## 实现进度
 
