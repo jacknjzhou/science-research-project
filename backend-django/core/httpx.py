@@ -97,13 +97,17 @@ def dumps(data: dict) -> str:
 
 
 class ApiError(Exception):
-    """业务异常：任何 handler 只抛此异常，由 ninja 异常处理器转信封。"""
+    """业务异常：任何 handler 只抛此异常，由 ninja 异常处理器转信封。
 
-    def __init__(self, status: int, code: int, message: str) -> None:
+    data 可选：个别错误码需携带数据（如 40905 精确重复携带 existing_id）。
+    """
+
+    def __init__(self, status: int, code: int, message: str, data: Any = None) -> None:
         super().__init__(message)
         self.status = status
         self.code = code
         self.message = message
+        self.data = data
 
 
 def read_json_any(request: HttpRequest, msg: str = "请求参数错误") -> Any:
@@ -112,3 +116,12 @@ def read_json_any(request: HttpRequest, msg: str = "请求参数错误") -> Any:
         return json.loads(request.body or b"null")
     except Exception:
         raise ApiError(400, CODE_BAD_REQUEST, msg) from None
+
+
+def read_json_soft(request: HttpRequest) -> dict:
+    """body 可选端点用：空/非法/非 dict 一律回落 {}（对齐 Go `_ = c.ShouldBindJSON(&b)`）。"""
+    try:
+        data = json.loads(request.body or b"{}")
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}

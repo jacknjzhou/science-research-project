@@ -16,4 +16,13 @@ api = ninja.NinjaAPI(
 
 @api.exception_handler(ApiError)
 def api_error_handler(request, exc: ApiError):
+    if exc.data is not None:
+        from core.httpx import envelope_ok_data
+        body = envelope_ok_data(exc.data, err_trace := getattr(request, "trace_id", "") or "")
+        body["code"] = exc.code
+        body["message"] = exc.message
+        from django.http import JsonResponse
+        resp = JsonResponse(body, status=exc.status)
+        resp["X-Trace-Id"] = err_trace
+        return resp
     return err(request, exc.status, exc.code, exc.message)

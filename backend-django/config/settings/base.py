@@ -17,6 +17,12 @@ INSTALLED_APPS = [
     "apps.p",
     "apps.project",
     "apps.funding",
+    "apps.output",
+    "apps.expertreview",
+    "apps.activity",
+    "apps.archive",
+    "apps.performance",
+    "apps.dataops",
 ]
 
 MIDDLEWARE = [

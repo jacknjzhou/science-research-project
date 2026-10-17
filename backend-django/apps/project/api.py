@@ -621,3 +621,41 @@ def application_to_project(request: HttpRequest, id: int):
     )
     EApplication.objects.filter(id=id, project_id__isnull=True).update(project_id=p.id, updated_at=dj_tz.now())
     return ok(request, {"project_id": p.id, "duplicated": False})
+
+
+# ---------------------------------------------------------------------------
+# 单一写者导出（N 域回写唯一入口；签名权威勿漂移，见 Go writeback.go 注释）
+#   - set_mid_check_experts(mid_check_id, expert_user_ids) error
+#   - conclude_mid_check(mid_check_id, project_id, conclusion, score_detail) error
+#   - conclude_final_accept(final_accept_id, status) error
+# ---------------------------------------------------------------------------
+
+def set_mid_check_experts(mid_check_id: int, expert_user_ids: list[int]) -> None:
+    """N.invite(MID_CHECK) 回填 E_MID_CHECK.expert_ids。"""
+    mc = EMidCheck.objects.filter(id=mid_check_id, deleted=0).first()
+    if mc is None:
+        return
+    mc.expert_ids = list(expert_user_ids)
+    mc.save(update_fields=["expert_ids", "updated_at"])
+
+
+def conclude_mid_check(mid_check_id: int, project_id: int, conclusion: str,
+                       score_detail: Any) -> None:
+    """N.conclude(MID_CHECK) 回写中检结论与打分明细。"""
+    mc = EMidCheck.objects.filter(id=mid_check_id, deleted=0).first()
+    if mc is None:
+        return
+    mc.conclusion = conclusion
+    mc.score_detail = score_detail
+    mc.save(update_fields=["conclusion", "score_detail", "updated_at"])
+
+
+def conclude_final_accept(final_accept_id: int, status: str) -> None:
+    """N.conclude(FINAL_ACCEPT) 回写结题验收状态（APPROVED/REJECTED/NEED_SUPPLEMENT）。"""
+    fa = EFinalAccept.objects.filter(id=final_accept_id, deleted=0).first()
+    if fa is None:
+        return
+    fa.status = status
+    if status == "APPROVED":
+        fa.accept_at = dj_tz.now()
+    fa.save(update_fields=["status", "accept_at", "updated_at"])
