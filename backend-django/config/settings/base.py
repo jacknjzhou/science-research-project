@@ -16,6 +16,7 @@ INSTALLED_APPS = [
     "core",
     "apps.p",
     "apps.project",
+    "apps.funding",
 ]
 
 MIDDLEWARE = [

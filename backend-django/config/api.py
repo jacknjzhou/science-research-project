@@ -6,6 +6,7 @@ from apps.notify import api as notify_api
 from apps.p import api as p_api
 from apps.project import api as project_api
 from apps.sysadmin import api as sysadmin_api
+from core import dataio_api
 
 # —— 公开：登录（不进鉴权中间件，对齐 Go）——
 api.post("/auth/login", tags=["auth"])(login_view)
@@ -150,3 +151,12 @@ api.post(
 api.post(
     "/applications/{id}/to-project", auth=ark_auth, tags=["project"]
 )(project_api.application_to_project)
+
+# —— dataio Excel 导入导出底座 ——
+api.get("/dataio/template", auth=ark_auth, tags=["dataio"])(dataio_api.template)
+api.post("/dataio/import", auth=ark_auth, tags=["dataio"])(dataio_api.import_rows)
+api.get("/dataio/imports", auth=ark_auth, tags=["dataio"])(dataio_api.list_imports)
+api.post(
+    "/dataio/imports/{id}/undo", auth=ark_auth, tags=["dataio"]
+)(dataio_api.undo_import)
+api.post("/dataio/export", auth=ark_auth, tags=["dataio"])(dataio_api.export)
