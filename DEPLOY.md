@@ -1,5 +1,7 @@
 # 部署方案 · Docker Compose 一键启动全套服务
 
+> **⚠️ 已过时（2026-10-17）**：本文描述的 Node/Fastify 后端部署已随旧后端移除（源码快照：git tag `legacy-backend-20261017`）。当前 `docker-compose.yml` 仅保留 postgres/redis/minio 基础设施；backend-django 的部署方案见 `docs/superpowers/specs/2026-10-17-backend-django-rewrite-spec.md` §九（开发 compose + 生产 systemd 非容器化）。Phase 0 完成后本文将重写。
+
 本方案用 Docker Compose 把「契约驱动参考栈」整套拉起：nginx 托管的前端 SPA + Node/Fastify 参考后端，二者同源、开箱可访问。生产目标（Java 17 + Spring Cloud Alibaba + PostgreSQL）落地后，只需替换同名 `backend` 服务，前端与反代保持不变。
 
 ## 前置条件
