@@ -13,6 +13,9 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "apps.sysadmin",
     "apps.notify",
+    "core",
+    "apps.p",
+    "apps.project",
 ]
 
 MIDDLEWARE = [
