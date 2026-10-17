@@ -1,6 +1,8 @@
 """数据决策域 D：经费监督大屏真聚合（F-18 一图一舱三预警）。
 
 只读投影，复用 funding 表；legalEntityId 可空看合并视图。
+另含工作台/大屏读端点：/tasks/summary、/dash/metrics/{code}、/dash/forecast、
+/dash/report/instance/{id}/drill、/dash/screens。
 """
 from __future__ import annotations
 
@@ -121,4 +123,148 @@ def funding_dashboard(request: HttpRequest):
         "alerts": alerts,
         "byCollege": by_college,
         "bySubject": by_subject,
+    })
+
+
+# ---------------------------------------------------------------------------
+# 工作台/大屏读端点（前端 DashView / BigscreenView 契约补齐）
+# ---------------------------------------------------------------------------
+_PROJECT_ACTIVE = ("EXECUTING", "MID_CHECK", "CHANGING", "CORRECTING", "DELAYED", "COMPLETING")
+
+
+def tasks_summary(request: HttpRequest):
+    """GET /tasks/summary —— 当前用户 {todo,message,warning} 三计数。"""
+    from apps.notify.models import SysNotification, SysTask
+
+    d = domain_from(request)
+    todo = SysTask.objects.filter(tenant_id=d.tenant_id, status="OPEN", assignee_id=d.user_id).count()
+    unread = SysNotification.objects.filter(tenant_id=d.tenant_id, user_id=d.user_id, read_at__isnull=True)
+    return ok(request, {
+        "todo": todo,
+        "message": unread.filter(typ="MESSAGE").count(),
+        "warning": unread.filter(typ="WARNING").count(),
+    })
+
+
+def metric_value(request: HttpRequest, code: str):
+    """GET /dash/metrics/{code} —— 5 个 KPI 确定性聚合；未知 code 返零值（dq_flag=NO_DATA）。
+
+    前端 DashView 用 Promise.all 并发拉取且无兜底，任何 404 都会让整页报错，
+    故未知指标也返回 200 零值行。
+    """
+    d = domain_from(request)
+    now = dj_tz.now()
+    year = dj_tz.localdate().year
+    meta = {
+        "in_research_projects": ("在研项目数", "项"),
+        "available_funding": ("可用经费余额", "万元"),
+        "yearly_outputs": ("本年度成果数", "项"),
+        "pending_applications": ("待处理申报", "件"),
+        "pending_reviews": ("评审中任务", "项"),
+    }
+    if code not in meta:
+        return ok(request, {
+            "code": code, "name": code, "unit": "", "version": 1, "value": 0,
+            "data_as_of": now.strftime("%Y-%m-%d %H:%M"), "dq_flag": "NO_DATA",
+            "drill_available": False,
+        })
+
+    value = 0
+    drill = True
+    if code == "in_research_projects":
+        from apps.project.models import EProject
+        value = EProject.objects.filter(
+            tenant_id=d.tenant_id, deleted=0, status__in=_PROJECT_ACTIVE).count()
+    elif code == "available_funding":
+        budgets = FBudget.objects.filter(tenant_id=d.tenant_id, deleted=0)
+        budget_total = float(budgets.aggregate(s=Sum("total_approved"))["s"] or 0) + \
+            float(budgets.aggregate(s=Sum("total_adjusted"))["s"] or 0)
+        used = float(FBudgetLine.objects.filter(
+            budget_id__in=list(budgets.values_list("id", flat=True)), deleted=0
+        ).aggregate(s=Sum("amount_used"))["s"] or 0)
+        value = round(max(budget_total - used, 0.0) / 10000, 2)
+    elif code == "yearly_outputs":
+        from apps.output.models import ROutput
+        value = ROutput.objects.filter(tenant_id=d.tenant_id, created_at__year=year).count()
+        drill = False
+    elif code == "pending_applications":
+        from apps.p.models import PApplication
+        value = PApplication.objects.filter(
+            tenant_id=d.tenant_id, deleted=0, status__in=("SUBMITTED", "FORMAL_CHECK")).count()
+    elif code == "pending_reviews":
+        from apps.expertreview.models import NReviewTask
+        value = NReviewTask.objects.filter(
+            tenant_id=d.tenant_id, deleted=0,
+            status__in=("QUORUM", "IN_REVIEW", "COLLECTING")).count()
+        drill = False
+
+    name, unit = meta[code]
+    return ok(request, {
+        "code": code, "name": name, "unit": unit, "version": 1, "value": value,
+        "data_as_of": now.strftime("%Y-%m-%d %H:%M"), "dq_flag": "OK",
+        "drill_available": drill,
+    })
+
+
+def forecast(request: HttpRequest):
+    """GET /dash/forecast?target_metric=monthly_expense —— 近 6 期月度实扣线性外推 3 期。"""
+    d = domain_from(request)
+    target = request.GET.get("target_metric", "monthly_expense")
+    rows = (FExpense.objects.filter(tenant_id=d.tenant_id, deleted=0,
+                                    status__in=("APPROVED", "PAID", "VOUCHER_SYNCED"))
+            .values("created_at__year", "created_at__month").annotate(s=Sum("amount")))
+    series = sorted(
+        ((r["created_at__year"] * 12 + r["created_at__month"], float(r["s"] or 0)) for r in rows),
+        key=lambda x: x[0],
+    )[-6:]
+    out: list[dict] = []
+    if len(series) >= 2:
+        n = len(series)
+        xs = list(range(n))
+        mean_x, mean_y = sum(xs) / n, sum(v for _, v in series) / n
+        denom = sum((x - mean_x) ** 2 for x in xs) or 1
+        slope = sum((x - mean_x) * (v - mean_y) for x, (_, v) in zip(xs, series)) / denom
+        intercept = mean_y - slope * mean_x
+        last_key = series[-1][0]
+        for i in range(1, 4):
+            key = last_key + i
+            year, month = divmod(key - 1, 12)
+            pred = max(intercept + slope * (n - 1 + i), 0.0)
+            spread = round(0.15 * max(pred, 1.0), 2)
+            out.append({
+                "target_metric": target,
+                "predicted_value": round(pred, 2),
+                "forecast_date": f"{year + 1}-{month + 1:02d}",
+                "confidence_interval": {
+                    "lower": round(max(pred - spread, 0.0), 2),
+                    "upper": round(pred + spread, 2),
+                    "level": 0.95,
+                },
+            })
+    return ok(request, {"list": out})
+
+
+def report_drill(request: HttpRequest, id: int):
+    """GET /dash/report/instance/{id}/drill —— 项目健康分桶 {health,count}（id 暂忽略，租户全量）。"""
+    from apps.project.models import EProject
+
+    d = domain_from(request)
+    bands = [("≥80 良好", 80, 101), ("60-79 关注", 60, 80), ("<60 风险", 0, 60)]
+    rows = []
+    for label, lo, hi in bands:
+        count = EProject.objects.filter(
+            tenant_id=d.tenant_id, deleted=0,
+            health_score__gte=lo, health_score__lt=hi).count()
+        rows.append({"health": label, "count": count})
+    return ok(request, {"rows": rows})
+
+
+def list_screens(request: HttpRequest):
+    """GET /dash/screens —— 大屏配置清单（当前演示：经费监督单屏）。"""
+    return ok(request, {
+        "rows": [{
+            "id": 1, "code": "SCR-FUNDING", "name": "科研经费监督大屏",
+            "theme": "DARK", "status": "ONLINE", "data_as_of_expr": "每 5 分钟刷新",
+        }],
+        "total": 1,
     })

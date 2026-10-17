@@ -29,6 +29,7 @@ from apps.project.mappings import (
 from apps.project.models import (
     EApplication,
     EApplyPlan,
+    EArchiveChecklist,
     EChangeRequest,
     EFinalAccept,
     EMidCheck,
@@ -659,3 +660,97 @@ def conclude_final_accept(final_accept_id: int, status: str) -> None:
     if status == "APPROVED":
         fa.accept_at = dj_tz.now()
     fa.save(update_fields=["status", "accept_at", "updated_at"])
+
+
+# ---------------------------------------------------------------------------
+# 风险预警 / 归档清单（前端 ProjectView 契约补齐，camelCase）
+# ---------------------------------------------------------------------------
+_ARCHIVE_DEFAULT_ITEMS = [
+    {"item": "结题报告", "required": True, "mime": "application/pdf", "docId": None, "uploaded": False},
+    {"item": "成果清单", "required": True, "mime": "application/pdf", "docId": None, "uploaded": False},
+    {"item": "经费决算表", "required": True, "mime": "application/pdf", "docId": None, "uploaded": False},
+    {"item": "审计报告", "required": False, "mime": "application/pdf", "docId": None, "uploaded": False},
+    {"item": "原始数据说明", "required": False, "mime": "application/pdf", "docId": None, "uploaded": False},
+]
+
+
+def _get_project_or_404(project_id: int) -> EProject:
+    p = EProject.objects.filter(id=project_id, deleted=0).first()
+    if p is None:
+        raise ApiError(404, CODE_NOT_FOUND, "项目不存在")
+    return p
+
+
+def list_risk_warnings(request: HttpRequest, id: int):
+    """GET /project/{id}/risk-warnings —— 确定性规则生成 ERiskWarning[]。
+
+    规则：经费执行率（>100% HIGH / ≥90% MID）、里程碑逾期（HIGH）、
+    健康分（<60 HIGH / <80 MID）、项目风险级（HIGH → HIGH）。
+    """
+    p = _get_project_or_404(id)
+    warnings: list[dict] = []
+
+    total, spent = float(p.total_budget or 0), float(p.spent_amount or 0)
+    if total > 0:
+        rate = spent / total
+        if rate > 1.0:
+            warnings.append((("FUNDING"), "HIGH",
+                             f"经费执行率 {rate * 100:.1f}%，已超出预算",
+                             "冻结后续报销并启动预算调整流程"))
+        elif rate >= 0.9:
+            warnings.append((("FUNDING"), "MID",
+                             f"经费执行率 {rate * 100:.1f}%，接近预算上限",
+                             "控制非必要支出，评估预算追加需求"))
+
+    today = dj_tz.localdate()
+    overdue = [m for m in EMilestone.objects.filter(project=p, deleted=0)
+               if m.due_date and m.due_date < today and not m.actual_date]
+    if overdue:
+        names = "、".join(m.name for m in overdue[:3])
+        warnings.append((("MILESTONE"), "HIGH",
+                         f"{len(overdue)} 个里程碑已逾期（{names}）",
+                         "限期提交整改说明，必要时发起变更申请"))
+
+    if p.health_score < 60:
+        warnings.append((("HEALTH"), "HIGH",
+                         f"项目健康分 {p.health_score}，处于风险区间",
+                         "约谈项目负责人并制定健康度恢复计划"))
+    elif p.health_score < 80:
+        warnings.append((("HEALTH"), "MID",
+                         f"项目健康分 {p.health_score}，需持续关注",
+                         "跟进滞后任务与经费执行进度"))
+
+    if p.risk_level == "HIGH":
+        warnings.append((("HEALTH"), "HIGH",
+                         "项目风险等级为 HIGH",
+                         "纳入重点监控清单，按周汇报进展"))
+
+    rows = [{"warningId": i + 1, "level": lv, "source": src, "title": title,
+             "suggestion": sug, "disposition": "待处理"}
+            for i, (src, lv, title, sug) in enumerate(warnings)]
+    return ok(request, rows)
+
+
+def get_archive_checklist(request: HttpRequest, id: int):
+    """GET /project/{id}/archive-checklist?stage= —— EArchiveChecklist 幂等初始化 + 契约输出。"""
+    p = _get_project_or_404(id)
+    stage = request.GET.get("stage") or "FINAL"
+    row = EArchiveChecklist.objects.filter(project=p, code=stage).first()
+    if row is None:
+        row = EArchiveChecklist.objects.create(
+            tenant_id=p.tenant_id, code=stage, creator_id=domain_from(request).user_id or 0,
+            project=p, items=_ARCHIVE_DEFAULT_ITEMS, status="DRAFT", passed=False,
+        )
+    items = row.items or _ARCHIVE_DEFAULT_ITEMS
+    required = [i for i in items if i.get("required")]
+    completed = [i for i in required if i.get("uploaded")]
+    blocked = [i["item"] for i in required if not i.get("uploaded")]
+    pct = round(len(completed) / len(required) * 100) if required else 100
+    return ok(request, {
+        "checklistJson": items,
+        "requiredCount": len(required),
+        "completedCount": len(completed),
+        "completeness": f"{pct}%",
+        "status": row.status,
+        "blockedItems": blocked,
+    })

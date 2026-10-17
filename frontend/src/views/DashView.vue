@@ -53,7 +53,7 @@ async function load() {
     const [metrics, fc, drill] = await Promise.all([
       Promise.all(KPI_CODES.map((k) => api.get<MetricValue>(`/dash/metrics/${k.code}`))),
       api.get<{ list: ForecastRow[] }>('/dash/forecast', { target_metric: 'monthly_expense' }),
-      api.get<{ rows: DrillRow[] }>('/dash/report/instance/9001/drill'),
+      api.get<{ rows: DrillRow[] }>('/dash/report/instance/1/drill'),
     ])
     metrics.forEach((m, i) => (kpi.value[KPI_CODES[i].code] = m))
     spark.value = fc?.list ?? []

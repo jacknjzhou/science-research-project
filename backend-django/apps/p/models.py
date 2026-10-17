@@ -32,6 +32,30 @@ class PGuideline(models.Model):
         db_table = "p_guideline"
 
 
+class PApplicationDoc(models.Model):
+    """申报书分节正文（对应镜像迁移的 p_application_doc）。
+
+    section_code 对齐前端 EditorView SECTIONS 9 节：
+    background/objective/content/route/innovation/foundation/schedule/budget_note/attachments。
+    PUT sections/{code} 逐节 upsert，doc_version 自增；GET documents 全节输出。
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    tenant_id = models.BigIntegerField()
+    application = models.ForeignKey("PApplication", on_delete=models.CASCADE, db_column="application_id")
+    section_code = models.CharField(max_length=64)
+    content_rich = models.TextField(null=True, blank=True)
+    word_count = models.IntegerField(default=0)
+    doc_version = models.IntegerField(default=1)
+    updated_by = models.BigIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "p_application_doc"
+        unique_together = ("application", "section_code")
+
+
 class PApplication(models.Model):
     id = models.BigAutoField(primary_key=True)
     code = models.CharField(max_length=64, null=True, blank=True)  # PRJ 编号（编号中心）

@@ -80,6 +80,29 @@ api.post(
 )(p_api.terminate_application)
 api.get("/apply/applications/{id}", auth=ark_auth, tags=["p"])(p_api.get_application)
 
+# —— P 申报书分节/预算/提交 + AI 起草 + 申报评审（EditorView/ReviewView 契约）——
+api.get(
+    "/apply/applications/{id}/documents", auth=ark_auth, tags=["p"]
+)(p_api.list_application_documents)
+api.get(
+    "/apply/applications/{id}/budget", auth=ark_auth, tags=["p"]
+)(p_api.get_application_budget)
+api.post(
+    "/apply/applications/{id}/budget", auth=ark_auth, tags=["p"]
+)(p_api.upsert_budget_line)
+api.put(
+    "/apply/applications/{id}/sections/{code}", auth=ark_auth, tags=["p"]
+)(p_api.save_application_section)
+api.post(
+    "/apply/applications/{id}/submit", auth=ark_auth, tags=["p"]
+)(p_api.submit_application)
+api.post("/apply/ai/draft", auth=ark_auth, tags=["p"])(p_api.ai_draft)
+api.post("/apply/ai/review-draft", auth=ark_auth, tags=["p"])(p_api.ai_review_draft)
+api.get("/apply/review/mytasks", auth=ark_auth, tags=["p"])(p_api.list_my_review_tasks)
+api.post(
+    "/apply/review/tasks/{id}:score", auth=ark_auth, tags=["p"]
+)(p_api.score_review_task)
+
 # —— E 项目：静态路由必须先于 {id} 注册 ——
 api.get("/project/mine", auth=ark_auth, tags=["project"])(project_api.list_my_projects)
 api.get("/project/{id}", auth=ark_auth, tags=["project"])(project_api.get_project)
@@ -103,6 +126,13 @@ api.post(
 api.post(
     "/project/{id}/final-accept", auth=ark_auth, tags=["project"]
 )(project_api.create_final_accept)
+# —— E 风险预警/归档清单（ProjectView 契约；深路径不与 {id} 吞噬冲突）——
+api.get(
+    "/project/{id}/risk-warnings", auth=ark_auth, tags=["project"]
+)(project_api.list_risk_warnings)
+api.get(
+    "/project/{id}/archive-checklist", auth=ark_auth, tags=["project"]
+)(project_api.get_archive_checklist)
 
 # —— E 变更批量审批 / 任务书提取（静态，先于 /projects/{id}/...）——
 api.post(
@@ -437,6 +467,25 @@ api.get("/perf/ranking", auth=ark_auth, tags=["performance"])(performance_api.pe
 api.get(
     "/dashboard/funding", auth=ark_auth, tags=["dataops"]
 )(dataops_api.funding_dashboard)
+# —— D 工作台/大屏读端点（DashView/BigscreenView 契约）——
+api.get("/tasks/summary", auth=ark_auth, tags=["dataops"])(dataops_api.tasks_summary)
+api.get("/dash/screens", auth=ark_auth, tags=["dataops"])(dataops_api.list_screens)
+# GET {code} 必须先于 PUT/DELETE {id} 注册（同正则路径，先命中者定方法集，路由铁律）
+api.get("/dash/metrics/{code}", auth=ark_auth, tags=["dataops"])(dataops_api.metric_value)
+# 契约 operation 兜底（D-06 大屏配置管理 / 指标口径维护，后续 Phase 实现）。
+# 注意：PUT/DELETE 与 GET /dash/metrics/{code} 同正则路径，ninja 先命中者定方法集，
+# 故参数名也须用 {code}（stub 经 contract.match 按实际路径识别契约，与参数名无关）。
+def _stub_with_code(request, code: str):
+    return stub_view(request)
+
+
+api.post("/dash/screens", auth=ark_auth, tags=["dataops"])(stub_view)
+api.put("/dash/metrics/{code}", auth=ark_auth, tags=["dataops"])(_stub_with_code)
+api.delete("/dash/metrics/{code}", auth=ark_auth, tags=["dataops"])(_stub_with_code)
+api.get("/dash/forecast", auth=ark_auth, tags=["dataops"])(dataops_api.forecast)
+api.get(
+    "/dash/report/instance/{id}/drill", auth=ark_auth, tags=["dataops"]
+)(dataops_api.report_drill)
 
 # ==================== Phase 4：T/C/S/G/A/X 域（纯契约，无 Go 参考） ====================
 from apps.transform import api as transform_api
