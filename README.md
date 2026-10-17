@@ -70,7 +70,7 @@ python manage.py migrate                                    # 默认连 localhos
 python manage.py seed_demo                                  # 幂等播种
 
 # 全量测试（sqlite 内存库，不依赖 PG）
-python -m pytest tests -q                                   # 当前 154 passed
+python -m pytest tests -q                                   # 当前 159 passed
 
 # PG 端到端冒烟（直连 live PG，幂等可重跑）
 python scripts/smoke_p3.py                                  # Phase 3 域 18 项
@@ -90,6 +90,28 @@ uvicorn svc_ai.main:app --port 8900
 - **AI 端点降级契约**：LLM 未配置或上游不可达 → HTTP 200 `{verdict:"REVIEW", confidence:0, reasons:["llm-unavailable"]}`，不阻塞业务；AI 永不自动定密（X 域）
 - **多法人/密级**：业务表携带 `legal_entity_id / security_level`；涉密对象在非 SECRET_NET 网络域不可见（`X-Network-Zone` 头），关键涉密操作须 `X-MFA-Assert` 二次鉴别
 
+### 请求体验证（pydantic v2 Schema）
+
+- 六大 Phase 4 域（T/C/S/G/A/X）的写接口已全部接入 `core.reqschema.validate_body` 装饰器，
+  请求体 Schema 集中定义在各域 `apps/<x>/schemas.py`（共 60+ 个 Schema 类，含嵌套
+  `list[VoucherItemIn]` 与 `model_validator` 跨字段校验）。
+- 校验失败返回统一信封 HTTP 400 `{code:40001, message:"参数校验失败: <字段: 原因>"}`；
+  通过后实例挂 `request.validated`（原 handler 仍可读原始 dict，渐进迁移）。
+- 设计取舍：枚举/token 类字段一律 `str` 放行，非法取值仍由 handler 按业务码 40001/40901 判定
+  （schema 只负责结构/必填/类型）；未声明字段 `extra="ignore"` 向后兼容。
+- action/soft-body 端点（submit/approve/sign/ai_* 等）保留手工校验，可渐进补 Schema。
+
+### 演示种子数据
+
+- `python manage.py seed_demo` 幂等播种（DEMO 前缀，可重复执行）：
+  - **基础**：8 角色、4 演示用户、字典、页面授权矩阵、法人/组织；
+  - **16 业务域全域演示数据（~100 行）**：通知/待办、指南/申报、项目/任务/里程碑/进展报告、
+    科目/预算/报销/到账、5 类成果、专家库/评审任务/评分/劳务、学术活动、档案/借阅、
+    绩效方案/记录/发放、转化全链（披露→评估→交易→合同→到账→分配→公示→年报）、
+    伦理案卷/承诺/失信档案、人员/团队/客座/学生、采购申请/供应商（含黑名单）/合同/订单、
+    资产（含涉密）/耗材/出入库/折旧/报废、安全策略/授权/涉密人员/哈希链日志/流出审计。
+  - compose 的 backend 服务启动时自动执行；跨域引用按依赖顺序（法人→人员→项目→业务域）。
+
 ### 接口在线文档（三处入口）
 
 | 入口 | 地址 | 内容 |
@@ -108,6 +130,7 @@ uvicorn svc_ai.main:app --port 8900
 | 3 | R 成果 / N 专家评审 / V 学术活动 / O 档案 / M 绩效 / D 大屏（~95 路由） | `6e8c32e` |
 | 4 | T 转化 / C 诚信伦理 / S 人员 / G 采购合同 / A 资产耗材 / X 涉密治理（~126 端点）+ svc-ai | `0b64232` |
 | 4.x | compose 编装修复 + svc-ai 服务编排 | `f7a715b` |
+| 4.y | 写接口 pydantic Schema 验证层 + 16 域全域演示种子 | 本次 |
 
 ## 环境变量（`ARK_*` 前缀，对齐 Go 版命名）
 

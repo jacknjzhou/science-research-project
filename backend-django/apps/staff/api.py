@@ -36,6 +36,8 @@ from core.httpx import (
     read_json_soft,
 )
 from apps.output.api import page_args, _parse_date  # 共用分页/日期解析
+from core.reqschema import validate_body
+from apps.staff.schemas import TransferIn, TeamIn, TeamMemberIn, TeamMemberRemoveIn, VisitorIn, StudentIn
 
 EMPLOYMENT_MAP = {"RESIGN": "RESIGNED", "RETIRE": "RETIRED", "TRANSFER_DEPT": "ONBOARD",
                   "REHIRE": "REHIRE", "LEAVE": "ONBOARD"}
@@ -190,6 +192,7 @@ def get_staff(request: HttpRequest, id: int):
 TRANSFER_ACTIONS = {"RESIGN", "RETIRE", "TRANSFER_DEPT", "REHIRE", "LEAVE"}
 
 
+@validate_body(TransferIn)
 @transaction.atomic
 def transfer_staff(request: HttpRequest, id: int):
     """异动/离职交接（S-10）：employment_status 迁移 + leave_date + PI 交接。"""
@@ -424,6 +427,7 @@ def list_teams(request: HttpRequest):
     } for t in rows], "total": total, "page": page, "size": size})
 
 
+@validate_body(TeamIn)
 @transaction.atomic
 def create_team(request: HttpRequest):
     dom = domain_from(request)
@@ -491,6 +495,7 @@ def list_team_members(request: HttpRequest, id: int):
     } for m in qs.order_by("joined_at")], "total": qs.count()})
 
 
+@validate_body(TeamMemberIn)
 @transaction.atomic
 def add_team_member(request: HttpRequest, id: int):
     dom = domain_from(request)
@@ -513,6 +518,7 @@ def add_team_member(request: HttpRequest, id: int):
                         "team_member_count": len(t.member_ids or [])})
 
 
+@validate_body(TeamMemberRemoveIn)
 @transaction.atomic
 def remove_team_member(request: HttpRequest, id: int):
     dom = domain_from(request)
@@ -564,6 +570,7 @@ def list_visitors(request: HttpRequest):
     } for r in rows], "total": total, "page": page, "size": size})
 
 
+@validate_body(VisitorIn)
 @transaction.atomic
 def apply_visitor(request: HttpRequest):
     """S-08：申请即建 S_STAFF 档（VISITING_SCHOLAR/GUEST）+ S_VISITOR(APPLIED)。"""
@@ -629,6 +636,7 @@ def approve_visitor(request: HttpRequest, id: int):
 # ---------------------------------------------------------------------------
 
 
+@validate_body(StudentIn)
 @transaction.atomic
 def register_student(request: HttpRequest):
     """S-09：学生参与科研登记（建 S_STAFF[STUDENT] + S_STUDENT）。"""

@@ -36,6 +36,8 @@ from core.httpx import (
     read_json_soft,
 )
 from apps.output.api import page_args, _parse_date  # 共用分页/日期解析
+from core.reqschema import validate_body
+from apps.procure.schemas import RequisitionIn, BidIn, AwardIn, ContractIn, ContractReviewIn, PaymentPlanIn, PaymentCallbackIn
 
 # G-03 确定性决策表（阈值可按租户制度包配置，此处为默认 DSL）
 WAY_PUBLIC = 4_000_000
@@ -159,6 +161,7 @@ def _decide_way(est_amount, category: str) -> tuple[str, int | None]:
     return "自行采购", 4
 
 
+@validate_body(RequisitionIn)
 @transaction.atomic
 def create_requisition(request: HttpRequest):
     """创建申请（G-01，契约无独立提交端点 → 创建即提交）+ 预算冻结（G-02，40910）
@@ -285,6 +288,7 @@ def decide_way(request: HttpRequest, id: int):
 # ---------------------------------------------------------------------------
 
 
+@validate_body(BidIn)
 @transaction.atomic
 def create_bid(request: HttpRequest):
     dom = domain_from(request)
@@ -314,6 +318,7 @@ def create_bid(request: HttpRequest):
                         "requisition_id": r.id, "method": bid.method})
 
 
+@validate_body(AwardIn)
 @transaction.atomic
 def award_bid(request: HttpRequest, id: int):
     """定标（G-05）：PUBLICIZING→AWARDED；废标（winner 空）回退释放冻结。"""
@@ -467,6 +472,7 @@ def _api_contract(c: GContract, paid_sum=0) -> dict:
     }
 
 
+@validate_body(ContractIn)
 @transaction.atomic
 def create_contract(request: HttpRequest):
     """合同创建（G-07/G-10）：相对方硬拦截 + 外协分流（OSC 前缀 + G_OUTSOURCE 台账）。"""
@@ -508,6 +514,7 @@ def create_contract(request: HttpRequest):
 REVIEW_ROLES = ("tech", "legal", "finance", "security")
 
 
+@validate_body(ContractReviewIn)
 @transaction.atomic
 def review_contract(request: HttpRequest, id: int):
     """合同评审（G-07/G-08）：技术/法务/财务/密级四方意见；任一驳回回 DRAFT。"""
@@ -621,6 +628,7 @@ def trace_contract(request: HttpRequest, id: int):
 # ---------------------------------------------------------------------------
 
 
+@validate_body(PaymentPlanIn)
 @transaction.atomic
 def create_payment_plan(request: HttpRequest, id: int):
     """付款计划（G-08）：Σ plan_amount ≤ 合同额硬拦截（40911）。"""
@@ -655,6 +663,7 @@ def create_payment_plan(request: HttpRequest, id: int):
 # ---------------------------------------------------------------------------
 
 
+@validate_body(PaymentCallbackIn)
 @transaction.atomic
 def payment_callback(request: HttpRequest):
     """/finance/expense（G-08）：F 模块付款回调，expense_id 幂等去重，累计实付≤合同额。"""

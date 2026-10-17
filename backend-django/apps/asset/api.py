@@ -31,6 +31,8 @@ from core.httpx import (
     read_json_soft,
 )
 from apps.output.api import page_args, _parse_date  # 共用分页/日期解析
+from core.reqschema import validate_body
+from apps.asset.schemas import AssetIn, FromReceiptIn, DepreciationRunIn, VoucherCallbackIn, InventoryIn, IssueIn, TransferIn, DisposalIn, StockInIn, StockOutIn
 
 # G-17 与本域共用：重复转资产幂等拦截（错误码已在 G 域登记）
 CODE_DUPLICATE_ASSET = 40916
@@ -162,6 +164,7 @@ def _new_asset(dom, b: dict) -> AAsset:
     return a
 
 
+@validate_body(AssetIn)
 @transaction.atomic
 def create_asset(request: HttpRequest):
     dom = domain_from(request)
@@ -172,6 +175,7 @@ def create_asset(request: HttpRequest):
     return ok(request, _api_asset(a))
 
 
+@validate_body(FromReceiptIn)
 @transaction.atomic
 def create_from_receipt(request: HttpRequest):
     """A-03 承接 G-17（合并端点）：ACCEPTED 订单 → 资产/耗材登记，1:1 幂等（40916）。"""
@@ -333,6 +337,7 @@ def _asset_txn(dom, a: AAsset, typ: str, b: dict, operator_id: int, status="ISSU
     )
 
 
+@validate_body(IssueIn)
 @transaction.atomic
 def issue_asset(request: HttpRequest, id: int):
     dom = domain_from(request)
@@ -377,6 +382,7 @@ def return_asset(request: HttpRequest, id: int):
     return ok(request, _api_txn(t))
 
 
+@validate_body(TransferIn)
 @transaction.atomic
 def transfer_asset(request: HttpRequest, id: int):
     """调拨：涉密资产须保密审查单（联动 11），否则 403；调拨落地置 IN_USE。"""
@@ -453,6 +459,7 @@ def _sku_balance(tenant_id: int, sku: str):
         s=Sum("stock_qty"))["s"] or 0
 
 
+@validate_body(StockInIn)
 @transaction.atomic
 def stock_in(request: HttpRequest, sku: str):
     """入库（A-07）：批次记录（同租户同批次同 SKU 唯一，累加），危化须绑定 MSDS。"""
@@ -499,6 +506,7 @@ def stock_in(request: HttpRequest, sku: str):
     return ok(request, _api_txn(t))
 
 
+@validate_body(StockOutIn)
 @transaction.atomic
 def stock_out(request: HttpRequest, sku: str):
     """出库领用（A-07/A-08）：FIFO+效期冻结+危化双人双锁+豁免留痕。"""
@@ -570,6 +578,7 @@ def _api_depr(d: ADepreciation) -> dict:
     }
 
 
+@validate_body(DepreciationRunIn)
 @transaction.atomic
 def run_depreciation(request: HttpRequest):
     """按月折旧（A-09）：仅 IN_USE 且要素完整；(asset_id,period) 唯一幂等。"""
@@ -619,6 +628,7 @@ def run_depreciation(request: HttpRequest):
                         "records": [_api_depr(d) for d in records]})
 
 
+@validate_body(VoucherCallbackIn)
 @transaction.atomic
 def voucher_callback(request: HttpRequest):
     """折旧凭证回调（F-11）：回写 voucher_id/posted/status。"""
@@ -659,6 +669,7 @@ def _api_disposal(dp: ADisposal) -> dict:
     }
 
 
+@validate_body(DisposalIn)
 @transaction.atomic
 def create_disposal(request: HttpRequest, id: int):
     """处置发起（A-10）：残值>原值或为负 → finance_review 标记转财务复核。"""
@@ -687,6 +698,7 @@ def create_disposal(request: HttpRequest, id: int):
     return ok(request, {**_api_disposal(dp), "financeReview": finance_review})
 
 
+@validate_body(InventoryIn)
 @transaction.atomic
 def submit_inventory(request: HttpRequest):
     """盘点（A-11）：财务账 vs 资产卡 vs 实物三方比对 → 盘盈/盘亏/账实不符。"""

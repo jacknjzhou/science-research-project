@@ -47,6 +47,8 @@ from apps.ethics.models import (
 from core.auth.deps import domain_from
 from core.httpx import ApiError, CODE_BAD_REQUEST, CODE_CONFLICT, CODE_NOT_FOUND, ok, read_json
 from apps.output.api import page_args, _parse_date  # 共用分页/日期解析
+from core.reqschema import validate_body
+from apps.ethics.schemas import UpdateIntegrityRecordIn,  CaseIn, FormalCheckIn, AssignReviewersIn, OpinionIn, MeetingVoteIn, AmendmentIn, AmendmentDecisionIn, AdverseEventIn, AnnualReviewIn, PledgeIn, IntegrityRecordIn, AppealIn, MisconductScanIn, HgrFilingIn
 
 
 def _now():
@@ -119,6 +121,7 @@ def list_ethics_cases(request: HttpRequest):
                         "total": total, "page": page, "size": size})
 
 
+@validate_body(CaseIn)
 @transaction.atomic
 def create_ethics_case(request: HttpRequest):
     dom = domain_from(request)
@@ -201,6 +204,7 @@ def ai_prescreen_ethics(request: HttpRequest, id: int):
     return ok(request, result)
 
 
+@validate_body(FormalCheckIn)
 @transaction.atomic
 def formal_check(request: HttpRequest, id: int):
     """形式审查（管理员/秘书）：齐备→UNDER_REVIEW，缺件→NEEDS_REVISION。"""
@@ -222,6 +226,7 @@ def formal_check(request: HttpRequest, id: int):
     return ok(request, to_api_case(c))
 
 
+@validate_body(AssignReviewersIn)
 @transaction.atomic
 def assign_reviewers(request: HttpRequest, id: int):
     """分派主审+委员（C-03）；利益冲突：与申请人同人强制拒绝，COI 标记留痕。"""
@@ -253,6 +258,7 @@ def assign_reviewers(request: HttpRequest, id: int):
     return ok(request, {"list": out})
 
 
+@validate_body(OpinionIn)
 @transaction.atomic
 def submit_opinion(request: HttpRequest, id: int):
     """委员打分与意见（C-03/C-04）；须为已分派委员，一人一份。"""
@@ -302,6 +308,7 @@ def meeting_check_in(request: HttpRequest, id: int):
     return ok(request, to_api_meeting(m))
 
 
+@validate_body(MeetingVoteIn)
 @transaction.atomic
 def meeting_vote(request: HttpRequest, id: int):
     """表决与生成纪要（C-04）：approve>reject 且达法定人数 → 决议生效。"""
@@ -393,6 +400,7 @@ def verify_decision_letter(request: HttpRequest, letterNo: str):
 # ---------------------------------------------------------------------------
 
 
+@validate_body(AmendmentIn)
 @transaction.atomic
 def submit_amendment(request: HttpRequest, id: int):
     dom = domain_from(request)
@@ -409,6 +417,7 @@ def submit_amendment(request: HttpRequest, id: int):
     return ok(request, to_api_amendment(a))
 
 
+@validate_body(AmendmentDecisionIn)
 @transaction.atomic
 def decide_amendment(request: HttpRequest, id: int):
     dom = domain_from(request)
@@ -429,6 +438,7 @@ def decide_amendment(request: HttpRequest, id: int):
     return ok(request, to_api_amendment(a))
 
 
+@validate_body(AdverseEventIn)
 @transaction.atomic
 def report_adverse_event(request: HttpRequest, id: int):
     """不良事件（C-09）；SERIOUS/SUSAR 触发主审快速评估 → 案卷 MONITORING。"""
@@ -450,6 +460,7 @@ def report_adverse_event(request: HttpRequest, id: int):
     return ok(request, to_api_ae(ae))
 
 
+@validate_body(AnnualReviewIn)
 @transaction.atomic
 def submit_annual_review(request: HttpRequest, id: int):
     dom = domain_from(request)
@@ -487,6 +498,7 @@ def list_annual_reviews(request: HttpRequest, id: int):
 # ---------------------------------------------------------------------------
 
 
+@validate_body(PledgeIn)
 @transaction.atomic
 def sign_pledge(request: HttpRequest):
     dom = domain_from(request)
@@ -542,6 +554,7 @@ def list_integrity_records(request: HttpRequest):
                         "total": total, "page": page, "size": size})
 
 
+@validate_body(IntegrityRecordIn)
 @transaction.atomic
 def create_integrity_record(request: HttpRequest):
     dom = domain_from(request)
@@ -573,6 +586,7 @@ def get_integrity_record(request: HttpRequest, id: int):
     return ok(request, to_api_integrity(r))
 
 
+@validate_body(UpdateIntegrityRecordIn)
 @transaction.atomic
 def update_integrity_record(request: HttpRequest, id: int):
     """更新调查结论/处分/申诉裁定（纪检）。"""
@@ -605,6 +619,7 @@ def update_integrity_record(request: HttpRequest, id: int):
     return ok(request, to_api_integrity(r))
 
 
+@validate_body(AppealIn)
 @transaction.atomic
 def appeal_integrity_record(request: HttpRequest, id: int):
     """本人申诉（独立流程，PRD §11）；申诉期内冻结处分生效。"""
@@ -634,6 +649,7 @@ def appeal_integrity_record(request: HttpRequest, id: int):
 # ---------------------------------------------------------------------------
 
 
+@validate_body(MisconductScanIn)
 @transaction.atomic
 def create_misconduct_scan(request: HttpRequest):
     dom = domain_from(request)
@@ -706,6 +722,7 @@ def list_hgr_filings(request: HttpRequest):
 # ---------------------------------------------------------------------------
 
 
+@validate_body(HgrFilingIn)
 @transaction.atomic
 def create_hgr_filing(request: HttpRequest):
     dom = domain_from(request)

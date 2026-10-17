@@ -48,7 +48,8 @@ def seed_contract(db):
         code="demo", tenant_id=1, defaults={"name": "契约测试字典", "creator_id": 1}
     )
     SysNotification.objects.get_or_create(
-        id=1, tenant_id=1, user_id=1, typ="TODO", title="契约测试"
+        tenant_id=1, user_id=1, typ="TODO", title="契约测试",
+        defaults={"content": "契约测试通知", "biz_ref": "CONTRACT"},
     )
 
 

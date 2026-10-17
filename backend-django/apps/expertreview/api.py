@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import random
+import time
 from datetime import datetime
 from decimal import Decimal
 
@@ -255,7 +256,7 @@ def draw_experts(request: HttpRequest, id: int):
     if not n or n <= 0:
         n = t.plan_count
     seed = (b or {}).get("seed")
-    seed = seed if seed is not None else dj_tz.now().timestamp_ns()
+    seed = seed if seed is not None else time.time_ns()
     drawn = _draw_experts(pool, rule, int(n), int(seed))
     seat = 0
     for eid in drawn:

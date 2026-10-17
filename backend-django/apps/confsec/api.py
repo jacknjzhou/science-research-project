@@ -37,6 +37,8 @@ from core.httpx import (
     read_json_soft,
 )
 from apps.output.api import page_args, _parse_date  # 共用分页/日期解析
+from core.reqschema import validate_body
+from apps.confsec.schemas import EntityUpsertIn, PolicyPublishIn, GrantIn, RevokeIn, ExportApplyIn, ExportApproveIn, ExportReleaseIn, ClassifyIn, SecLogIn, PersonnelReviewIn
 
 
 def _parse_dt(s):
@@ -177,6 +179,7 @@ def get_entity_tree(request: HttpRequest):
     return ok(request, nodes)
 
 
+@validate_body(EntityUpsertIn)
 @transaction.atomic
 def upsert_entity(request: HttpRequest):
     """法人新增/变更（X-08，落 sys_legal_entity；仅 R-ADMIN）。"""
@@ -297,6 +300,7 @@ def _api_policy(p: XSecurityPolicy) -> dict:
     }
 
 
+@validate_body(PolicyPublishIn)
 @transaction.atomic
 def publish_policy(request: HttpRequest):
     """发布密级/流向策略（X-01/02/05）：同租户同模块集合仅一套 ACTIVE，旧版 SUPERSEDED。"""
@@ -369,6 +373,7 @@ def _api_grant(g: XAccessGrant) -> dict:
     }
 
 
+@validate_body(GrantIn)
 @transaction.atomic
 def grant_access(request: HttpRequest):
     """授予授权/密级许可：SECRET+ 强制 mfa_bound=1 且二次鉴别。"""
@@ -417,6 +422,7 @@ def list_grants(request: HttpRequest):
                         "total": total, "page": page, "size": size})
 
 
+@validate_body(RevokeIn)
 @transaction.atomic
 def revoke_access(request: HttpRequest):
     """吊销/冻结授权（X-11）：二次鉴别 + 审计。"""
@@ -457,6 +463,7 @@ def _api_flow(f: XFlowAudit) -> dict:
     }
 
 
+@validate_body(ExportApplyIn)
 @transaction.atomic
 def create_export_apply(request: HttpRequest):
     """发起涉密输出/跨网审批（X-05/06）：跨网默认禁止，例外走此审批。"""
@@ -480,6 +487,7 @@ def create_export_apply(request: HttpRequest):
     return ok(request, _api_flow(f))
 
 
+@validate_body(ExportApproveIn)
 @transaction.atomic
 def approve_export(request: HttpRequest):
     """双审（X-06）：APPLIED→PRE_REVIEW（初审）→SEC_REVIEW（复审）；审批人≠申请人。"""
@@ -520,6 +528,7 @@ def approve_export(request: HttpRequest):
     return ok(request, _api_flow(f))
 
 
+@validate_body(ExportReleaseIn)
 def release_export(request: HttpRequest):
     """二次鉴别放行（X-04/06）：指纹比对不一致二次拦截（risk_flag=2 告警）。
     注意：不包 transaction.atomic——拦截日志必须随 409 一并落库留痕。"""
@@ -566,6 +575,7 @@ def get_export_detail(request: HttpRequest, id: int):
 # ---------------------------------------------------------------------------
 
 
+@validate_body(ClassifyIn)
 @transaction.atomic
 def submit_classify(request: HttpRequest):
     dom = domain_from(request)
@@ -615,6 +625,7 @@ def submit_classify(request: HttpRequest):
 # ---------------------------------------------------------------------------
 
 
+@validate_body(SecLogIn)
 @transaction.atomic
 def write_sec_log(request: HttpRequest):
     dom = domain_from(request)
@@ -709,6 +720,7 @@ def _api_personnel(p: XPersonnelSec) -> dict:
     }
 
 
+@validate_body(PersonnelReviewIn)
 @transaction.atomic
 def personnel_review(request: HttpRequest):
     """入职审查/在岗复审/离岗清退（X-11）：清退三要素未完成 → 授权自动收敛 FROZEN。"""

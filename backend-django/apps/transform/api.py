@@ -66,6 +66,8 @@ BOARD_THRESHOLD = 5_000_000
 INSTITUTE_THRESHOLD = 1_000_000
 
 from apps.output.api import page_args, _parse_date  # noqa: E402  共用分页/日期解析
+from core.reqschema import validate_body
+from apps.transform.schemas import DisclosureIn, ValuationIn, DealIn, NegotiationIn, ContractDraftIn, PartnerIn, ObjectionHandleIn, IncomeIn, DistributionRuleIn, DistributionIssueIn, AnnualReportIn
 
 
 def _now():
@@ -138,6 +140,7 @@ def list_disclosure(request: HttpRequest):
                         "total": total, "page": page, "size": size})
 
 
+@validate_body(DisclosureIn)
 @transaction.atomic
 def create_disclosure(request: HttpRequest):
     dom = domain_from(request)
@@ -183,6 +186,7 @@ def submit_disclosure(request: HttpRequest, id: int):
 # ---------------------------------------------------------------------------
 
 
+@validate_body(ValuationIn)
 @transaction.atomic
 def assign_valuation(request: HttpRequest, id: int):
     dom = domain_from(request)
@@ -292,6 +296,7 @@ def _apply_negotiation(deal: TDeal, b: dict, dom) -> None:
             deal.partner_checked_at = ep.last_checked_at
 
 
+@validate_body(DealIn)
 @transaction.atomic
 def create_deal(request: HttpRequest):
     dom = domain_from(request)
@@ -327,6 +332,7 @@ def get_deal(request: HttpRequest, id: int):
     return ok(request, data)
 
 
+@validate_body(NegotiationIn)
 @transaction.atomic
 def save_negotiation(request: HttpRequest, id: int):
     dom = domain_from(request)
@@ -356,6 +362,7 @@ def publish_deal(request: HttpRequest, id: int):
 # ---------------------------------------------------------------------------
 
 
+@validate_body(PartnerIn)
 @transaction.atomic
 def register_partner(request: HttpRequest):
     dom = domain_from(request)
@@ -412,6 +419,7 @@ def _contract_hash(deal_id: int, version: int, body: dict) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+@validate_body(ContractDraftIn)
 @transaction.atomic
 def draft_contract(request: HttpRequest):
     dom = domain_from(request)
@@ -619,6 +627,7 @@ def submit_objection(request: HttpRequest, dealId: int):
     return ok(request, {"objection_id": oid})
 
 
+@validate_body(ObjectionHandleIn)
 @transaction.atomic
 def handle_objection(request: HttpRequest, dealId: int):
     dom = domain_from(request)
@@ -668,6 +677,7 @@ def handle_objection(request: HttpRequest, dealId: int):
 # ---------------------------------------------------------------------------
 
 
+@validate_body(IncomeIn)
 @transaction.atomic
 def register_income(request: HttpRequest):
     dom = domain_from(request)
@@ -721,6 +731,7 @@ def match_income(request: HttpRequest, id: int):
 # ---------------------------------------------------------------------------
 
 
+@validate_body(DistributionRuleIn)
 @transaction.atomic
 def save_distribution_rule(request: HttpRequest):
     dom = domain_from(request)
@@ -805,6 +816,7 @@ def generate_distribution(request: HttpRequest, id: int):
     return ok(request, to_api_dist_record(rec))
 
 
+@validate_body(DistributionIssueIn)
 @transaction.atomic
 def issue_distribution(request: HttpRequest, id: int):
     dom = domain_from(request)
@@ -859,6 +871,7 @@ def list_my_distribution(request: HttpRequest):
 # ---------------------------------------------------------------------------
 
 
+@validate_body(AnnualReportIn)
 @transaction.atomic
 def generate_annual_report(request: HttpRequest):
     dom = domain_from(request)
