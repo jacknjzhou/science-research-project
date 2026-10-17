@@ -433,3 +433,174 @@ api.get("/perf/ranking", auth=ark_auth, tags=["performance"])(performance_api.pe
 api.get(
     "/dashboard/funding", auth=ark_auth, tags=["dataops"]
 )(dataops_api.funding_dashboard)
+
+# ==================== Phase 4：T/C/S/G/A/X 域（纯契约，无 Go 参考） ====================
+from apps.transform import api as transform_api
+
+# —— T 成果转化：/contract/draft 与 /distribution/mine 为静态段，必须先于 {id} ——
+# 铁律（Phase 3 第三例）：静态段先于 {id}，否则 [^/]+ 吞噬 → 405/422
+api.get("/disclosure", auth=ark_auth, tags=["transform"])(transform_api.list_disclosure)
+api.post("/disclosure", auth=ark_auth, tags=["transform"])(transform_api.create_disclosure)
+api.post("/disclosure/{id}/submit", auth=ark_auth, tags=["transform"])(transform_api.submit_disclosure)
+api.post("/disclosure/{id}/valuation", auth=ark_auth, tags=["transform"])(transform_api.assign_valuation)
+api.post("/valuation/{id}/external-report", auth=ark_auth, tags=["transform"])(transform_api.upload_external_report)
+
+api.get("/deal", auth=ark_auth, tags=["transform"])(transform_api.list_deals)
+api.post("/deal", auth=ark_auth, tags=["transform"])(transform_api.create_deal)
+api.get("/deal/{id}", auth=ark_auth, tags=["transform"])(transform_api.get_deal)
+api.post("/deal/{id}/negotiation", auth=ark_auth, tags=["transform"])(transform_api.save_negotiation)
+api.post("/deal/{id}/publish", auth=ark_auth, tags=["transform"])(transform_api.publish_deal)
+api.post("/deal/{id}/approve", auth=ark_auth, tags=["transform"])(transform_api.approve_deal)
+api.post("/deal/{id}/sign", auth=ark_auth, tags=["transform"])(transform_api.sign_deal)
+api.post("/deal/{id}/ai-pricing", auth=ark_auth, tags=["transform"])(transform_api.ai_pricing)
+
+api.post("/contract/draft", auth=ark_auth, tags=["transform"])(transform_api.draft_contract)  # 静态段先于 /contract/{id}
+api.get("/contract/{id}", auth=ark_auth, tags=["transform"])(transform_api.get_contract)
+api.post("/contract/{id}/ai-risk", auth=ark_auth, tags=["transform"])(transform_api.ai_contract_risk)
+
+api.post("/partner", auth=ark_auth, tags=["transform"])(transform_api.register_partner)
+api.get("/partner", auth=ark_auth, tags=["transform"])(transform_api.list_partners)
+
+# 公示：GET 详情与 POST 异议提交为公开通道（契约 security: []，不登录）
+api.get("/publicity/{dealId}", tags=["transform"])(transform_api.get_publicity)
+api.post("/publicity/{dealId}", auth=ark_auth, tags=["transform"])(transform_api.publish_publicity)
+api.post("/publicity/{dealId}/objection", tags=["transform"])(transform_api.submit_objection)
+api.post("/publicity/{dealId}/objection/handle", auth=ark_auth, tags=["transform"])(transform_api.handle_objection)
+
+api.post("/income", auth=ark_auth, tags=["transform"])(transform_api.register_income)
+api.post("/income/{id}/match", auth=ark_auth, tags=["transform"])(transform_api.match_income)
+api.post("/income/{id}/distribution", auth=ark_auth, tags=["transform"])(transform_api.generate_distribution)
+
+api.post("/distribution-rule", auth=ark_auth, tags=["transform"])(transform_api.save_distribution_rule)
+api.get("/distribution/mine", auth=ark_auth, tags=["transform"])(transform_api.list_my_distribution)  # 静态段先于 {id}
+api.post("/distribution/{id}/issue", auth=ark_auth, tags=["transform"])(transform_api.issue_distribution)
+
+api.post("/annual-report/generate", auth=ark_auth, tags=["transform"])(transform_api.generate_annual_report)
+api.post("/ai/opportunity", auth=ark_auth, tags=["transform"])(transform_api.ai_opportunity)
+
+from apps.ethics import api as ethics_api
+
+# —— C 诚信伦理：/ethics/letter/{letterNo} 公开验证与 /integrity/pledge 静态段先于 {id} ——
+api.get("/ethics", auth=ark_auth, tags=["ethics"])(ethics_api.list_ethics_cases)
+api.post("/ethics", auth=ark_auth, tags=["ethics"])(ethics_api.create_ethics_case)
+
+api.get("/ethics/{id}", auth=ark_auth, tags=["ethics"])(ethics_api.get_ethics_case)
+api.post("/ethics/{id}/submit", auth=ark_auth, tags=["ethics"])(ethics_api.submit_ethics_case)
+api.post("/ethics/{id}/ai-prescreen", auth=ark_auth, tags=["ethics"])(ethics_api.ai_prescreen_ethics)
+api.post("/ethics/{id}/formal-check", auth=ark_auth, tags=["ethics"])(ethics_api.formal_check)
+api.post("/ethics/{id}/assign", auth=ark_auth, tags=["ethics"])(ethics_api.assign_reviewers)
+api.post("/ethics/{id}/opinion", auth=ark_auth, tags=["ethics"])(ethics_api.submit_opinion)
+api.post("/ethics/{id}/meeting/check-in", auth=ark_auth, tags=["ethics"])(ethics_api.meeting_check_in)
+api.post("/ethics/{id}/meeting/vote", auth=ark_auth, tags=["ethics"])(ethics_api.meeting_vote)
+api.post("/ethics/{id}/letter", auth=ark_auth, tags=["ethics"])(ethics_api.issue_decision_letter)
+api.get("/ethics/letter/{letterNo}", tags=["ethics"])(ethics_api.verify_decision_letter)  # 公开：编号可查内容不可查
+api.post("/ethics/{id}/amendment", auth=ark_auth, tags=["ethics"])(ethics_api.submit_amendment)
+api.post("/ethics/amendment/{id}/decision", auth=ark_auth, tags=["ethics"])(ethics_api.decide_amendment)
+api.post("/ethics/{id}/ae-report", auth=ark_auth, tags=["ethics"])(ethics_api.report_adverse_event)
+api.post("/ethics/{id}/annual-review", auth=ark_auth, tags=["ethics"])(ethics_api.submit_annual_review)
+api.get("/ethics/{id}/annual-review", auth=ark_auth, tags=["ethics"])(ethics_api.list_annual_reviews)
+
+api.post("/integrity/pledge", auth=ark_auth, tags=["ethics"])(ethics_api.sign_pledge)
+api.get("/integrity/pledge", auth=ark_auth, tags=["ethics"])(ethics_api.list_my_pledges)
+api.get("/integrity/records", auth=ark_auth, tags=["ethics"])(ethics_api.list_integrity_records)
+api.post("/integrity/records", auth=ark_auth, tags=["ethics"])(ethics_api.create_integrity_record)
+api.get("/integrity/records/{id}", auth=ark_auth, tags=["ethics"])(ethics_api.get_integrity_record)
+api.put("/integrity/records/{id}", auth=ark_auth, tags=["ethics"])(ethics_api.update_integrity_record)
+api.post("/integrity/records/{id}/appeal", auth=ark_auth, tags=["ethics"])(ethics_api.appeal_integrity_record)
+api.delete("/integrity/records/{id}", auth=ark_auth, tags=["ethics"])(ethics_api.delete_integrity_record)
+
+api.post("/integrity/misconduct-scan", auth=ark_auth, tags=["ethics"])(ethics_api.create_misconduct_scan)
+api.get("/integrity/misconduct-scans", auth=ark_auth, tags=["ethics"])(ethics_api.list_misconduct_scans)
+
+api.post("/hgr/filing", auth=ark_auth, tags=["ethics"])(ethics_api.create_hgr_filing)
+api.get("/hgr/filing", auth=ark_auth, tags=["ethics"])(ethics_api.list_hgr_filings)
+api.post("/hgr/filing/{id}/sync", auth=ark_auth, tags=["ethics"])(ethics_api.sync_hgr_filing)
+
+from apps.staff import api as staff_api
+
+# —— S 人员团队：/staff/me 与 /talent/analysis 静态段先于 {id} ——
+api.get("/staff/me", auth=ark_auth, tags=["staff"])(staff_api.get_me)
+api.put("/staff/me/research", auth=ark_auth, tags=["staff"])(staff_api.update_my_research)
+api.get("/staff", auth=ark_auth, tags=["staff"])(staff_api.list_staff)
+api.get("/staff/{id}", auth=ark_auth, tags=["staff"])(staff_api.get_staff)
+api.post("/staff/{id}/transfer", auth=ark_auth, tags=["staff"])(staff_api.transfer_staff)
+api.get("/staff/{id}/portrait", auth=ark_auth, tags=["staff"])(staff_api.get_portrait)
+api.post("/staff/{id}/portrait", auth=ark_auth, tags=["staff"])(staff_api.refresh_portrait)
+api.get("/staff/{id}/collab-graph", auth=ark_auth, tags=["staff"])(staff_api.get_collab_graph)
+api.post("/staff/{id}/ai-expertise", auth=ark_auth, tags=["staff"])(staff_api.ai_expertise)
+api.post("/staff/{id}/ai-resume", auth=ark_auth, tags=["staff"])(staff_api.ai_resume)
+api.get("/staff/{id}/talent-plans", auth=ark_auth, tags=["staff"])(staff_api.list_talent_plans)
+
+api.get("/teams", auth=ark_auth, tags=["staff"])(staff_api.list_teams)
+api.post("/teams", auth=ark_auth, tags=["staff"])(staff_api.create_team)
+api.get("/teams/{id}", auth=ark_auth, tags=["staff"])(staff_api.get_team)
+api.get("/teams/{id}/members", auth=ark_auth, tags=["staff"])(staff_api.list_team_members)
+api.post("/teams/{id}/members", auth=ark_auth, tags=["staff"])(staff_api.add_team_member)
+api.post("/teams/{id}/members/remove", auth=ark_auth, tags=["staff"])(staff_api.remove_team_member)
+
+api.get("/visitors", auth=ark_auth, tags=["staff"])(staff_api.list_visitors)
+api.post("/visitors", auth=ark_auth, tags=["staff"])(staff_api.apply_visitor)
+api.post("/visitors/{id}/approve", auth=ark_auth, tags=["staff"])(staff_api.approve_visitor)
+api.post("/students", auth=ark_auth, tags=["staff"])(staff_api.register_student)
+api.get("/talent/analysis", auth=ark_auth, tags=["staff"])(staff_api.talent_analysis)
+
+from apps.procure import api as procure_api
+from apps.asset import api as asset_api
+
+# —— G 采购与合同（/procurement/*、/contract/*、/supplier、/finance/expense）——
+api.get("/procurement/requisitions", auth=ark_auth, tags=["requisition"])(procure_api.list_requisitions)
+api.post("/procurement/requisitions", auth=ark_auth, tags=["requisition"])(procure_api.create_requisition)
+api.get("/procurement/requisitions/{id}/way", auth=ark_auth, tags=["requisition"])(procure_api.get_way)
+api.post("/procurement/bids", auth=ark_auth, tags=["bid"])(procure_api.create_bid)
+api.post("/procurement/bids/{id}/award", auth=ark_auth, tags=["bid"])(procure_api.award_bid)
+api.get("/procurement/orders", auth=ark_auth, tags=["order"])(procure_api.list_orders)
+api.get("/contract", auth=ark_auth, tags=["contract"])(procure_api.list_contracts)
+api.post("/contract", auth=ark_auth, tags=["contract"])(procure_api.create_contract)
+api.put("/contract/{id}/review", auth=ark_auth, tags=["contract"])(procure_api.review_contract)
+api.post("/contract/{id}/sign", auth=ark_auth, tags=["contract"])(procure_api.sign_contract)
+api.post("/contract/{id}/ai-parse", auth=ark_auth, tags=["contract"])(procure_api.ai_parse_contract)
+api.post("/contract/{id}/ai-risk", auth=ark_auth, tags=["contract"])(procure_api.ai_risk_contract)
+api.get("/contract/{id}/trace", auth=ark_auth, tags=["contract"])(procure_api.trace_contract)
+api.post("/contract/{id}/payment-plan", auth=ark_auth, tags=["contract"])(procure_api.create_payment_plan)
+api.post("/finance/expense", auth=ark_auth, tags=["payment"])(procure_api.payment_callback)  # G-08 付款回调
+api.get("/supplier", auth=ark_auth, tags=["supplier"])(procure_api.list_suppliers)
+
+# —— A 资产与耗材：静态段（/asset/from-receipt、/asset/ledger、/asset/depreciation/run、
+#    /asset/inventory）先于 /asset/{id}/* 动态段（路由铁律）——
+api.post("/asset", auth=ark_auth, tags=["asset"])(asset_api.create_asset)
+api.post("/asset/from-receipt", auth=ark_auth, tags=["asset"])(asset_api.create_from_receipt)  # G-17+A-03 合并
+api.get("/asset/ledger", auth=ark_auth, tags=["asset"])(asset_api.ledger)
+api.post("/asset/depreciation/run", auth=ark_auth, tags=["depreciation"])(asset_api.run_depreciation)
+api.post("/finance/voucher", auth=ark_auth, tags=["depreciation"])(asset_api.voucher_callback)  # F-11 回调
+api.post("/asset/inventory", auth=ark_auth, tags=["inventory"])(asset_api.submit_inventory)
+api.get("/asset/{id}/lifecycle", auth=ark_auth, tags=["asset"])(asset_api.lifecycle)
+api.post("/asset/{id}/issue", auth=ark_auth, tags=["asset"])(asset_api.issue_asset)
+api.post("/asset/{id}/return", auth=ark_auth, tags=["asset"])(asset_api.return_asset)
+api.post("/asset/{id}/transfer", auth=ark_auth, tags=["asset"])(asset_api.transfer_asset)
+api.post("/asset/{id}/disposal", auth=ark_auth, tags=["asset"])(asset_api.create_disposal)
+api.get("/asset/{id}/trace", auth=ark_auth, tags=["asset"])(asset_api.trace)
+api.post("/asset/{id}/ai-fill", auth=ark_auth, tags=["ai"])(asset_api.ai_fill)
+api.get("/consumable", auth=ark_auth, tags=["consumable"])(asset_api.list_consumables)
+api.post("/consumable/{sku}/stock-in", auth=ark_auth, tags=["consumable"])(asset_api.stock_in)
+api.post("/consumable/{sku}/stock-out", auth=ark_auth, tags=["consumable"])(asset_api.stock_out)
+
+from apps.confsec import api as confsec_api
+
+# —— X 涉密管理与多法人治理（/governance/*、/security/*）：静态段 /security/policy/current
+#    与 /security/export/approve|release 先于 /security/export/{id}（路由铁律）——
+api.get("/governance/entity", auth=ark_auth, tags=["governance"])(confsec_api.get_entity_tree)
+api.post("/governance/entity", auth=ark_auth, tags=["governance"])(confsec_api.upsert_entity)
+api.get("/governance/consolidate", auth=ark_auth, tags=["governance"])(confsec_api.consolidate)
+api.post("/security/policy", auth=ark_auth, tags=["policy"])(confsec_api.publish_policy)
+api.get("/security/policy/current", auth=ark_auth, tags=["policy"])(confsec_api.current_policy)
+api.post("/security/grant", auth=ark_auth, tags=["grant"])(confsec_api.grant_access)
+api.get("/security/grant", auth=ark_auth, tags=["grant"])(confsec_api.list_grants)
+api.post("/security/revoke", auth=ark_auth, tags=["grant"])(confsec_api.revoke_access)
+api.post("/security/export", auth=ark_auth, tags=["export"])(confsec_api.create_export_apply)
+api.post("/security/export/approve", auth=ark_auth, tags=["export"])(confsec_api.approve_export)
+api.post("/security/export/release", auth=ark_auth, tags=["export"])(confsec_api.release_export)
+api.get("/security/export/{id}", auth=ark_auth, tags=["export"])(confsec_api.get_export_detail)
+api.post("/security/classify", auth=ark_auth, tags=["classify"])(confsec_api.submit_classify)
+api.post("/security/log", auth=ark_auth, tags=["log"])(confsec_api.write_sec_log)
+api.get("/security/log", auth=ark_auth, tags=["log"])(confsec_api.query_sec_log)
+api.post("/security/personnel/review", auth=ark_auth, tags=["personnel"])(confsec_api.personnel_review)

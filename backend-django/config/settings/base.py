@@ -23,6 +23,12 @@ INSTALLED_APPS = [
     "apps.archive",
     "apps.performance",
     "apps.dataops",
+    "apps.transform",
+    "apps.ethics",
+    "apps.staff",
+    "apps.procure",
+    "apps.asset",
+    "apps.confsec",
 ]
 
 MIDDLEWARE = [

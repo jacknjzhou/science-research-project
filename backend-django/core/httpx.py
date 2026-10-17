@@ -29,6 +29,8 @@ CODE_CONFLICT_REF = 40902  # 业务引用/预算余额不足（冻结、实扣�
 CODE_IDEM_IN_PROGRESS = 40909  # 相同幂等键正在处理中
 CODE_STUB_UNAVAILABLE = 50301  # 依赖缺失（如 Storage 未配置）
 CODE_INTERNAL = 50001  # 内部错误
+CODE_TEAM_PCT_LOW = 50003  # T 域：团队比例低于 min_team_pct 拦截（detail §10）
+CODE_DIST_PCT_SUM = 50010  # T 域：分配三比例之和≠1（detail §10）
 
 HEADER_TRACE = "X-Trace-Id"
 

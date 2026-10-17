@@ -487,3 +487,256 @@ p, R-STAFF,   /api/v1/tasks/*,                GET
 p, R-MANAGER, /api/v1/tasks/*,                GET
 p, R-LEADER,  /api/v1/tasks/*,                GET
 p, R-FINANCE, /api/v1/tasks/*,                GET
+
+# ---- Phase 4 T 科技成果转化（纯契约域，无 Go 参考）----
+# 铁律：keyMatch2 `*` 需尾斜杠才命中，裸路径单独成条。
+# 披露：R-STAFF 创建/提交/查；估值分派 R-MANAGER
+p, R-STAFF,   /api/v1/disclosure,                      GET
+p, R-STAFF,   /api/v1/disclosure,                      POST
+p, R-STAFF,   /api/v1/disclosure/*,                    GET
+p, R-STAFF,   /api/v1/disclosure/*/submit,             POST
+p, R-MANAGER, /api/v1/disclosure,                      GET
+p, R-MANAGER, /api/v1/disclosure,                      POST
+p, R-MANAGER, /api/v1/disclosure/*,                    GET
+p, R-MANAGER, /api/v1/disclosure/*/submit,             POST
+p, R-MANAGER, /api/v1/disclosure/*/valuation,          POST
+p, R-MANAGER, /api/v1/valuation/*/external-report,     POST
+# 交易：R-STAFF 只读；R-MANAGER 全写；审批 R-MANAGER/R-LEADER
+p, R-STAFF,   /api/v1/deal,                            GET
+p, R-MANAGER, /api/v1/deal,                            GET
+p, R-MANAGER, /api/v1/deal,                            POST
+p, R-MANAGER, /api/v1/deal/*,                          GET
+p, R-MANAGER, /api/v1/deal/*/negotiation,              POST
+p, R-MANAGER, /api/v1/deal/*/publish,                  POST
+p, R-MANAGER, /api/v1/deal/*/approve,                  POST
+p, R-LEADER,  /api/v1/deal/*/approve,                  POST
+p, R-MANAGER, /api/v1/deal/*/sign,                     POST
+p, R-MANAGER, /api/v1/deal/*/ai-pricing,               POST
+# 合同/企业库/年报/AI
+p, R-MANAGER, /api/v1/contract/draft,                  POST
+p, R-MANAGER, /api/v1/contract/*,                      GET
+p, R-MANAGER, /api/v1/contract/*/ai-risk,              POST
+p, R-STAFF,   /api/v1/partner,                         GET
+p, R-MANAGER, /api/v1/partner,                         GET
+p, R-MANAGER, /api/v1/partner,                         POST
+p, R-MANAGER, /api/v1/annual-report/generate,          POST
+p, R-MANAGER, /api/v1/ai/opportunity,                  POST
+p, R-STAFF,   /api/v1/ai/opportunity,                  POST
+# 到账：R-FINANCE/R-MANAGER
+p, R-FINANCE, /api/v1/income,                          POST
+p, R-FINANCE, /api/v1/income/*/match,                  POST
+p, R-FINANCE, /api/v1/income/*/distribution,           POST
+p, R-MANAGER, /api/v1/income,                          POST
+p, R-MANAGER, /api/v1/income/*/match,                  POST
+p, R-MANAGER, /api/v1/income/*/distribution,           POST
+# 分配：规则 R-MANAGER；mine 全员；发放 R-MANAGER
+p, R-MANAGER, /api/v1/distribution-rule,               POST
+p, R-STAFF,   /api/v1/distribution/mine,               GET
+p, R-MANAGER, /api/v1/distribution/mine,               GET
+p, R-MANAGER, /api/v1/distribution/*/issue,            POST
+# 公示发布/异议处置（GET 详情与异议提交为公开通道，不进 casbin）
+p, R-MANAGER, /api/v1/publicity/*,                     POST
+
+# ---- Phase 4 C 科研诚信与伦理（纯契约域）----
+# 伦理案卷：R-STAFF 申请/提交/查自己的；R-ETHICS 伦理办全流程；R-EXPERT 委员意见/会议
+p, R-STAFF,   /api/v1/ethics,                        GET
+p, R-STAFF,   /api/v1/ethics,                        POST
+p, R-STAFF,   /api/v1/ethics/*,                      GET
+p, R-STAFF,   /api/v1/ethics/*/submit,               POST
+p, R-STAFF,   /api/v1/ethics/*/ai-prescreen,         POST
+p, R-STAFF,   /api/v1/ethics/*/amendment,            POST
+p, R-STAFF,   /api/v1/ethics/*/ae-report,            POST
+p, R-STAFF,   /api/v1/ethics/*/annual-review,        POST
+p, R-ETHICS,  /api/v1/ethics,                        GET
+p, R-ETHICS,  /api/v1/ethics,                        POST
+p, R-ETHICS,  /api/v1/ethics/*,                      GET
+p, R-ETHICS,  /api/v1/ethics/*,                      POST
+p, R-EXPERT,  /api/v1/ethics,                        GET
+p, R-EXPERT,  /api/v1/ethics/*,                      GET
+p, R-EXPERT,  /api/v1/ethics/*/opinion,              POST
+p, R-EXPERT,  /api/v1/ethics/*/meeting/check-in,     POST
+p, R-EXPERT,  /api/v1/ethics/*/meeting/vote,         POST
+p, R-EXPERT,  /api/v1/ethics/*/letter,               POST
+# 年度复审列表
+p, R-ETHICS,  /api/v1/ethics/annual-reviews,         GET
+p, R-EXPERT,  /api/v1/ethics/annual-reviews,         GET
+p, R-STAFF,   /api/v1/ethics/annual-reviews,         GET
+# 诚信承诺（全员）；失信档案（纪检/管理员），申诉本人
+p, R-STAFF,   /api/v1/integrity/pledge,              GET
+p, R-STAFF,   /api/v1/integrity/pledge,              POST
+p, R-MANAGER, /api/v1/integrity/pledge,              GET
+p, R-MANAGER, /api/v1/integrity/pledge,              POST
+p, R-ETHICS,  /api/v1/integrity/pledge,              GET
+p, R-ETHICS,  /api/v1/integrity/pledge,              POST
+p, R-EXPERT,  /api/v1/integrity/pledge,              GET
+p, R-EXPERT,  /api/v1/integrity/pledge,              POST
+p, R-AUDITOR, /api/v1/integrity/records,             GET
+p, R-AUDITOR, /api/v1/integrity/records,             POST
+p, R-AUDITOR, /api/v1/integrity/records/*,           GET
+p, R-AUDITOR, /api/v1/integrity/records/*,           PUT
+p, R-AUDITOR, /api/v1/integrity/records/*/appeal,    POST
+p, R-ADMIN,   /api/v1/integrity/records,             GET
+p, R-ADMIN,   /api/v1/integrity/records,             POST
+p, R-ADMIN,   /api/v1/integrity/records/*,           GET
+p, R-ADMIN,   /api/v1/integrity/records/*,           PUT
+p, R-STAFF,   /api/v1/integrity/records,             GET
+p, R-STAFF,   /api/v1/integrity/records/*,           GET
+p, R-STAFF,   /api/v1/integrity/records/*/appeal,    POST
+# 不端检测 / 人遗备案
+p, R-MANAGER, /api/v1/integrity/misconduct-scan,     POST
+p, R-MANAGER, /api/v1/integrity/misconduct-scans,    GET
+p, R-AUDITOR, /api/v1/integrity/misconduct-scan,     POST
+p, R-AUDITOR, /api/v1/integrity/misconduct-scans,    GET
+p, R-STAFF,   /api/v1/hgr/filing,                    POST
+p, R-MANAGER, /api/v1/hgr/filing,                    POST
+p, R-MANAGER, /api/v1/hgr/filing/*/sync,             POST
+# C 域补充（契约对齐修正）：按案卷复审列表 / 纪检软删 / 人遗列表
+p, R-STAFF,   /api/v1/ethics/*/annual-review,         GET
+p, R-ETHICS,  /api/v1/ethics/*/annual-review,         GET
+p, R-EXPERT,  /api/v1/ethics/*/annual-review,         GET
+p, R-AUDITOR, /api/v1/integrity/records/*,           DELETE
+p, R-ADMIN,   /api/v1/integrity/records/*,           DELETE
+p, R-STAFF,   /api/v1/hgr/filing,                    GET
+p, R-MANAGER, /api/v1/hgr/filing,                    GET
+p, R-ETHICS,  /api/v1/hgr/filing,                    GET
+
+# ---- Phase 4 S 人员与团队（纯契约域）----
+# 人员档案：全员读/me 编辑；异动 R-MANAGER；敏感列脱敏在应用层
+p, R-STAFF,   /api/v1/staff,                         GET
+p, R-STAFF,   /api/v1/staff/me,                      GET
+p, R-STAFF,   /api/v1/staff/me/research,             PUT
+p, R-STAFF,   /api/v1/staff/*,                       GET
+p, R-STAFF,   /api/v1/staff/*/portrait,              GET
+p, R-STAFF,   /api/v1/staff/*/collab-graph,          GET
+p, R-STAFF,   /api/v1/staff/*/talent-plans,          GET
+p, R-STAFF,   /api/v1/staff/*/ai-expertise,          POST
+p, R-STAFF,   /api/v1/staff/*/ai-resume,             POST
+p, R-MANAGER, /api/v1/staff,                         GET
+p, R-MANAGER, /api/v1/staff/*,                       GET
+p, R-MANAGER, /api/v1/staff/*/transfer,              POST
+p, R-MANAGER, /api/v1/staff/*/portrait,              GET
+p, R-MANAGER, /api/v1/staff/*/portrait,              POST
+p, R-ADMIN,   /api/v1/staff/*/portrait,              POST
+# 团队：R-STAFF 读；R-MANAGER 写
+p, R-STAFF,   /api/v1/teams,                         GET
+p, R-STAFF,   /api/v1/teams/*,                       GET
+p, R-MANAGER, /api/v1/teams,                         GET
+p, R-MANAGER, /api/v1/teams,                         POST
+p, R-MANAGER, /api/v1/teams/*,                       GET
+p, R-MANAGER, /api/v1/teams/*/members,               GET
+p, R-MANAGER, /api/v1/teams/*/members,               POST
+p, R-MANAGER, /api/v1/teams/*/members/remove,        POST
+# 客座/学生/梯队
+p, R-MANAGER, /api/v1/visitors,                      GET
+p, R-MANAGER, /api/v1/visitors,                      POST
+p, R-MANAGER, /api/v1/visitors/*/approve,            POST
+p, R-MANAGER, /api/v1/students,                      POST
+p, R-STAFF,   /api/v1/students,                      POST
+p, R-STAFF,   /api/v1/talent/analysis,               GET
+p, R-MANAGER, /api/v1/talent/analysis,               GET
+
+# ---- Phase 4 G 采购与合同（纯契约域）----
+# 供应商库：全员可读；写入（入库/黑名单）走 R-ADMIN
+p, R-STAFF,   /api/v1/supplier,                      GET
+p, R-MANAGER, /api/v1/supplier,                      GET
+p, R-FINANCE, /api/v1/supplier,                      GET
+p, R-AUDITOR, /api/v1/supplier,                      GET
+# 采购申请：R-STAFF 建单；R-MANAGER 全读；方式判定全员可读可复算
+p, R-STAFF,   /api/v1/procurement/requisitions,      GET
+p, R-STAFF,   /api/v1/procurement/requisitions,      POST
+p, R-STAFF,   /api/v1/procurement/requisitions/*/way, GET
+p, R-MANAGER, /api/v1/procurement/requisitions,      GET
+p, R-MANAGER, /api/v1/procurement/requisitions,      POST
+p, R-MANAGER, /api/v1/procurement/requisitions/*/way, GET
+p, R-AUDITOR, /api/v1/procurement/requisitions,      GET
+p, R-AUDITOR, /api/v1/procurement/requisitions/*/way, GET
+# 招标/定标：R-MANAGER 写
+p, R-MANAGER, /api/v1/procurement/bids,              POST
+p, R-MANAGER, /api/v1/procurement/bids/*/award,      POST
+# 订单：全员读，R-MANAGER 侧管理
+p, R-STAFF,   /api/v1/procurement/orders,            GET
+p, R-MANAGER, /api/v1/procurement/orders,            GET
+p, R-AUDITOR, /api/v1/procurement/orders,            GET
+# 合同：R-STAFF 读/R-MANAGER 写评审签署/财务付款
+p, R-STAFF,   /api/v1/contract,                      GET
+p, R-STAFF,   /api/v1/contract/*/trace,              GET
+p, R-MANAGER, /api/v1/contract,                       GET
+p, R-MANAGER, /api/v1/contract,                       POST
+p, R-MANAGER, /api/v1/contract/*/review,             PUT
+p, R-MANAGER, /api/v1/contract/*/sign,               POST
+p, R-MANAGER, /api/v1/contract/*/ai-parse,           POST
+p, R-MANAGER, /api/v1/contract/*/ai-risk,            POST
+p, R-MANAGER, /api/v1/contract/*/trace,              GET
+p, R-MANAGER, /api/v1/contract/*/payment-plan,       POST
+p, R-MANAGER, /api/v1/finance/expense,               POST
+p, R-FINANCE, /api/v1/finance/expense,               POST
+p, R-FINANCE, /api/v1/contract,                      GET
+p, R-FINANCE, /api/v1/contract/*/payment-plan,       POST
+
+# ---- Phase 4 A 资产与耗材（纯契约域）----
+# 资产卡：全员读台账/全周期；R-MANAGER 建卡/领用/归还/调拨/处置
+p, R-STAFF,   /api/v1/asset,                         POST
+p, R-STAFF,   /api/v1/asset/ledger,                  GET
+p, R-STAFF,   /api/v1/asset/*/lifecycle,             GET
+p, R-STAFF,   /api/v1/asset/*/trace,                 GET
+p, R-STAFF,   /api/v1/asset/*/issue,                 POST
+p, R-STAFF,   /api/v1/asset/*/return,                POST
+p, R-STAFF,   /api/v1/asset/*/ai-fill,               POST
+p, R-MANAGER, /api/v1/asset,                         POST
+p, R-MANAGER, /api/v1/asset/ledger,                  GET
+p, R-MANAGER, /api/v1/asset/from-receipt,            POST
+p, R-MANAGER, /api/v1/asset/depreciation/run,        POST
+p, R-MANAGER, /api/v1/asset/inventory,               POST
+p, R-MANAGER, /api/v1/asset/*/lifecycle,             GET
+p, R-MANAGER, /api/v1/asset/*/issue,                 POST
+p, R-MANAGER, /api/v1/asset/*/return,                POST
+p, R-MANAGER, /api/v1/asset/*/transfer,              POST
+p, R-MANAGER, /api/v1/asset/*/disposal,              POST
+p, R-MANAGER, /api/v1/asset/*/trace,                 GET
+p, R-MANAGER, /api/v1/asset/*/ai-fill,               POST
+p, R-AUDITOR, /api/v1/asset/ledger,                  GET
+p, R-AUDITOR, /api/v1/asset/*/lifecycle,             GET
+p, R-AUDITOR, /api/v1/asset/*/trace,                 GET
+p, R-FINANCE, /api/v1/finance/voucher,               POST
+p, R-FINANCE, /api/v1/asset/depreciation/run,        POST
+# 耗材：入库出库（危化双锁应用层硬拦截）
+p, R-STAFF,   /api/v1/consumable,                    GET
+p, R-STAFF,   /api/v1/consumable/*/stock-in,         POST
+p, R-STAFF,   /api/v1/consumable/*/stock-out,        POST
+p, R-MANAGER, /api/v1/consumable,                    GET
+p, R-MANAGER, /api/v1/consumable/*/stock-in,         POST
+p, R-MANAGER, /api/v1/consumable/*/stock-out,        POST
+
+# ---- Phase 4 X 涉密管理与多法人治理（纯契约域）----
+# 法人治理：全员读；变更仅 R-ADMIN（三员分立应用层+MFA 二次鉴别硬拦截）
+p, R-STAFF,   /api/v1/governance/entity,             GET
+p, R-MANAGER, /api/v1/governance/entity,             GET
+p, R-ADMIN,   /api/v1/governance/entity,             GET
+p, R-ADMIN,   /api/v1/governance/entity,             POST
+p, R-MANAGER, /api/v1/governance/consolidate,        GET
+p, R-ADMIN,   /api/v1/governance/consolidate,        GET
+p, R-AUDITOR, /api/v1/governance/consolidate,        GET
+# 密级策略：R-ADMIN 发布（MFA），R-AUDITOR 读当前
+p, R-ADMIN,   /api/v1/security/policy,               POST
+p, R-ADMIN,   /api/v1/security/policy/current,       GET
+p, R-AUDITOR, /api/v1/security/policy/current,       GET
+# 授权/吊销：R-ADMIN 写（MFA），R-AUDITOR 只读稽核
+p, R-ADMIN,   /api/v1/security/grant,                POST
+p, R-ADMIN,   /api/v1/security/grant,                GET
+p, R-AUDITOR, /api/v1/security/grant,                GET
+p, R-ADMIN,   /api/v1/security/revoke,               POST
+# 涉密输出审批：R-STAFF 发起；R-MANAGER 初审；R-ADMIN 复审/放行
+p, R-STAFF,   /api/v1/security/export,               POST
+p, R-STAFF,   /api/v1/security/export/*,             GET
+p, R-MANAGER, /api/v1/security/export/approve,       POST
+p, R-ADMIN,   /api/v1/security/export/approve,       POST
+p, R-ADMIN,   /api/v1/security/export/release,       POST
+p, R-MANAGER, /api/v1/security/export/release,       POST
+# 定密/降密/解密：R-ADMIN（MFA + AI 永不自动定密）
+p, R-ADMIN,   /api/v1/security/classify,             POST
+# 安全日志：R-ADMIN 写埋点；R-AUDITOR 只读稽核（哈希链校验）
+p, R-ADMIN,   /api/v1/security/log,                  POST
+p, R-AUDITOR, /api/v1/security/log,                  GET
+p, R-ADMIN,   /api/v1/security/log,                  GET
+# 涉密人员审查/清退：R-ADMIN（MFA）
+p, R-ADMIN,   /api/v1/security/personnel/review,     POST
