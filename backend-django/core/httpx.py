@@ -25,6 +25,7 @@ CODE_ACCOUNT_DISABLED = 40302  # 账号已停用或锁定
 CODE_NOT_FOUND = 40401  # 资源不存在
 CODE_ROLE_NOT_FOUND = 40402  # 角色不存在或跨租户
 CODE_CONFLICT = 40901  # 状态机/唯一键冲突
+CODE_CONFLICT_REF = 40902  # 业务引用/预算余额不足（冻结、实扣失败）
 CODE_IDEM_IN_PROGRESS = 40909  # 相同幂等键正在处理中
 CODE_STUB_UNAVAILABLE = 50301  # 依赖缺失（如 Storage 未配置）
 CODE_INTERNAL = 50001  # 内部错误
@@ -103,3 +104,11 @@ class ApiError(Exception):
         self.status = status
         self.code = code
         self.message = message
+
+
+def read_json_any(request: HttpRequest, msg: str = "请求参数错误") -> Any:
+    """解析 JSON body（dict/list 皆可；非法 body 抛 40001）。"""
+    try:
+        return json.loads(request.body or b"null")
+    except Exception:
+        raise ApiError(400, CODE_BAD_REQUEST, msg) from None

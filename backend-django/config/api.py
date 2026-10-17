@@ -2,6 +2,7 @@
 from core.auth.api import login as login_view
 from core.auth.deps import ark_auth
 from core.ninja import api
+from apps.funding import api as funding_api
 from apps.notify import api as notify_api
 from apps.p import api as p_api
 from apps.project import api as project_api
@@ -160,3 +161,74 @@ api.post(
     "/dataio/imports/{id}/undo", auth=ark_auth, tags=["dataio"]
 )(dataio_api.undo_import)
 api.post("/dataio/export", auth=ark_auth, tags=["dataio"])(dataio_api.export)
+
+# —— F 经费域：科目 ——
+api.get("/subjects", auth=ark_auth, tags=["funding"])(funding_api.list_subjects)
+api.get("/subjects/tree", auth=ark_auth, tags=["funding"])(funding_api.subjects_tree)
+api.post("/subjects", auth=ark_auth, tags=["funding"])(funding_api.create_subject)
+api.put("/subjects/{id}", auth=ark_auth, tags=["funding"])(funding_api.update_subject)
+api.delete("/subjects/{id}", auth=ark_auth, tags=["funding"])(funding_api.delete_subject)
+
+# —— F 预算 ——
+api.post("/budgets", auth=ark_auth, tags=["funding"])(funding_api.create_budget)
+api.get("/budgets", auth=ark_auth, tags=["funding"])(funding_api.list_budgets)
+api.get("/budgets/{id}", auth=ark_auth, tags=["funding"])(funding_api.get_budget)
+api.get("/budgets/{id}/lines", auth=ark_auth, tags=["funding"])(funding_api.list_budget_lines)
+api.post("/budgets/{id}/submit", auth=ark_auth, tags=["funding"])(funding_api.submit_budget)
+api.post("/budgets/{id}/approve", auth=ark_auth, tags=["funding"])(funding_api.approve_budget)
+api.post("/budgets/{id}/adjust", auth=ark_auth, tags=["funding"])(funding_api.adjust_budget)
+api.post("/budgets/{id}/append", auth=ark_auth, tags=["funding"])(funding_api.append_budget)
+api.post("/budgets/{id}/append/approve", auth=ark_auth, tags=["funding"])(funding_api.approve_budget_append)
+api.get("/budget-lines/{lineId}/balance", auth=ark_auth, tags=["funding"])(funding_api.line_balance)
+
+# —— F 到款 ——
+api.post("/incomes", auth=ark_auth, tags=["funding"])(funding_api.create_income)
+api.get("/incomes", auth=ark_auth, tags=["funding"])(funding_api.list_incomes)
+api.post("/incomes/{id}/claim", auth=ark_auth, tags=["funding"])(funding_api.claim_income)
+api.post(
+    "/incomes/import-bank-flow", auth=ark_auth, tags=["funding"]
+)(funding_api.import_bank_flow)
+
+# —— F 报销（静态 approval-batch 必须先于 {id} 注册，避免 [^/]+ 吞噬 → 405）——
+api.post("/expenses", auth=ark_auth, tags=["funding"])(funding_api.create_expense)
+api.get("/expenses", auth=ark_auth, tags=["funding"])(funding_api.list_expenses)
+api.post(
+    "/expenses/approval-batch", auth=ark_auth, tags=["funding"]
+)(funding_api.approval_batch)
+api.get("/expenses/{id}", auth=ark_auth, tags=["funding"])(funding_api.get_expense)
+api.post("/expenses/{id}/submit", auth=ark_auth, tags=["funding"])(funding_api.submit_expense)
+api.post("/expenses/{id}/approval", auth=ark_auth, tags=["funding"])(funding_api.approval_action)
+api.post(
+    "/expense/ai-invoice-review", auth=ark_auth, tags=["funding"]
+)(funding_api.ai_invoice_review)
+
+# —— F 执行/预警/间接费 ——
+api.get("/funding/execution", auth=ark_auth, tags=["funding"])(funding_api.funding_execution)
+api.get("/funding/warnings", auth=ark_auth, tags=["funding"])(funding_api.funding_warnings)
+api.post(
+    "/indirect-fees/calculate", auth=ark_auth, tags=["funding"]
+)(funding_api.calculate_indirect_fee)
+api.get(
+    "/indirect-fees/calculate", auth=ark_auth, tags=["funding"]
+)(funding_api.page_indirect_fees)
+api.get("/indirect-fees", auth=ark_auth, tags=["funding"])(funding_api.list_indirect_fees)
+
+# —— F 外拨/结转 ——
+api.post("/outwards", auth=ark_auth, tags=["funding"])(funding_api.create_outward)
+api.get("/outwards", auth=ark_auth, tags=["funding"])(funding_api.list_outwards)
+api.post("/outwards/{id}/approval", auth=ark_auth, tags=["funding"])(funding_api.outward_action)
+api.post("/carryovers", auth=ark_auth, tags=["funding"])(funding_api.create_carryover)
+api.get("/carryovers", auth=ark_auth, tags=["funding"])(funding_api.list_carryovers)
+api.post(
+    "/carryovers/{id}/approval", auth=ark_auth, tags=["funding"]
+)(funding_api.carryover_action)
+
+# —— F 预警配置 ——
+api.get("/funding/warn-configs", auth=ark_auth, tags=["funding"])(funding_api.list_warn_configs)
+api.post("/funding/warn-configs", auth=ark_auth, tags=["funding"])(funding_api.create_warn_config)
+api.put(
+    "/funding/warn-configs/{id}", auth=ark_auth, tags=["funding"]
+)(funding_api.update_warn_config)
+api.delete(
+    "/funding/warn-configs/{id}", auth=ark_auth, tags=["funding"]
+)(funding_api.delete_warn_config)
