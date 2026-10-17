@@ -1,21 +1,51 @@
-# 科研管理系统 · 基础设施一键编排（Docker Compose）
-# 用法：docker compose up -d       浏览器访问 http://localhost:8080（前端需另行本地启动，或待 Phase 0 恢复 backend 服务）
+# 科研管理系统 · 全套服务一键编排（Docker Compose）
+# 用法：docker compose up -d --build     浏览器访问 http://localhost:8080
 # 说明：
-#   · 2026-10-17 后端重写为 Django（方案 C）：Go+Gin 与 Node 后端已移除，
-#     源码快照见 git tag legacy-backend-20261017；
-#   · 后端重写计划/规格见 docs/superpowers/plans|specs/2026-10-17-backend-django-rewrite-*；
-#   · Phase 0 就绪后本文件将恢复 backend 服务定义（backend-django + celery + svc-ai）；
-#   · postgres/redis/minio 仍可独立使用，供 backend-django 本地开发；
+#   · 2026-10-17 起后端为 Django（方案C，backend-django/）：migrate 拥有 schema，
+#     启动时幂等播种演示数据；未实现契约端点由 stub 层返回合规占位（X-Stub: true）。
+#   · 旧 Go/Node 后端已移除，源码快照见 git tag legacy-backend-20261017。
 #   · 重新初始化：docker compose down -v 清空 pgdata 卷再 up。
 
 name: eplugger-ark
 
 services:
+  backend:
+    build:
+      context: ./backend-django
+      dockerfile: Dockerfile
+    image: ark-django:0.1.0
+    container_name: ark-backend
+    environment:
+      ARK_DATABASE_URL: postgres://ark:ark@postgres:5432/ark?sslmode=disable
+      ARK_REDIS_ADDR: redis:6379
+      ARK_JWT_SECRET: ${ARK_JWT_SECRET:-dev-secret-change-me-please-use-32-bytes-min!}
+      # LLM（NewAPI OpenAI 兼容）：未配置时 AI 端点自动降级 REVIEW（不阻塞业务）
+      ARK_LLM_BASE_URL: ${ARK_LLM_BASE_URL:-}
+      ARK_LLM_API_KEY: ${ARK_LLM_API_KEY:-}
+      ARK_LLM_MODEL: ${ARK_LLM_MODEL:-gpt-4o-mini}
+    ports:
+      - "8787:8787"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/healthz"]
+      interval: 15s
+      timeout: 3s
+      start_period: 60s
+      retries: 10
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend            # 前端构建上下文自包含（契约 yaml 已随 frontend/ 提交）
       dockerfile: Dockerfile
     image: eplugger-frontend:0.1.0
+    depends_on:
+      backend:
+        condition: service_healthy
     ports:
       - "8080:80"                    # 对外统一入口：http://localhost:8080
     restart: unless-stopped
