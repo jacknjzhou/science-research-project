@@ -161,3 +161,54 @@ class PageGrant(models.Model):
                 fields=["tenant_id", "page_name", "role_code"], name="uk_page_grant"
             )
         ]
+
+
+class SysPermission(models.Model):
+    """接口操作权限目录（Django auth_permission 风格）。
+
+    code     —— 权限码（codename），如 "activities.x.submit.post"
+    obj/act  —— Casbin 策略对象：路径模板 + HTTP 方法（一条权限 = 一条策略模板）
+    domain   —— 业务域（取路径第一段），用于管理界面分组
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    code = models.CharField(max_length=128)
+    name = models.CharField(max_length=256)
+    obj = models.CharField(max_length=128)
+    act = models.CharField(max_length=16)
+    domain = models.CharField(max_length=32, default="misc")
+    tenant_id = models.BigIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "sys_permission"
+        constraints = [
+            models.UniqueConstraint(fields=["obj", "act"], name="uk_permission_obj_act"),
+            models.UniqueConstraint(fields=["code"], name="uk_permission_code"),
+        ]
+
+    def __str__(self):
+        return f"{self.code} ({self.act} {self.obj})"
+
+
+class SysRolePermission(models.Model):
+    """角色-权限指派（Django Group.permissions M2M 风格）。
+
+    casbin enforcer 从本表动态加载策略：管理端授权/回收后 load_policy() 热生效。
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    role = models.ForeignKey(SysRole, on_delete=models.CASCADE, db_column="role_id")
+    permission = models.ForeignKey(
+        SysPermission, on_delete=models.CASCADE, db_column="permission_id"
+    )
+    granted_by = models.BigIntegerField(null=True, blank=True)
+    granted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "sys_role_permission"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["role", "permission"], name="uk_role_permission"
+            )
+        ]

@@ -431,3 +431,111 @@ def save_page_grants(request: HttpRequest):
 def update_dict_item(request: HttpRequest, dict_id: int, item_id: int):
     """PUT 语义：同 upsert（item_code+生效期构成身份，对齐 Go UpdateDictItem→UpsertDictItem）。"""
     return upsert_dict_item(request, dict_id)
+
+
+# ---------------------------------------------------------------------------
+# 接口权限管理（Django auth_permission / Group.permissions 风格）
+# ---------------------------------------------------------------------------
+def _permission_row(p, holder_roles: dict[int, set[str]]) -> dict:
+    return {
+        "id": p.id, "code": p.code, "name": p.name, "obj": p.obj, "act": p.act,
+        "domain": p.domain, "roles": sorted(holder_roles.get(p.id, set())),
+    }
+
+
+def list_permissions(request: HttpRequest):
+    """GET /admin/permissions?role_code=&domain=&q=&page=&size=
+
+    权限目录 + 指派矩阵（每个权限被哪些角色持有）。供「角色与权限」页渲染。
+    """
+    from apps.sysadmin.models import SysPermission, SysRolePermission
+
+    d = domain_from(request)
+    page, size, limit, offset = page_args(request)
+    qs = SysPermission.objects.all().order_by("domain", "obj", "act")
+    role_code = request.GET.get("role_code") or ""
+    domain = request.GET.get("domain") or ""
+    q = request.GET.get("q") or ""
+    holder: dict[int, set[str]] = {}
+    links = SysRolePermission.objects.select_related("role", "permission")
+    if role_code:
+        links = links.filter(role__code=role_code)
+    for lk in links:
+        holder.setdefault(lk.permission_id, set()).add(lk.role.code)
+    if role_code:
+        qs = qs.filter(id__in=set(holder.keys()) or [0])
+    if domain:
+        qs = qs.filter(domain=domain)
+    if q:
+        qs = qs.filter(Q(code__icontains=q) | Q(name__icontains=q) | Q(obj__icontains=q))
+    total = qs.count()
+    rows = list(qs[offset:limit])
+    # role_code 过滤时 holder 字典只含该角色的指派；全量时含所有角色
+    domains = sorted(set(SysPermission.objects.values_list("domain", flat=True)))
+    return ok(request, {
+        "total": total, "page": page, "size": size,
+        "domains": domains,
+        "items": [_permission_row(p, holder) for p in rows],
+    })
+
+
+def list_role_permissions(request: HttpRequest, role_code: str):
+    """GET /admin/roles/{role_code}/permissions —— 该角色持有的权限码集合。"""
+    from apps.sysadmin.models import SysRolePermission
+
+    role = SysRole.objects.filter(tenant_id=domain_from(request).tenant_id,
+                                  code=role_code).first()
+    if role is None:
+        raise ApiError(404, CODE_NOT_FOUND, "角色不存在")
+    codes = list(
+        SysRolePermission.objects.filter(role=role)
+        .values_list("permission__code", flat=True)
+    )
+    return ok(request, {"role": role_code, "permissions": sorted(codes)})
+
+
+def update_role_permissions(request: HttpRequest, role_code: str):
+    """PUT /admin/roles/{role_code}/permissions
+
+    body: {"grants": ["code", ...], "revokes": ["code", ...]}
+    授权/回收后 casbin enforcer 热重载（当前进程立即生效）。
+    """
+    from core.auth.casbin_util import broadcast_reload
+    from apps.sysadmin.models import SysPermission, SysRolePermission
+
+    d = domain_from(request)
+    role = SysRole.objects.filter(tenant_id=d.tenant_id, code=role_code).first()
+    if role is None:
+        raise ApiError(404, CODE_NOT_FOUND, "角色不存在")
+    body = read_json(request)
+    grants = body.get("grants") or []
+    revokes = body.get("revokes") or []
+    if not isinstance(grants, list) or not isinstance(revokes, list):
+        raise ApiError(400, CODE_BAD_REQUEST, "grants/revokes 必须为数组")
+    overlap = set(grants) & set(revokes)
+    if overlap:
+        raise ApiError(400, CODE_BAD_REQUEST, f"同一权限不能同时授权与回收：{sorted(overlap)[:5]}")
+
+    with transaction.atomic():
+        grant_objs = list(SysPermission.objects.filter(code__in=grants))
+        missing = set(grants) - {p.code for p in grant_objs}
+        if missing:
+            raise ApiError(400, CODE_UNKNOWN_PARAM, f"未知权限码：{sorted(missing)[:5]}")
+        created = 0
+        for p in grant_objs:
+            _, c = SysRolePermission.objects.get_or_create(
+                role=role, permission=p, defaults={"granted_by": d.user_id}
+            )
+            created += int(c)
+        removed, _ = SysRolePermission.objects.filter(
+            role=role, permission__code__in=revokes
+        ).delete()
+    broadcast_reload()  # 本进程立即重载 + Redis 广播（多 worker 全量热生效）
+    codes = list(
+        SysRolePermission.objects.filter(role=role)
+        .values_list("permission__code", flat=True)
+    )
+    return ok(request, {
+        "role": role_code, "granted": created, "revoked": removed,
+        "permissions": sorted(codes),
+    })

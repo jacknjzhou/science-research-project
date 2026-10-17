@@ -70,7 +70,7 @@ python manage.py migrate                                    # 默认连 localhos
 python manage.py seed_demo                                  # 幂等播种
 
 # 全量测试（sqlite 内存库，不依赖 PG）
-python -m pytest tests -q                                   # 当前 159 passed
+python -m pytest tests -q                                   # 当前 167 passed
 
 # PG 端到端冒烟（直连 live PG，幂等可重跑）
 python scripts/smoke_p3.py                                  # Phase 3 域 18 项
@@ -89,6 +89,14 @@ uvicorn svc_ai.main:app --port 8900
 - **认证**：`Authorization: Bearer <JWT>`；写接口支持 `Idempotency-Key` 幂等头
 - **AI 端点降级契约**：LLM 未配置或上游不可达 → HTTP 200 `{verdict:"REVIEW", confidence:0, reasons:["llm-unavailable"]}`，不阻塞业务；AI 永不自动定密（X 域）
 - **多法人/密级**：业务表携带 `legal_entity_id / security_level`；涉密对象在非 SECRET_NET 网络域不可见（`X-Network-Zone` 头），关键涉密操作须 `X-MFA-Assert` 二次鉴别
+
+### 角色权限管理（Django 风格，DB 驱动）
+
+- **后端接口访问**：全局鉴权链 `Bearer JWT → Casbin 判权（路径模板 × HTTP 方法 × 角色，任一角色命中即放行）`，拒绝返回 `40301`。策略真源为 DB（`sys_permission` 权限目录 × `sys_role_permission` 角色-权限指派，数据迁移 0003 自 policy.csv 灌入 300 权限/564 指派）；`R-ADMIN /api/v1/*` 通配为铁律兜底（代码硬编码，防自锁）。
+- **运行时授权**：`GET /admin/permissions`（目录+指派矩阵，支持 role_code/domain/q 过滤）、`GET|PUT /admin/roles/{role_code}/permissions`（查持/授权/回收）。变更后 Redis pub/sub 广播（`ark:casbin:reload`），gunicorn 多 worker 订阅热重载——授权/回收秒级全实例生效。
+- **前端页面访问**：路由守卫以页面可见性矩阵（`sys_page_grant`，PRD 2.9）为唯一权威，矩阵不可用时退回静态 `meta.roles`；越权跳 `/forbidden`。
+- **前端按钮/操作级**：`/auth/me` 返回 `caps`（依角色从策略派生的 `<路径模板> <METHOD>` 集合），`v-perm` 指令 + `auth.can()` 消费；授权变更后重新登录刷新 caps。
+- 管理 UI：`角色与权限` 页新增「接口权限」面板（角色下拉 × 业务域过滤 × 勾选授权，diff 保存）。
 
 ### 请求体验证（pydantic v2 Schema）
 
@@ -131,6 +139,7 @@ uvicorn svc_ai.main:app --port 8900
 | 4 | T 转化 / C 诚信伦理 / S 人员 / G 采购合同 / A 资产耗材 / X 涉密治理（~126 端点）+ svc-ai | `0b64232` |
 | 4.x | compose 编装修复 + svc-ai 服务编排 | `f7a715b` |
 | 4.y | 写接口 pydantic Schema 验证层 + 16 域全域演示种子 | 本次 |
+| 4.z | 角色权限 DB 化（Django 风格）+ 多 worker 热重载 + 管理面板 | 本次 |
 
 ## 环境变量（`ARK_*` 前缀，对齐 Go 版命名）
 

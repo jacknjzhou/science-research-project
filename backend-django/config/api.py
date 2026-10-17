@@ -31,6 +31,10 @@ api.get("/admin/roles", auth=ark_auth, tags=["admin"])(sysadmin_api.list_roles)
 api.post("/admin/roles", auth=ark_auth, tags=["admin"])(sysadmin_api.create_role)
 api.put("/admin/roles/{role_id}", auth=ark_auth, tags=["admin"])(sysadmin_api.update_role)
 api.delete("/admin/roles/{role_id}", auth=ark_auth, tags=["admin"])(sysadmin_api.delete_role)
+# —— 接口权限管理（Django 风格：权限目录 + 角色-权限指派，改后热生效）——
+api.get("/admin/permissions", auth=ark_auth, tags=["admin"])(sysadmin_api.list_permissions)
+api.get("/admin/roles/{role_code}/permissions", auth=ark_auth, tags=["admin"])(sysadmin_api.list_role_permissions)
+api.put("/admin/roles/{role_code}/permissions", auth=ark_auth, tags=["admin"])(sysadmin_api.update_role_permissions)
 
 # —— 数据字典 ——
 api.get("/admin/dicts", auth=ark_auth, tags=["dicts"])(sysadmin_api.list_dicts)

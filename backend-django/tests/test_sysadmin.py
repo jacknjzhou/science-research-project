@@ -96,8 +96,9 @@ def test_list_roles(seed_auth):
     c = _c()
     r = c.get("/api/v1/admin/roles", **bearer(1, ["R-ADMIN"]))
     codes = [x["code"] for x in r.json()["data"]["list"]]
-    assert codes == ["R-STAFF", "R-MANAGER", "R-LEADER", "R-FINANCE",
-                     "R-AUDITOR", "R-EXPERT", "R-ETHICS", "R-ADMIN"]
+    # 顺序无关：角色行可能由数据迁移 0003（policy.csv 顺序）或 seed_auth 创建
+    assert sorted(codes) == sorted(["R-STAFF", "R-MANAGER", "R-LEADER", "R-FINANCE",
+                                    "R-AUDITOR", "R-EXPERT", "R-ETHICS", "R-ADMIN"])
 
 
 def test_create_update_delete_role(seed_auth):

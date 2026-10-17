@@ -34,7 +34,11 @@ def seed_auth(db):
         ("R-ETHICS", "伦理委员会"),
         ("R-ADMIN", "系统管理员"),
     ]:
-        roles[code] = SysRole.objects.create(code=code, name=name, is_builtin=True, tenant_id=1)
+        # 数据迁移 0003 已按 policy.csv 创建同名角色行，这里幂等取用
+        role, _ = SysRole.objects.get_or_create(
+            code=code, tenant_id=1, defaults={"name": name, "is_builtin": True}
+        )
+        roles[code] = role
 
     admin = SysUser.objects.create(
         username="admin", real_name="系统管理员", password_hash=ADMIN_PW_HASH,
