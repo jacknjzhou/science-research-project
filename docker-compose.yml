@@ -31,11 +31,35 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/healthz"]
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8787/healthz')"]
       interval: 15s
-      timeout: 3s
+      timeout: 5s
       start_period: 60s
       retries: 10
+    restart: unless-stopped
+
+  # svc-ai：AI 微服务（FastAPI，spec §七）。降级契约：ARK_LLM_BASE_URL 未配置 →
+  # {verdict:REVIEW, confidence:0, reasons:[llm-unavailable]} HTTP 200，不阻塞业务。
+  svc-ai:
+    build:
+      context: ./backend-django
+      dockerfile: Dockerfile
+    image: ark-django:0.1.0
+    container_name: ark-svc-ai
+    command: ["uvicorn", "svc_ai.main:app", "--host", "0.0.0.0", "--port", "8900"]
+    environment:
+      ARK_LLM_BASE_URL: ${ARK_LLM_BASE_URL:-}
+      ARK_LLM_API_KEY: ${ARK_LLM_API_KEY:-}
+      ARK_LLM_MODEL: ${ARK_LLM_MODEL:-gpt-4o-mini}
+      ARK_LLM_TIMEOUT_SEC: ${ARK_LLM_TIMEOUT_SEC:-30}
+    ports:
+      - "8900:8900"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8900/healthz')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
     restart: unless-stopped
 
   frontend:

@@ -8,7 +8,8 @@ WORKDIR /app
 COPY pyproject.toml ./
 RUN pip install --no-cache-dir \
     "django>=5.0,<6.0" "django-ninja>=1.3" "pyjwt>=2.8" "casbin>=1.36" \
-    "redis>=5.0" "psycopg[binary]>=3.1" "bcrypt>=4.0" "pyyaml>=6.0" gunicorn
+    "redis>=5.0" "psycopg[binary]>=3.1" "bcrypt>=4.0" "pyyaml>=6.0" gunicorn \
+    "openpyxl>=3.1" "fastapi>=0.110" "uvicorn>=0.27"
 
 COPY . .
 
