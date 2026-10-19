@@ -70,7 +70,7 @@ python manage.py migrate                                    # 默认连 localhos
 python manage.py seed_demo                                  # 幂等播种
 
 # 全量测试（sqlite 内存库，不依赖 PG）
-python -m pytest tests -q                                   # 当前 183 passed
+python -m pytest tests -q                                   # 当前 184 passed
 
 # PG 端到端冒烟（直连 live PG，幂等可重跑）
 python scripts/smoke_p3.py                                  # Phase 3 域 18 项

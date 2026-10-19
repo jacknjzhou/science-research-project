@@ -48,7 +48,6 @@ const consumables = ref<Consumable[]>([])
 const loading = ref(true)
 const statusFilter = ref('ALL')
 const keyword = ref('')
-const issuing = ref<number | null>(null)
 
 async function load() {
   loading.value = true
@@ -121,20 +120,53 @@ const alloc = computed(() => {
 })
 const ALLOC_COLOR = ['var(--ai)', 'var(--gold)', 'var(--seal)']
 
-// —— 资产领用（真实 A 契约 POST /asset/{id}/issue）——
-async function issue(a: Asset) {
-  issuing.value = a.id
+// —— 资产领用（真实 A 契约 POST /asset/{id}/issue：弹窗选项目 + 使用率，A-05 留痕）——
+interface ProjectOption { id: number; title: string }
+const issProjects = ref<ProjectOption[]>([])
+const issOpen = ref(false)
+const issTarget = ref<Asset | null>(null)
+const issSubmitting = ref(false)
+const issError = ref('')
+const issProject = ref<number | ''>('')
+const issRate = ref<number>(1)
+
+async function loadIssProjects() {
   try {
-    await api.post<{ code?: string }>(`/asset/${a.id}/issue`, { projectId: 87, usageRate: 1 })
+    const mine = await list<ProjectOption>('/project/mine', { page: 1, size: 50 })
+    issProjects.value = mine.rows
+  } catch { /* 静默 */ }
+}
+const issReady = computed(() => !!issProject.value)
+
+function openIssue(a: Asset) {
+  if (!['IDLE', 'IN_USE'].includes(a.status)) return
+  issTarget.value = a
+  issError.value = ''
+  issProject.value = ''
+  issRate.value = 1
+  issOpen.value = true
+  if (!issProjects.value.length) loadIssProjects()
+}
+
+async function submitIssue() {
+  const a = issTarget.value
+  if (!a || !issReady.value || issSubmitting.value) return
+  issSubmitting.value = true
+  issError.value = ''
+  try {
+    await api.post<{ code?: string }>(`/asset/${a.id}/issue`, {
+      projectId: issProject.value, usageRate: issRate.value,
+    })
     a.status = 'IN_USE'
+    issOpen.value = false
     toast(`资产「${a.name}」领用已受理（A-05），生成出入库流水并留痕`)
   } catch (e: any) {
-    toast('领用失败：' + (e?.message || e))
+    issError.value = e?.message || String(e)
   } finally {
-    issuing.value = null
+    issSubmitting.value = false
   }
 }
-const canIssue = (a: Asset) => ['IDLE', 'IN_USE', 'PENDING_RECEIPT'].includes(a.status)
+const canIssue = (a: Asset) => ['IDLE', 'IN_USE'].includes(a.status)
 </script>
 
 <template>
@@ -201,10 +233,8 @@ const canIssue = (a: Asset) => ['IDLE', 'IN_USE', 'PENDING_RECEIPT'].includes(a.
                 </td>
                 <td><span class="tag" :class="ASSET_STATUS[a.status]?.c">{{ ASSET_STATUS[a.status]?.l || a.status }}</span></td>
                 <td>
-                  <button class="btn sm" :disabled="!canIssue(a) || issuing === a.id"
-                    :style="{ opacity: canIssue(a) ? 1 : .4 }" @click="issue(a)">
-                    {{ issuing === a.id ? '受理中…' : '领用' }}
-                  </button>
+                  <button class="btn sm" :disabled="!canIssue(a)"
+                    :style="{ opacity: canIssue(a) ? 1 : .4 }" @click="openIssue(a)">领用</button>
                 </td>
               </tr>
               <tr v-if="!loading && !shownAssets.length"><td colspan="7" style="text-align:center;color:var(--ink-mute);padding:22px">无匹配资产</td></tr>
@@ -251,9 +281,56 @@ const canIssue = (a: Asset) => ['IDLE', 'IN_USE', 'PENDING_RECEIPT'].includes(a.
       </div>
     </div>
   </section>
+
+  <!-- 资产领用弹窗（A-05：POST /asset/{id}/issue，选关联项目 + 使用率） -->
+  <teleport to="body">
+    <div class="as-mask" v-if="issOpen" @click.self="issOpen = false" @keydown.esc="issOpen = false">
+      <div class="as-modal" role="dialog" aria-label="资产领用">
+        <header class="as-head">
+          <h3>资产领用{{ issTarget ? ` · ${issTarget.name}` : '' }}</h3>
+          <button class="as-x" @click="issOpen = false" aria-label="关闭">×</button>
+        </header>
+        <div class="as-body">
+          <div class="as-field"><label>资产编号</label><span class="mono">{{ issTarget?.code || '—' }}</span></div>
+          <div class="as-field"><label>领用至项目 *</label>
+            <select v-model="issProject">
+              <option value="" disabled>选择项目（生成全成本分摊依据）</option>
+              <option v-for="p in issProjects" :key="p.id" :value="p.id">{{ p.title }}</option>
+            </select>
+            <span v-if="issProjects.length === 0" style="font-size:11px;color:var(--ink-mute)">您暂无关联项目，请先用项目成员账号操作</span>
+          </div>
+          <div class="as-field"><label>预计使用率（0–1）</label>
+            <input type="number" min="0" max="1" step="0.1" v-model.number="issRate" />
+          </div>
+          <p class="as-tip">提交后资产转为「在用」，生成 REQUISITION 出入库流水并计入项目全成本池（D-03 取数）。</p>
+          <p class="as-err" v-if="issError">✕ {{ issError }}</p>
+          <footer class="as-foot">
+            <button class="btn ghost" @click="issOpen = false">取消</button>
+            <button class="btn" :disabled="!issReady || issSubmitting" @click="submitIssue">{{ issSubmitting ? '受理中…' : '确认领用' }}</button>
+          </footer>
+        </div>
+      </div>
+    </div>
+  </teleport>
 </template>
 
 <style scoped>
+
+/* —— 资产领用弹层 —— */
+.as-mask { position: fixed; inset: 0; background: rgba(28,25,23,.45); backdrop-filter: blur(2px); z-index: 90; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.as-modal { width: min(520px, 94vw); max-height: 88vh; overflow: auto; background: var(--paper); border: 1px solid var(--line-hard); border-radius: 6px; box-shadow: 0 18px 50px rgba(28,25,23,.25); }
+.as-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px 12px; border-bottom: 1px solid var(--line); }
+.as-head h3 { margin: 0; font-family: var(--serif); font-size: 17px; }
+.as-x { border: none; background: none; font-size: 22px; line-height: 1; cursor: pointer; color: var(--ink-mute); }
+.as-body { padding: 18px 20px 20px; display: flex; flex-direction: column; gap: 12px; }
+.as-field { display: flex; flex-direction: column; gap: 5px; }
+.as-field > label { font-size: 12px; color: var(--ink-mute); }
+.as-field input, .as-field select { border: 1px solid var(--line-hard); border-radius: 4px; padding: 8px 10px; font: inherit; font-size: 13px; background: var(--paper); color: var(--ink); }
+.as-tip { font-size: 12px; color: var(--ink-mute); margin: 4px 0 0; }
+.as-err { font-size: 12px; color: var(--bad); margin: 0; }
+.as-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+
+/* —— 原有样式 —— */
 .sk { opacity: 0.4; }
 .fld { display: flex; }
 .fld input { padding: 6px 12px; font-size: 12px; }

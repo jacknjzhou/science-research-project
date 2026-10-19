@@ -410,3 +410,15 @@ def test_finance_role_procurement_asset_access(seed_auth):
     r = c.post("/api/v1/procurement/requisitions",
                data=json.dumps({}), content_type="application/json", **hdr)
     assert r.status_code == 400 and r.json()["code"] == 40001
+
+
+def test_finance_role_asset_issue_permission(seed_auth):
+    """R-FINANCE：POST /asset/{id}/issue 过 casbin 到 handler（空 body → 40001 而非 40301）。"""
+    from apps.asset.models import AAsset
+
+    c = _c()
+    a = AAsset.objects.create(tenant_id=1, creator_id=1, name="示波器", status="IDLE")
+    r = c.post(f"/api/v1/asset/{a.id}/issue",
+               data=json.dumps({}), content_type="application/json",
+               **bearer(4, ["R-FINANCE"]))
+    assert r.status_code == 400 and r.json()["code"] == 40001

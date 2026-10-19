@@ -720,9 +720,10 @@ p, R-AUDITOR, /api/v1/asset/*/lifecycle,             GET
 p, R-AUDITOR, /api/v1/asset/*/trace,                 GET
 p, R-FINANCE, /api/v1/finance/voucher,               POST
 p, R-FINANCE, /api/v1/asset/depreciation/run,        POST
-# 财务台账读权限（AssetView 页面加载 + 耗材库存）
+# 财务台账读权限（AssetView 页面加载 + 耗材库存）+ 领用受理（A-05）
 p, R-FINANCE, /api/v1/asset/ledger,                  GET
 p, R-FINANCE, /api/v1/asset/*/lifecycle,             GET
+p, R-FINANCE, /api/v1/asset/*/issue,                 POST
 p, R-FINANCE, /api/v1/consumable,                    GET
 # 耗材：入库出库（危化双锁应用层硬拦截）
 p, R-STAFF,   /api/v1/consumable,                    GET
