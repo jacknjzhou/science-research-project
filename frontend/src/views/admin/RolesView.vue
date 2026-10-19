@@ -147,14 +147,26 @@ const perm = reactive({
   items: [] as Perm[], domains: [] as string[], total: 0, page: 1, size: 50,
   loading: false, saving: false,
 })
-const permAssigned = ref<Set<string>>(new Set())   // 加载时该角色持有的权限码
-const permDirty = ref<Set<string>>(new Set())      // 本地勾选状态
+const permAssigned = ref<Set<string>>(new Set())   // 跨页累积：该角色已持有的权限码
+const permDirty = ref<Set<string>>(new Set())      // 跨页累积：显式勾选状态
+const permSeen = ref<Set<string>>(new Set())       // 已初始化过勾选态的权限码（防翻页覆盖用户操作）
 const canWritePerms = computed(() => auth.can('/admin/roles PUT') || auth.can('/api/v1/* PUT'))
 const permRole = computed(() => roles.value.find((r) => r.code === perm.role))
 
-async function loadPerms() {
+/**
+ * 加载权限目录。
+ * reset=true：切换角色/业务域/搜索（上下文变化）→ 清空跨页状态、page 归 1；
+ * reset=false（默认）：翻页 → 追加合并当前页持有状态，已见过的行不覆盖用户勾选。
+ */
+async function loadPerms(reset = false) {
   perm.loading = true
   err.value = ''
+  if (reset) {
+    perm.page = 1
+    permAssigned.value = new Set()
+    permDirty.value = new Set()
+    permSeen.value = new Set()
+  }
   try {
     const qs = new URLSearchParams({
       role_code: perm.role, page: String(perm.page), size: String(perm.size),
@@ -166,8 +178,21 @@ async function loadPerms() {
     perm.items = d?.items ?? []
     perm.domains = d?.domains ?? []
     perm.total = d?.total ?? 0
-    permAssigned.value = new Set(perm.items.filter((x) => x.roles.includes(perm.role)).map((x) => x.code))
-    permDirty.value = new Set(permAssigned.value)
+    const assigned = new Set(permAssigned.value)
+    const dirty = new Set(permDirty.value)
+    const seen = new Set(permSeen.value)
+    for (const x of perm.items) {
+      const held = x.roles.includes(perm.role)
+      if (held) assigned.add(x.code)
+      if (!seen.has(x.code)) {
+        seen.add(x.code)
+        if (held) dirty.add(x.code)   // 新进入视野的行：初值=后端真值
+      }
+      // 已见过的行保持 dirty 不动（用户此前的显式勾选/取消优先）
+    }
+    permAssigned.value = assigned
+    permDirty.value = dirty
+    permSeen.value = seen
   } catch (e: any) {
     err.value = e?.message || '权限加载失败'
   } finally {
@@ -201,7 +226,7 @@ async function savePerms() {
   try {
     await api.put(`/admin/roles/${perm.role}/permissions`, { grants, revokes })
     toast(`已保存：授权 ${grants.length} 项、回收 ${revokes.length} 项（即时生效；其他在线会话下次请求起生效）`)
-    await loadPerms()
+    await loadPerms(true)  // 保存后重置跨页状态，当前页对齐后端真值
   } catch (e: any) {
     err.value = e?.message || '保存失败'
   } finally {
@@ -209,7 +234,7 @@ async function savePerms() {
   }
 }
 
-onMounted(() => { reload(); reloadMatrix(); loadPerms() })
+onMounted(() => { reload(); reloadMatrix(); loadPerms(true) })
 </script>
 
 <template>
@@ -279,16 +304,16 @@ onMounted(() => { reload(); reloadMatrix(); loadPerms() })
     <h4 style="display:flex;align-items:center;gap:10px;margin-top:18px">
       接口权限（角色 × 操作授权）
       <span style="display:flex;gap:8px;align-items:center;font-weight:400">
-        <select v-model="perm.role" @change="perm.page = 1; loadPerms()" class="btn sm">
+        <select v-model="perm.role" @change="loadPerms(true)" class="btn sm">
           <option v-for="r in roles" :key="r.code" :value="r.code">{{ r.code }}（{{ r.name }}）</option>
         </select>
-        <select v-model="perm.domain" @change="perm.page = 1; loadPerms()" class="btn sm">
+        <select v-model="perm.domain" @change="loadPerms(true)" class="btn sm">
           <option value="">全部业务域</option>
           <option v-for="dm in perm.domains" :key="dm" :value="dm">{{ dm }}</option>
         </select>
         <input v-model="perm.q" placeholder="搜索权限码/路径" style="border:1px solid var(--line-hard);border-radius:4px;padding:4px 8px;font-size:12px;width:160px"
-               @keydown.enter="perm.page = 1; loadPerms()" />
-        <button class="btn sm" @click="perm.page = 1; loadPerms()" :disabled="perm.loading">查询</button>
+               @keydown.enter="loadPerms(true)" />
+        <button class="btn sm" @click="loadPerms(true)" :disabled="perm.loading">查询</button>
         <button class="btn sm seal" v-if="canWritePerms" @click="savePerms"
                 :disabled="perm.saving || perm.role === 'R-ADMIN' || (!permDiff.grants.length && !permDiff.revokes.length)">
           {{ perm.saving ? '保存中…' : `保存授权（+${permDiff.grants.length}/-${permDiff.revokes.length}）` }}
@@ -312,7 +337,7 @@ onMounted(() => { reload(); reloadMatrix(); loadPerms() })
             <td class="mono">{{ x.code }}</td>
             <td><span style="background:#eef;border-radius:3px;padding:1px 5px;font-size:11px">{{ x.act }}</span></td>
             <td class="mono" style="opacity:.75">{{ x.obj }}</td>
-            <td style="text-align:center" :title="x.roles.join(', ')">{{ x.roles.length }}</td>
+            <td style="text-align:center" :title="x.roles.length ? x.roles.join(', ') : '该角色未持有此权限（可勾选授权）'">{{ x.roles.length || '—' }}</td>
           </tr>
           <tr v-if="!perm.items.length"><td colspan="5" style="opacity:.6;padding:8px">{{ perm.loading ? '加载中…' : '无匹配权限' }}</td></tr>
         </tbody>
@@ -323,7 +348,7 @@ onMounted(() => { reload(); reloadMatrix(); loadPerms() })
       <button class="btn sm mini" :disabled="perm.page <= 1 || perm.loading" @click="perm.page--; loadPerms()">上一页</button>
       <span>{{ perm.page }} / {{ Math.max(1, Math.ceil(perm.total / perm.size)) }}</span>
       <button class="btn sm mini" :disabled="perm.page >= Math.ceil(perm.total / perm.size) || perm.loading" @click="perm.page++; loadPerms()">下一页</button>
-      <span style="margin-left:auto">授权/回收即时热生效（casbin enforcer 重载）；「已登录*」菜单可见性请用上方页面矩阵。</span>
+      <span style="margin-left:auto">勾选跨页保留，统一保存；授权/回收即时热生效（casbin enforcer 重载）；「已登录*」菜单可见性请用上方页面矩阵。</span>
     </div>
 
     <h4 style="margin-top:18px">我的能力（当前登录 · {{ auth.roles.join('/') || '无' }}）</h4>

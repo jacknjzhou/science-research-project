@@ -462,14 +462,14 @@ def list_permissions(request: HttpRequest):
         links = links.filter(role__code=role_code)
     for lk in links:
         holder.setdefault(lk.permission_id, set()).add(lk.role.code)
-    if role_code:
-        qs = qs.filter(id__in=set(holder.keys()) or [0])
+    # role_code 仅用于标注该角色持有状态（holder），不裁剪目录：
+    # 勾选面板必须展示全量权限，未持有的行 roles=[]，供角色勾选新授权。
     if domain:
         qs = qs.filter(domain=domain)
     if q:
         qs = qs.filter(Q(code__icontains=q) | Q(name__icontains=q) | Q(obj__icontains=q))
     total = qs.count()
-    rows = list(qs[offset:limit])
+    rows = list(qs[offset:offset + limit])
     # role_code 过滤时 holder 字典只含该角色的指派；全量时含所有角色
     domains = sorted(set(SysPermission.objects.values_list("domain", flat=True)))
     return ok(request, {

@@ -99,6 +99,37 @@ def test_permission_catalog_and_matrix(seed_auth):
     assert all(x["domain"] == "ethics" for x in _json(r)["data"]["items"])
 
 
+def test_permission_catalog_paging_no_overlap(seed_auth):
+    """分页翻页不重叠、不丢行（page_args limit 语义回归：qs[offset:offset+limit]）。"""
+    _reset_enforcer()
+    c = _c()
+    r = c.get("/api/v1/admin/permissions?size=50&page=1", **bearer(1, ["R-ADMIN"]))
+    d1 = _json(r)["data"]
+    p1 = [x["code"] for x in d1["items"]]
+    assert len(p1) == 50 and d1["total"] >= 300
+    r = c.get("/api/v1/admin/permissions?size=50&page=2", **bearer(1, ["R-ADMIN"]))
+    d2 = _json(r)["data"]
+    p2 = [x["code"] for x in d2["items"]]
+    assert len(p2) == 50, f"第 2 页应满 50 行（原 bug：qs[offset:limit] 返回空），实际 {len(p2)}"
+    assert not set(p1) & set(p2), "第 1/2 页不应重叠"
+
+
+def test_permission_catalog_role_filter_keeps_full_catalog(seed_auth):
+    """role_code 过滤仅标注持有状态、不裁剪目录（前端勾选面板可跨页授权新权限）。"""
+    _reset_enforcer()
+    c = _c()
+    r = c.get("/api/v1/admin/permissions?size=1", **bearer(1, ["R-ADMIN"]))
+    full_total = _json(r)["data"]["total"]
+    assert full_total >= 300
+    r = c.get("/api/v1/admin/permissions?role_code=R-MANAGER&size=200", **bearer(1, ["R-ADMIN"]))
+    d = _json(r)["data"]
+    assert d["total"] == full_total, "角色过滤不得缩减目录 total"
+    held = [x for x in d["items"] if "R-MANAGER" in x["roles"]]
+    not_held = [x for x in d["items"] if x["roles"] == []]
+    assert held, "R-MANAGER 已持有权限必须标注在 roles 中"
+    assert not_held, "未持有权限必须保留在目录中（roles=[]，供勾选新授权）"
+
+
 def test_grant_revoke_hot_reload(seed_auth):
     """授权 → 立即放行；回收 → 立即 40301（enforcer 热重载）。"""
     _reset_enforcer()
