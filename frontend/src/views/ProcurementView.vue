@@ -85,7 +85,7 @@ async function load() {
     loading.value = false
   }
 }
-onMounted(load)
+onMounted(() => { load(); loadAux() })
 
 // —— 本地过滤：采购台账按状态 ——
 const FILTERS = [
@@ -135,6 +135,76 @@ async function convert(o: Order) {
     converting.value = null
   }
 }
+
+// —— 发起采购申请向导（G-01 创建即提交 + G-02 预算冻结 + G-03 方式判定）——
+interface ProjectOption { id: number; title: string }
+interface SubjectOption { code: string; name: string }
+interface ReqResult { code?: string; status?: string; frozen_amount?: string; purchase_way?: string; clause_ref?: string | null }
+
+const CATEGORIES = ['设备', '材料', '试剂耗材', '服务', '软件', '外协']
+const myProjects = ref<ProjectOption[]>([])
+const subjects = ref<SubjectOption[]>([])
+const reqOpen = ref(false)
+const reqSubmitting = ref(false)
+const reqError = ref('')
+const reqResult = ref<ReqResult | null>(null)
+const fProject = ref<number | ''>('')
+const fCategory = ref('')
+const fName = ref('')
+const fSpec = ref('')
+const fAmount = ref<number | ''>('')
+const fSubject = ref('')
+const fRemark = ref('')
+
+async function loadAux() {
+  // 向导辅助数据：我的项目 + 经费科目（失败静默，不阻塞台账展示）
+  try {
+    const mine = await list<ProjectOption>('/project/mine', { page: 1, size: 50 })
+    myProjects.value = mine.rows
+  } catch { /* 静默 */ }
+  try {
+    const d = await api.get<{ list?: SubjectOption[] }>('/subjects')
+    subjects.value = d?.list ?? []
+  } catch { /* 静默 */ }
+}
+
+const reqReady = computed(() =>
+  !!fProject.value && !!fCategory.value && !!fName.value.trim() &&
+  Number(fAmount.value) > 0 && !!fSubject.value)
+
+function openReq() {
+  reqResult.value = null
+  reqError.value = ''
+  reqOpen.value = true
+  if (!myProjects.value.length) loadAux()
+}
+
+const reqBand = computed(() =>
+  Number(fAmount.value) > 0 ? wayBand(Number(fAmount.value)) : null)
+
+async function submitRequisition() {
+  if (!reqReady.value || reqSubmitting.value) return
+  reqSubmitting.value = true
+  reqError.value = ''
+  try {
+    const r = await api.post<ReqResult>('/procurement/requisitions', {
+      project_id: fProject.value,
+      category: fCategory.value,
+      item_name: fName.value.trim(),
+      spec: fSpec.value.trim() || null,
+      est_amount: String(Number(fAmount.value)),
+      budget_subject_code: fSubject.value,
+      remark: fRemark.value.trim() || null,
+    })
+    reqResult.value = r
+    toast(`采购申请已提交：${r?.code || ''} · 预算已冻结 · 方式判定「${r?.purchase_way || '—'}」`)
+    await load()
+  } catch (e: any) {
+    reqError.value = e?.message || String(e)
+  } finally {
+    reqSubmitting.value = false
+  }
+}
 </script>
 
 <template>
@@ -144,7 +214,7 @@ async function convert(o: Order) {
         <div class="page-title">采购与合同<em>管理</em></div>
         <div class="page-sub">申请 → 预算冻结 → 采购方式判定 → 招标比价 → 订单验收 → 合同/签章 → 付款 → 转资产 · P2P 全链留痕</div>
       </div>
-      <button class="btn seal" @click="toast('采购申请向导已打开（演示）')">＋ 发起采购申请</button>
+      <button class="btn seal" @click="openReq">＋ 发起采购申请</button>
     </div>
 
     <div style="display:flex;gap:14px;margin-bottom:18px;overflow-x:auto;padding-bottom:6px">
@@ -301,6 +371,76 @@ async function convert(o: Order) {
       </div>
     </div>
   </section>
+
+  <!-- 发起采购申请向导（G-01/G-02/G-03：创建即提交 + 预算冻结 + 方式判定） -->
+  <teleport to="body">
+    <div class="rq-mask" v-if="reqOpen" @click.self="reqOpen = false" @keydown.esc="reqOpen = false">
+      <div class="rq-modal" role="dialog" aria-label="发起采购申请">
+        <header class="rq-head">
+          <h3>发起采购申请</h3>
+          <button class="rq-x" @click="reqOpen = false" aria-label="关闭">×</button>
+        </header>
+
+        <!-- 已提交：回执 -->
+        <div class="rq-body" v-if="reqResult">
+          <div class="rq-receipt">
+            <div class="rq-line">
+              <span class="tag ok">方式已定</span>
+              <b class="mono">单号 {{ reqResult.code || '—' }}</b>
+            </div>
+            <table class="tbl" style="margin-top:12px">
+              <tbody>
+                <tr><td>预算冻结</td><td class="mono">¥{{ fmtWan(reqResult.frozen_amount) }}万（G-02 联动 F-10）</td></tr>
+                <tr><td>采购方式</td><td><span class="tag seal">{{ reqResult.purchase_way || '—' }}</span></td></tr>
+                <tr><td>命中规则</td><td class="mono">{{ reqResult.clause_ref || '默认制度包' }}</td></tr>
+              </tbody>
+            </table>
+            <p class="rq-tip">申请已进入审批流，后续招标比价 / 订单验收将同步此单；到货合格后可一键转入资产台账。</p>
+            <footer class="rq-foot">
+              <button class="btn ghost" @click="reqResult = null">再发一条</button>
+              <button class="btn" @click="reqOpen = false">完成</button>
+            </footer>
+          </div>
+        </div>
+
+        <!-- 表单 -->
+        <div class="rq-body" v-else>
+          <div class="rq-form">
+            <div class="rq-field"><label>关联项目 *</label>
+              <select v-model="fProject">
+                <option value="" disabled>选择项目</option>
+                <option v-for="p in myProjects" :key="p.id" :value="p.id">{{ p.title }}</option>
+              </select>
+            </div>
+            <div class="rq-field"><label>采购品类 *</label>
+              <span class="rq-types">
+                <button v-for="cg in CATEGORIES" :key="cg" type="button" class="rq-type" :class="{ on: fCategory === cg }" @click="fCategory = cg">{{ cg }}</button>
+              </span>
+            </div>
+            <div class="rq-field"><label>品名 *</label><input type="text" v-model="fName" placeholder="如：高性能计算服务器" /></div>
+            <div class="rq-field"><label>规格 / 型号</label><input type="text" v-model="fSpec" placeholder="选填" /></div>
+            <div class="rq-field"><label>预估金额（元） *</label><input type="number" min="0" step="0.01" v-model="fAmount" placeholder="如 250000" /></div>
+            <div class="rq-field"><label>占用预算科目 *</label>
+              <select v-model="fSubject">
+                <option value="" disabled>选择科目（G-02 冻结）</option>
+                <option v-for="s in subjects" :key="s.code" :value="s.code">{{ s.code }} · {{ s.name }}</option>
+              </select>
+            </div>
+            <div class="rq-field"><label>备注</label><textarea rows="2" v-model="fRemark" placeholder="采购背景与要求（选填）"></textarea></div>
+            <div class="rq-band" v-if="reqBand">
+              ✦ 方式预估：<b>{{ reqBand.band }}</b> — {{ reqBand.note }}
+            </div>
+          </div>
+          <p class="rq-tip">提交后系统自动冻结预算科目额度（不足将拦截），并按制度包判定采购方式。</p>
+          <p class="rq-err" v-if="reqError">✕ {{ reqError }}</p>
+          <footer class="rq-foot">
+            <button class="btn ghost" @click="reqOpen = false">取消</button>
+            <button class="btn" :disabled="!reqReady || reqSubmitting" @click="submitRequisition">{{ reqSubmitting ? '提交中…' : '提交采购申请' }}</button>
+          </footer>
+        </div>
+      </div>
+    </div>
+  </teleport>
 </template>
 
 <style scoped>
@@ -311,4 +451,26 @@ async function convert(o: Order) {
 .conf-ring::after { content: ""; position: absolute; inset: 5px; border-radius: 50%; background: var(--paper-hi); }
 .conf-ring b { position: relative; z-index: 1; }
 .btn:disabled { cursor: not-allowed; }
+
+/* —— 发起采购申请向导弹层 —— */
+.rq-mask { position: fixed; inset: 0; background: rgba(28,25,23,.45); backdrop-filter: blur(2px); z-index: 90; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.rq-modal { width: min(620px, 94vw); max-height: 88vh; overflow: auto; background: var(--paper); border: 1px solid var(--line-hard); border-radius: 6px; box-shadow: 0 18px 50px rgba(28,25,23,.25); }
+.rq-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px 12px; border-bottom: 1px solid var(--line); }
+.rq-head h3 { margin: 0; font-family: var(--serif); font-size: 17px; }
+.rq-x { border: none; background: none; font-size: 22px; line-height: 1; cursor: pointer; color: var(--ink-mute); }
+.rq-body { padding: 18px 20px 20px; }
+.rq-form { display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px; }
+.rq-field { display: flex; flex-direction: column; gap: 5px; }
+.rq-field > label { font-size: 12px; color: var(--ink-mute); }
+.rq-field input, .rq-field select, .rq-field textarea { border: 1px solid var(--line-hard); border-radius: 4px; padding: 8px 10px; font: inherit; font-size: 13px; background: var(--paper); color: var(--ink); }
+.rq-field textarea { resize: vertical; }
+.rq-types { display: flex; flex-wrap: wrap; gap: 6px; }
+.rq-type { padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: transparent; cursor: pointer; font-size: 12.5px; font-family: inherit; }
+.rq-type.on { border-color: var(--seal); background: rgba(194,64,44,.06); box-shadow: inset 0 0 0 1px var(--seal); font-weight: 700; }
+.rq-band { font-size: 12px; color: var(--ink-mute); background: var(--paper-deep); border-radius: 4px; padding: 8px 10px; }
+.rq-band b { color: var(--ink); }
+.rq-tip { font-size: 12px; color: var(--ink-mute); margin: 10px 0 0; }
+.rq-err { font-size: 12px; color: var(--bad); margin: 8px 0 0; }
+.rq-receipt-line, .rq-line { display: flex; align-items: center; gap: 12px; }
+.rq-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 </style>

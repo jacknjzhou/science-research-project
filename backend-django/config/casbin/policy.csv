@@ -658,6 +658,7 @@ p, R-MANAGER, /api/v1/supplier,                      GET
 p, R-FINANCE, /api/v1/supplier,                      GET
 p, R-AUDITOR, /api/v1/supplier,                      GET
 # 采购申请：R-STAFF 建单；R-MANAGER 全读；方式判定全员可读可复算
+# R-FINANCE：财务台账可见 + 可发起采购申请（冻结预算属财务域操作）
 p, R-STAFF,   /api/v1/procurement/requisitions,      GET
 p, R-STAFF,   /api/v1/procurement/requisitions,      POST
 p, R-STAFF,   /api/v1/procurement/requisitions/*/way, GET
@@ -666,6 +667,9 @@ p, R-MANAGER, /api/v1/procurement/requisitions,      POST
 p, R-MANAGER, /api/v1/procurement/requisitions/*/way, GET
 p, R-AUDITOR, /api/v1/procurement/requisitions,      GET
 p, R-AUDITOR, /api/v1/procurement/requisitions/*/way, GET
+p, R-FINANCE, /api/v1/procurement/requisitions,      GET
+p, R-FINANCE, /api/v1/procurement/requisitions,      POST
+p, R-FINANCE, /api/v1/procurement/requisitions/*/way, GET
 # 招标/定标：R-MANAGER 写
 p, R-MANAGER, /api/v1/procurement/bids,              POST
 p, R-MANAGER, /api/v1/procurement/bids/*/award,      POST
@@ -673,6 +677,7 @@ p, R-MANAGER, /api/v1/procurement/bids/*/award,      POST
 p, R-STAFF,   /api/v1/procurement/orders,            GET
 p, R-MANAGER, /api/v1/procurement/orders,            GET
 p, R-AUDITOR, /api/v1/procurement/orders,            GET
+p, R-FINANCE, /api/v1/procurement/orders,            GET
 # 合同：R-STAFF 读/R-MANAGER 写评审签署/财务付款
 p, R-STAFF,   /api/v1/contract,                      GET
 p, R-STAFF,   /api/v1/contract/*/trace,              GET
@@ -715,6 +720,10 @@ p, R-AUDITOR, /api/v1/asset/*/lifecycle,             GET
 p, R-AUDITOR, /api/v1/asset/*/trace,                 GET
 p, R-FINANCE, /api/v1/finance/voucher,               POST
 p, R-FINANCE, /api/v1/asset/depreciation/run,        POST
+# 财务台账读权限（AssetView 页面加载 + 耗材库存）
+p, R-FINANCE, /api/v1/asset/ledger,                  GET
+p, R-FINANCE, /api/v1/asset/*/lifecycle,             GET
+p, R-FINANCE, /api/v1/consumable,                    GET
 # 耗材：入库出库（危化双锁应用层硬拦截）
 p, R-STAFF,   /api/v1/consumable,                    GET
 p, R-STAFF,   /api/v1/consumable/*/stock-in,         POST

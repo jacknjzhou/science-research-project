@@ -395,3 +395,18 @@ def test_archive_checklist_item_validation(seed_auth):
         **bearer(2, ["R-STAFF"]),
     )
     assert r.status_code == 400 and r.json()["code"] == 40002
+
+
+def test_finance_role_procurement_asset_access(seed_auth):
+    """R-FINANCE：采购/资产台账 4 个 GET 不再 403；POST requisitions 过 casbin 到达 handler。"""
+    c = _c()
+    hdr = bearer(4, ["R-FINANCE"])
+    for url in ("/api/v1/procurement/requisitions", "/api/v1/procurement/orders",
+                "/api/v1/asset/ledger", "/api/v1/consumable"):
+        r = c.get(url, **hdr)
+        assert r.status_code == 200, f"{url} → HTTP {r.status_code}"
+        assert r.json()["code"] == 0
+    # 空 body → 40001（证明已过 casbin 进入 handler，而非 40301）
+    r = c.post("/api/v1/procurement/requisitions",
+               data=json.dumps({}), content_type="application/json", **hdr)
+    assert r.status_code == 400 and r.json()["code"] == 40001
