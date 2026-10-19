@@ -521,6 +521,22 @@ class Command(BaseCommand):
                 status="COMPLETED", objection_open=False,
                 summary_json={"subject": out_t.title, "deal_amount": 600000})
             cnt["transform"] = cnt.get("transform", 0) + 1
+        # 可挂牌演示交易（T-05 挂牌要求 VALUATED/NEGOTIATING，转化看板门控按钮需要这两态）
+        ep2 = TEnterpartner.objects.filter(tenant_id=T1, company_name="某某能源装备有限公司（演示）").first()
+        put(TDeal, {"tenant_id": T1, "code": "DEAL-DEMO-002"},
+            {"disclosure": disc, "output_id": out_t.id, "enterpartner": ep2,
+             "deal_type": "许可", "partner_name": ep2.company_name,
+             "partner_credit_code": ep2.credit_code, "contract_amount": 350000,
+             "payment_method": "分期", "status": "NEGOTIATING",
+             "partner_check_abnormal": False, "legal_entity_id": ent.id,
+             "creator_id": C1}, "transform")
+        put(TDeal, {"tenant_id": T1, "code": "DEAL-DEMO-003"},
+            {"disclosure": disc, "output_id": out_t.id, "enterpartner": ep,
+             "deal_type": "作价投资", "partner_name": ep.company_name,
+             "partner_credit_code": ep.credit_code, "contract_amount": 800000,
+             "payment_method": "作价入股", "status": "VALUATED",
+             "partner_check_abnormal": False, "legal_entity_id": ent.id,
+             "creator_id": C1}, "transform")
         put(TAnnualReport, {"tenant_id": T1, "report_year": today.year - 1},
             {"status": "GENERATED", "creator_id": C1, "legal_entity_id": ent.id,
              "total_deals": 1, "total_contract_amount": 600000,
