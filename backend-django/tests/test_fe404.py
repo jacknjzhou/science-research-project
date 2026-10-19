@@ -324,3 +324,74 @@ def test_archive_checklist_idempotent_init(seed_auth):
 
     r = c.get(f"/api/v1/project/{p.id}/risk-warnings", **bearer(2, ["R-STAFF"]))
     assert r.status_code == 200
+
+
+def test_archive_checklist_item_upload_marks(seed_auth):
+    from apps.archive.models import ODocument
+
+    c = _c()
+    p = EProject.objects.create(tenant_id=1, deleted=0, creator_id=1, application_id=1,
+                                title="结题项目二", status="COMPLETING", pi_user_id=2)
+    doc = ODocument.objects.create(tenant_id=1, creator_id=2, name="结题报告.pdf",
+                                   status="STORED", source_module="project", source_id=p.id)
+    r = c.post(
+        f"/api/v1/project/{p.id}/archive-checklist",
+        data=json.dumps({"item": "结题报告", "doc_id": doc.id, "uploaded": True}),
+        content_type="application/json",
+        **bearer(2, ["R-STAFF"]),
+    )
+    assert r.status_code == 200
+    d = r.json()["data"]
+    by = {i["item"]: i for i in d["checklistJson"]}
+    assert by["结题报告"]["uploaded"] is True and by["结题报告"]["docId"] == doc.id
+    assert d["completedCount"] == 1 and d["completeness"] == "33%"
+    assert "结题报告" not in d["blockedItems"]
+    row = EArchiveChecklist.objects.get(project=p, code="FINAL")
+    assert row.passed is False  # 尚有必交项缺
+
+    # 三项必交全补 → passed=True
+    for name in ("成果清单", "经费决算表"):
+        d2 = ODocument.objects.create(tenant_id=1, creator_id=2, name=f"{name}.pdf")
+        r = c.post(
+            f"/api/v1/project/{p.id}/archive-checklist",
+            data=json.dumps({"item": name, "doc_id": d2.id}),
+            content_type="application/json",
+            **bearer(2, ["R-STAFF"]),
+        )
+        assert r.status_code == 200
+    assert r.json()["data"]["completeness"] == "100%"
+    assert EArchiveChecklist.objects.get(project=p, code="FINAL").passed is True
+
+
+def test_archive_checklist_item_validation(seed_auth):
+    c = _c()
+    p = EProject.objects.create(tenant_id=1, deleted=0, creator_id=1, application_id=1,
+                                title="校验项目", status="COMPLETING", pi_user_id=2)
+    # 补传必须带 doc_id
+    r = c.post(
+        f"/api/v1/project/{p.id}/archive-checklist",
+        data=json.dumps({"item": "结题报告"}),
+        content_type="application/json",
+        **bearer(2, ["R-STAFF"]),
+    )
+    assert r.status_code == 400 and r.json()["code"] == 40001
+
+    # doc_id 不存在 → 40902
+    r = c.post(
+        f"/api/v1/project/{p.id}/archive-checklist",
+        data=json.dumps({"item": "结题报告", "doc_id": 99999}),
+        content_type="application/json",
+        **bearer(2, ["R-STAFF"]),
+    )
+    assert r.status_code == 409 and r.json()["code"] == 40902
+
+    # 未知清单项 → 40002
+    from apps.archive.models import ODocument
+    doc = ODocument.objects.create(tenant_id=1, creator_id=2, name="x.pdf")
+    r = c.post(
+        f"/api/v1/project/{p.id}/archive-checklist",
+        data=json.dumps({"item": "不存在项", "doc_id": doc.id}),
+        content_type="application/json",
+        **bearer(2, ["R-STAFF"]),
+    )
+    assert r.status_code == 400 and r.json()["code"] == 40002

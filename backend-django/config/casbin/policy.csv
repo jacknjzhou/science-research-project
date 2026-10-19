@@ -126,6 +126,7 @@ p, R-STAFF,   /api/v1/project/*/progress-report,               POST
 p, R-STAFF,   /api/v1/project/*/mid-check,                     POST
 p, R-STAFF,   /api/v1/project/*/change-request,                POST
 p, R-STAFF,   /api/v1/project/*/final-accept,                  POST
+p, R-STAFF,   /api/v1/project/*/archive-checklist,             POST
 # 主管：全域读 + 变更审批 + 建中检（可跨 PI 视角）
 p, R-MANAGER, /api/v1/project/*,                               GET
 p, R-MANAGER, /api/v1/project/*/change-request/*/approve,      POST

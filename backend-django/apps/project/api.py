@@ -45,8 +45,10 @@ from core.httpx import (
     ApiError,
     CODE_BAD_REQUEST,
     CODE_CONFLICT,
+    CODE_CONFLICT_REF,
     CODE_FORBIDDEN,
     CODE_NOT_FOUND,
+    CODE_UNKNOWN_PARAM,
     ok,
     read_json,
 )
@@ -731,26 +733,73 @@ def list_risk_warnings(request: HttpRequest, id: int):
     return ok(request, rows)
 
 
-def get_archive_checklist(request: HttpRequest, id: int):
-    """GET /project/{id}/archive-checklist?stage= —— EArchiveChecklist 幂等初始化 + 契约输出。"""
-    p = _get_project_or_404(id)
-    stage = request.GET.get("stage") or "FINAL"
-    row = EArchiveChecklist.objects.filter(project=p, code=stage).first()
+def _get_checklist_or_init(request: HttpRequest, project: EProject, stage: str) -> EArchiveChecklist:
+    """幂等取归档清单：无行则按默认模板初始化落库。"""
+    row = EArchiveChecklist.objects.filter(project=project, code=stage).first()
     if row is None:
         row = EArchiveChecklist.objects.create(
-            tenant_id=p.tenant_id, code=stage, creator_id=domain_from(request).user_id or 0,
-            project=p, items=_ARCHIVE_DEFAULT_ITEMS, status="DRAFT", passed=False,
+            tenant_id=project.tenant_id, code=stage,
+            creator_id=domain_from(request).user_id or 0,
+            project=project, items=_ARCHIVE_DEFAULT_ITEMS, status="DRAFT", passed=False,
         )
+    return row
+
+
+def _checklist_payload(row: EArchiveChecklist) -> dict:
+    """EArchiveChecklist → 前端 camelCase 契约（ProjectView 文档页签）。"""
     items = row.items or _ARCHIVE_DEFAULT_ITEMS
     required = [i for i in items if i.get("required")]
     completed = [i for i in required if i.get("uploaded")]
     blocked = [i["item"] for i in required if not i.get("uploaded")]
     pct = round(len(completed) / len(required) * 100) if required else 100
-    return ok(request, {
+    return {
         "checklistJson": items,
         "requiredCount": len(required),
         "completedCount": len(completed),
         "completeness": f"{pct}%",
         "status": row.status,
         "blockedItems": blocked,
-    })
+    }
+
+
+def get_archive_checklist(request: HttpRequest, id: int):
+    """GET /project/{id}/archive-checklist?stage= —— EArchiveChecklist 幂等初始化 + 契约输出。"""
+    p = _get_project_or_404(id)
+    stage = request.GET.get("stage") or "FINAL"
+    row = _get_checklist_or_init(request, p, stage)
+    return ok(request, _checklist_payload(row))
+
+
+def update_checklist_item(request: HttpRequest, id: int):
+    """POST /project/{id}/archive-checklist?stage= —— 标记清单项补传/撤销。
+
+    body: {item: 清单项名, doc_id: O 域文档 id | null, uploaded: bool（缺省 true）}。
+    doc_id 须真实存在（o_document），否则 40902 引用冲突。
+    """
+    p = _get_project_or_404(id)
+    body = read_json(request)
+    item_name = (body.get("item") or "").strip()
+    if not item_name:
+        raise ApiError(400, CODE_BAD_REQUEST, "item 必填")
+    uploaded = bool(body.get("uploaded", True))
+    doc_id = body.get("doc_id")
+    if uploaded and not doc_id:
+        raise ApiError(400, CODE_BAD_REQUEST, "补传必须携带 doc_id（先 POST /documents 上传）")
+    if doc_id is not None:
+        from apps.archive.models import ODocument
+        if not ODocument.objects.filter(id=int(doc_id), deleted=0).exists():
+            raise ApiError(409, CODE_CONFLICT_REF, "doc_id 对应文档不存在")
+
+    stage = request.GET.get("stage") or "FINAL"
+    row = _get_checklist_or_init(request, p, stage)
+    items = [dict(i) for i in (row.items or _ARCHIVE_DEFAULT_ITEMS)]
+    target = next((i for i in items if i.get("item") == item_name), None)
+    if target is None:
+        raise ApiError(400, CODE_UNKNOWN_PARAM, f"未知清单项：{item_name}")
+    target["uploaded"] = uploaded
+    target["docId"] = int(doc_id) if doc_id else None
+    row.items = items
+    required = [i for i in items if i.get("required")]
+    row.passed = bool(required) and all(i.get("uploaded") for i in required)
+    row.save()
+    return ok(request, _checklist_payload(row))

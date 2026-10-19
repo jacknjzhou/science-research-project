@@ -133,6 +133,9 @@ api.get(
 api.get(
     "/project/{id}/archive-checklist", auth=ark_auth, tags=["project"]
 )(project_api.get_archive_checklist)
+api.post(
+    "/project/{id}/archive-checklist", auth=ark_auth, tags=["project"]
+)(project_api.update_checklist_item)
 
 # —— E 变更批量审批 / 任务书提取（静态，先于 /projects/{id}/...）——
 api.post(

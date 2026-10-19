@@ -2,7 +2,8 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import type { CSSProperties } from 'vue'
 import { useRoute } from 'vue-router'
-import { api, list } from '@/api/client'
+import { api, list, API_PREFIX } from '@/api/client'
+import { auth } from '@/api/auth'
 import { toNum, toWan, toPct } from '@/utils/money'
 
 // —— 详情基础字段对齐后端 mapper.go ToAPIProject（snake_case）；
@@ -33,7 +34,8 @@ interface EMilestone {
   due_date?: string | null; actual_date?: string | null; weight?: string | null
   deliverable_type?: string | null; [k: string]: any
 }
-// risk-warnings / archive-checklist 真后端尚未实现（passthrough），字段名沿用 schema 契约（camelCase）。
+// risk-warnings / archive-checklist 已真后端实现（确定性规则 + 幂等初始化），
+// 字段名沿用 schema 契约（camelCase）；补传走 POST /documents + POST archive-checklist 两步。
 interface ERiskWarning { warningId: number; level: string; source: string; title: string; suggestion: string; disposition: string }
 interface ChecklistItem { item: string; required: boolean; mime: string; docId: number | null; uploaded: boolean }
 interface EArchiveChecklist { checklistJson: ChecklistItem[]; requiredCount: number; completedCount: number; completeness: string; status: string; blockedItems: string[] }
@@ -178,6 +180,59 @@ async function ensureTab(key: TabKey) {
 function switchTab(key: TabKey) {
   tab.value = key
   ensureTab(key)
+}
+// —— 归档清单补传/预览（POST /documents + POST /project/{id}/archive-checklist）——
+const docFileInput = ref<HTMLInputElement | null>(null)
+const pendingItem = ref<ChecklistItem | null>(null)
+const uploading = ref(false)
+function pickDocFile(c: ChecklistItem) {
+  pendingItem.value = c
+  docFileInput.value?.click()
+}
+async function onDocFileChange(ev: Event) {
+  const input = ev.target as HTMLInputElement
+  const f = input.files?.[0]
+  const target = pendingItem.value
+  if (!f || !target || !id) return
+  uploading.value = true
+  try {
+    // 1) multipart 上传 → O 域文档（source_module=project 关联本项目）
+    const form = new FormData()
+    form.append('file', f)
+    form.append('name', f.name)
+    form.append('security_level', 'INTERNAL')
+    form.append('source_module', 'project')
+    form.append('source_id', String(id))
+    const res = await fetch(API_PREFIX + '/documents', {
+      method: 'POST',
+      body: form,
+      headers: auth.token ? { Authorization: 'Bearer ' + auth.token } : {},
+    })
+    const env = await res.json()
+    if (env?.code !== 0) throw new Error(env?.message || `HTTP ${res.status}`)
+    const docId = env?.data?.id
+    // 2) 标记清单项 uploaded + docId
+    checklist.value = await api.post<EArchiveChecklist>(`/project/${id}/archive-checklist`, {
+      item: target.item, doc_id: docId, uploaded: true,
+    })
+    toast(`已补传「${target.item}」：${env?.data?.name || f.name} ✓`)
+  } catch (e: any) {
+    toast('补传失败：' + (e?.message || e))
+  } finally {
+    uploading.value = false
+    pendingItem.value = null
+    input.value = ''
+  }
+}
+async function previewDoc(c: ChecklistItem) {
+  if (!c.docId) { toast('该清单项尚未上传文档'); return }
+  try {
+    const d = await api.get<{ url: string }>(`/documents/${c.docId}/download`)
+    if (d?.url) window.open(d.url, '_blank')
+    else toast('未取得预览地址')
+  } catch (e: any) {
+    toast('预览失败：' + (e?.message || e))
+  }
 }
 // —— 发起变更向导（E-07，契约 POST /project/{id}/change-request）——
 // 后端 changeRequestBody 为 snake_case：change_type/old_value/new_value/reason；
@@ -439,7 +494,7 @@ function onKey(e: KeyboardEvent) {
     <!-- 文档 -->
     <div class="pane" v-show="tab === 'doc'">
       <div class="card">
-        <div class="card-h"><h4>项目档案 · {{ checklist ? checklist.requiredCount : 0 }} 份</h4><span class="tag" :class="checklist && checklist.status === 'BLOCKED' ? 'bad' : 'info'">{{ checklist?.status || '—' }}</span></div>
+        <div class="card-h"><h4>项目档案 · {{ checklist ? checklist.requiredCount : 0 }} 份</h4><span class="tag" :class="checklist && checklist.status === 'BLOCKED' ? 'bad' : 'info'">{{ checklist?.status || '—' }}</span><span style="margin-left:auto;font-size:11px;color:var(--ink-mute)">{{ checklist ? checklist.completeness + ' 齐备' : '' }}</span></div>
         <div class="card-b" style="padding:0">
           <div v-if="tabLoading.doc" style="padding:24px;color:var(--ink-mute)">加载中…</div>
           <div v-else-if="!checklist || !checklist.checklistJson || !checklist.checklistJson.length" style="padding:24px;color:var(--ink-mute)">暂无档案</div>
@@ -450,11 +505,16 @@ function onKey(e: KeyboardEvent) {
                 <td>{{ c.item }}</td>
                 <td><span class="tag" :class="c.required ? 'seal' : 'info'">{{ c.required ? '必交' : '选交' }}</span></td>
                 <td><span class="tag" :class="c.uploaded ? 'ok' : 'warn'">{{ c.uploaded ? '✓ 已上传' : '缺' }}</span></td>
-                <td><a style="color:var(--ai);cursor:pointer" @click="toast('预览档案（演示）')">{{ c.uploaded ? '预览' : '待补' }}</a></td>
+                <td>
+                  <a v-if="c.uploaded" style="color:var(--ai);cursor:pointer" @click="previewDoc(c)">预览</a>
+                  <a v-else style="color:var(--ai);cursor:pointer" @click="pickDocFile(c)">{{ uploading && pendingItem?.item === c.item ? '上传中…' : '待补' }}</a>
+                </td>
               </tr>
             </tbody>
           </table>
         </div>
+        <!-- 补传选文件（隐藏触发，上传两步：POST /documents → POST archive-checklist） -->
+        <input ref="docFileInput" type="file" style="display:none" @change="onDocFileChange" />
       </div>
     </div>
   </section>
