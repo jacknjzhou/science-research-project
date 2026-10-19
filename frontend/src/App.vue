@@ -2,7 +2,7 @@
 import { ref, computed, reactive, watch, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { auth } from '@/api/auth'
-import { api } from '@/api/client'
+import { api, list } from '@/api/client'
 
 const router = useRouter()
 const route = useRoute()
@@ -80,12 +80,48 @@ watch(() => auth.isAuthed, (on) => {
   if (on) {
     loadUnread()
     pollTimer = window.setInterval(loadUnread, 30_000)
+    loadBadges(true)
   } else {
     unread.value = 0
     notifOpen.value = false
   }
 }, { immediate: true })
 onBeforeUnmount(() => window.clearInterval(pollTimer))
+
+// —— 侧边栏徽标（动态：与各页面真实数量一致；失败/无权限静默不显示）——
+// guide=可申报指南数 / review=待我评分任务数 / claim=待认领成果数 / procurement=进行中采购申请数
+const navBadge = reactive<Record<string, number | undefined>>({})
+let badgeFetchedAt = 0
+async function loadBadges(force = false) {
+  const keys = ['guide', 'review', 'claim', 'procurement']
+  if (!auth.isAuthed) {
+    keys.forEach((k) => (navBadge[k] = undefined))
+    return
+  }
+  const now = Date.now()
+  if (!force && now - badgeFetchedAt < 30_000) return  // 节流：30s 内复用
+  badgeFetchedAt = now
+  const one = async (path: string, params: Record<string, any>): Promise<number | undefined> => {
+    try {
+      const d = await list<{ total: number }>(path, { page: 1, size: 1, ...params })
+      return d.total ?? 0
+    } catch { return undefined }  // 403/失败 → 不显示徽标
+  }
+  const [guide, review, claim, reqs] = await Promise.all([
+    one('/apply/guidelines', { status: 'PUBLISHED' }),
+    one('/apply/review/mytasks', { status: 'SCORING' }),
+    one('/output/pending-claim', { min_confidence: 0 }),
+    list<{ status: string }>('/procurement/requisitions', { page: 1, size: 200 })
+      .then((d) => d.rows).catch(() => undefined),  // 后端不支持 status 过滤 → 拉全量本地计
+  ])
+  navBadge.guide = guide
+  navBadge.review = review
+  navBadge.claim = claim
+  // 进行中 = 待审/方式已定/评标中（草稿、已下单、已取消不计）
+  navBadge.procurement = reqs
+    ? reqs.filter((r) => ['SUBMITTED', 'WAY_DECIDED', 'BIDDING'].includes(r.status)).length
+    : undefined
+}
 
 // 登录浮层：未登录即显示；带 needLogin 查询(守卫回跳)时也强制显示。
 const showLogin = computed(() => !auth.isAuthed || route.query.needLogin === '1')
@@ -115,7 +151,7 @@ function doLogout() {
   toast('已退出登录')
 }
 
-interface NavItem { v: string; ic: string; label: string; badge?: number; roles?: string[] }
+interface NavItem { v: string; ic: string; label: string; roles?: string[] }
 interface NavGroup { t: string; items: NavItem[] }
 
 // 菜单 groups 的 roles 已收敛为 fallback-only 数据源（在线矩阵真源 sys_page_grant，PRD 2.9）。
@@ -126,21 +162,21 @@ const groups: NavGroup[] = [
     { v: 'bigscreen', ic: '▣', label: '经费监督大屏', roles: ['R-LEADER', 'R-FINANCE', 'R-AUDITOR', 'R-ADMIN'] },
   ]},
   { t: '项目管理', items: [
-    { v: 'guide', ic: '◉', label: '申报指南', badge: 6 },
+    { v: 'guide', ic: '◉', label: '申报指南' },
     { v: 'editor', ic: '✎', label: '申报书撰写', roles: ['R-STAFF', 'R-MANAGER', 'R-LEADER'] },
-    { v: 'review', ic: '☰', label: '评审工作台', badge: 3, roles: ['R-MANAGER', 'R-EXPERT', 'R-ETHICS', 'R-LEADER', 'R-ADMIN'] },
+    { v: 'review', ic: '☰', label: '评审工作台', roles: ['R-MANAGER', 'R-EXPERT', 'R-ETHICS', 'R-LEADER', 'R-ADMIN'] },
     { v: 'projects', ic: '▦', label: '我的项目', roles: ['R-STAFF', 'R-MANAGER', 'R-LEADER'] },
     { v: 'project', ic: '◫', label: '项目详情' },
   ]},
   { t: '经费 · 成果', items: [
     { v: 'expense', ic: '¥', label: '报销填单', roles: ['R-STAFF', 'R-MANAGER', 'R-FINANCE'] },
     { v: 'funding-config', ic: '⚗', label: '经费配置', roles: ['R-MANAGER', 'R-FINANCE'] },
-    { v: 'claim', ic: '✧', label: '成果认领', badge: 12, roles: ['R-STAFF', 'R-MANAGER', 'R-LEADER'] },
+    { v: 'claim', ic: '✧', label: '成果认领', roles: ['R-STAFF', 'R-MANAGER', 'R-LEADER'] },
     { v: 'output', ic: '▧', label: '成果台账', roles: ['R-STAFF', 'R-MANAGER', 'R-LEADER'] },
     { v: 'transfer', ic: '⇄', label: '转化看板', roles: ['R-MANAGER', 'R-LEADER', 'R-ADMIN'] },
   ]},
   { t: '资 产 · 采 购', items: [
-    { v: 'procurement', ic: '⧉', label: '采购与合同', badge: 5, roles: ['R-MANAGER', 'R-FINANCE', 'R-ADMIN'] },
+    { v: 'procurement', ic: '⧉', label: '采购与合同', roles: ['R-MANAGER', 'R-FINANCE', 'R-ADMIN'] },
     { v: 'asset', ic: '▤', label: '资产与耗材台账', roles: ['R-MANAGER', 'R-FINANCE', 'R-ADMIN'] },
   ]},
   { t: '学 术 活 动', items: [
@@ -197,6 +233,9 @@ function toast(m: string) {
   toastTimer = window.setTimeout(() => (toastMsg.value = ''), 2600)
 }
 ;(window as any).toast = toast
+
+// 路由切换后静默刷新徽标（30s 节流内建在 loadBadges）
+watch(() => route.path, () => { if (auth.isAuthed) loadBadges() })
 </script>
 
 <template>
@@ -231,7 +270,7 @@ function toast(m: string) {
             @click="go(item.v)"
           >
             <span class="ic">{{ item.ic }}</span>{{ item.label }}
-            <span class="bdg" v-if="item.badge">{{ item.badge }}</span>
+            <span class="bdg" v-if="navBadge[item.v]">{{ navBadge[item.v] }}</span>
           </div>
         </div>
       </nav>
