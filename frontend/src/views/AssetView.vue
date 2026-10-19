@@ -139,7 +139,7 @@ async function loadIssProjects() {
 const issReady = computed(() => !!issProject.value)
 
 function openIssue(a: Asset) {
-  if (!['IDLE', 'IN_USE'].includes(a.status)) return
+  if (a.status !== 'IDLE') return
   issTarget.value = a
   issError.value = ''
   issProject.value = ''
@@ -157,16 +157,79 @@ async function submitIssue() {
     await api.post<{ code?: string }>(`/asset/${a.id}/issue`, {
       projectId: issProject.value, usageRate: issRate.value,
     })
-    a.status = 'IN_USE'
     issOpen.value = false
     toast(`资产「${a.name}」领用已受理（A-05），生成出入库流水并留痕`)
+    await load() // 从后端重拉台账，保证状态真同步（IDLE → IN_USE）
   } catch (e: any) {
     issError.value = e?.message || String(e)
   } finally {
     issSubmitting.value = false
   }
 }
-const canIssue = (a: Asset) => ['IDLE', 'IN_USE'].includes(a.status)
+// 仅闲置资产可领用：IN_USE 重复领用后状态不变，是「点了没反应」的困惑来源
+const canIssue = (a: Asset) => a.status === 'IDLE'
+
+// —— 操作历史（A-06 资产全生命周期：GET /asset/{id}/lifecycle）——
+interface LifecycleEvent {
+  stage: string; refType: string; refId: number
+  actorId?: number | null; at?: string | null; detail?: Record<string, any>
+}
+const histOpen = ref(false)
+const histTarget = ref<Asset | null>(null)
+const histEvents = ref<LifecycleEvent[]>([])
+const histLoading = ref(false)
+const histError = ref('')
+
+const STAGE_META: Record<string, { l: string; c: string }> = {
+  REGISTER: { l: '建卡登记', c: 'info' }, ISSUE: { l: '出入库', c: 'ok' },
+  INVENTORY: { l: '盘点', c: 'warn' }, DEPRECIATION: { l: '折旧计提', c: 'info' },
+  DISPOSAL: { l: '处置', c: 'bad' },
+}
+// detail.type 优先（REQUISITION/RETURN/STOCK_IN…），否则回落 stage
+const TXN_LABEL: Record<string, { l: string; c: string }> = {
+  REQUISITION: { l: '领用', c: 'ok' }, RETURN: { l: '归还', c: 'info' },
+  STOCK_IN: { l: '入库', c: 'info' }, STOCK_OUT: { l: '出库', c: 'warn' },
+  RETURN_TO_STOCK: { l: '退库', c: 'info' }, HAZARD_DISPOSE: { l: '危废处置', c: 'bad' },
+}
+function eventMeta(e: LifecycleEvent) {
+  const t = e.detail?.type ? TXN_LABEL[e.detail.type] : undefined
+  return t || STAGE_META[e.stage] || { l: e.stage, c: '' }
+}
+function eventDesc(e: LifecycleEvent): string {
+  const d = e.detail || {}
+  const bits: string[] = []
+  if (d.code) bits.push(`单号 ${d.code}`)
+  if (d.type) bits.push(`类型 ${TXN_LABEL[d.type]?.l || d.type}`)
+  if (d.period) bits.push(`期间 ${d.period}`)
+  if (d.deprAmount != null) bits.push(`折旧 ¥${num(d.deprAmount).toLocaleString('zh-CN')}`)
+  if (d.method) bits.push(`方式 ${d.method}`)
+  if (d.qty != null && e.stage === 'ISSUE') bits.push(`数量 ${d.qty}`)
+  if (d.sourceType) bits.push(`来源 ${d.sourceType}`)
+  if (d.reason) bits.push(String(d.reason))
+  return bits.join(' · ') || '—'
+}
+function fmtTime(t?: string | null): string {
+  if (!t) return '—'
+  const d = new Date(t)
+  return isNaN(d.getTime()) ? t : d.toLocaleString('zh-CN', { hour12: false })
+}
+const actorName = (id?: number | null) => (id ? CUST[id] || `#${id}` : '系统')
+
+async function openHistory(a: Asset) {
+  histTarget.value = a
+  histOpen.value = true
+  histEvents.value = []
+  histError.value = ''
+  histLoading.value = true
+  try {
+    const res = await api.get<{ asset: Asset; events: LifecycleEvent[] }>(`/asset/${a.id}/lifecycle`)
+    histEvents.value = res.events || []
+  } catch (e: any) {
+    histError.value = e?.message || String(e)
+  } finally {
+    histLoading.value = false
+  }
+}
 </script>
 
 <template>
@@ -233,8 +296,8 @@ const canIssue = (a: Asset) => ['IDLE', 'IN_USE'].includes(a.status)
                 </td>
                 <td><span class="tag" :class="ASSET_STATUS[a.status]?.c">{{ ASSET_STATUS[a.status]?.l || a.status }}</span></td>
                 <td>
-                  <button class="btn sm" :disabled="!canIssue(a)"
-                    :style="{ opacity: canIssue(a) ? 1 : .4 }" @click="openIssue(a)">领用</button>
+                  <button v-if="canIssue(a)" class="btn sm" @click="openIssue(a)">领用</button>
+                  <button class="btn sm ghost" style="margin-left:4px" @click="openHistory(a)">历史</button>
                 </td>
               </tr>
               <tr v-if="!loading && !shownAssets.length"><td colspan="7" style="text-align:center;color:var(--ink-mute);padding:22px">无匹配资产</td></tr>
@@ -311,6 +374,42 @@ const canIssue = (a: Asset) => ['IDLE', 'IN_USE'].includes(a.status)
         </div>
       </div>
     </div>
+
+    <!-- 操作历史弹窗（A-06：GET /asset/{id}/lifecycle 全生命周期时间线） -->
+    <div class="as-mask" v-if="histOpen" @click.self="histOpen = false" @keydown.esc="histOpen = false">
+      <div class="as-modal" role="dialog" aria-label="资产操作历史">
+        <header class="as-head">
+          <h3>操作历史{{ histTarget ? ` · ${histTarget.name}` : '' }}</h3>
+          <button class="as-x" @click="histOpen = false" aria-label="关闭">×</button>
+        </header>
+        <div class="as-body">
+          <div class="as-field" style="flex-direction:row;gap:14px">
+            <span><label style="margin-right:6px">资产编号</label><span class="mono">{{ histTarget?.code || '—' }}</span></span>
+            <span><label style="margin-right:6px">当前状态</label>
+              <span class="tag" :class="histTarget ? ASSET_STATUS[histTarget.status]?.c : ''">{{ histTarget ? (ASSET_STATUS[histTarget.status]?.l || histTarget.status) : '—' }}</span>
+            </span>
+          </div>
+          <div v-if="histLoading" style="text-align:center;color:var(--ink-mute);padding:18px">加载中…</div>
+          <p class="as-err" v-else-if="histError">✕ {{ histError }}</p>
+          <div v-else class="as-timeline">
+            <div class="as-ev" v-for="(e, i) in histEvents" :key="i">
+              <span class="as-dot" :class="'dot-' + eventMeta(e).c"></span>
+              <div class="as-ev-main">
+                <div style="display:flex;align-items:center;gap:8px">
+                  <b style="font-size:13px">{{ eventMeta(e).l }}</b>
+                  <span class="mono" style="font-size:10px;color:var(--ink-mute)">{{ e.stage }} · {{ e.refType }}#{{ e.refId }}</span>
+                </div>
+                <div style="font-size:12px;color:var(--ink);margin-top:2px">{{ eventDesc(e) }}</div>
+                <div class="mono" style="font-size:10px;color:var(--ink-mute);margin-top:2px">
+                  {{ fmtTime(e.at) }} · 操作人 {{ actorName(e.actorId) }}
+                </div>
+              </div>
+            </div>
+            <div v-if="!histEvents.length" style="text-align:center;color:var(--ink-mute);padding:14px">暂无事件记录</div>
+          </div>
+        </div>
+      </div>
+    </div>
   </teleport>
 </template>
 
@@ -329,6 +428,15 @@ const canIssue = (a: Asset) => ['IDLE', 'IN_USE'].includes(a.status)
 .as-tip { font-size: 12px; color: var(--ink-mute); margin: 4px 0 0; }
 .as-err { font-size: 12px; color: var(--bad); margin: 0; }
 .as-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+
+/* —— 操作历史时间线 —— */
+.as-timeline { display: flex; flex-direction: column; gap: 0; max-height: 52vh; overflow: auto; }
+.as-ev { display: flex; gap: 12px; position: relative; padding-bottom: 14px; }
+.as-ev:not(:last-child)::before { content: ''; position: absolute; left: 5px; top: 14px; bottom: 0; width: 2px; background: var(--line); }
+.as-dot { width: 12px; height: 12px; border-radius: 50%; flex: none; margin-top: 3px; background: var(--ink-mute); }
+.dot-ok { background: var(--ok); } .dot-info { background: var(--ai); }
+.dot-warn { background: var(--gold); } .dot-bad { background: var(--bad); }
+.as-ev-main { flex: 1; min-width: 0; }
 
 /* —— 原有样式 —— */
 .sk { opacity: 0.4; }

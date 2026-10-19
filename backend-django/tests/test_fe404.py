@@ -422,3 +422,39 @@ def test_finance_role_asset_issue_permission(seed_auth):
                data=json.dumps({}), content_type="application/json",
                **bearer(4, ["R-FINANCE"]))
     assert r.status_code == 400 and r.json()["code"] == 40001
+
+
+def test_issue_idle_asset_status_changes_and_txn_recorded(seed_auth):
+    """领用 IDLE 资产 → 状态变 IN_USE + 生成 REQUISITION 流水（前端「状态没变」回归）。"""
+    from apps.asset.models import AAsset, AStockTxn
+
+    c = _c()
+    a = AAsset.objects.create(tenant_id=1, creator_id=2, name="激光粒度分析仪", status="IDLE")
+    r = c.post(f"/api/v1/asset/{a.id}/issue",
+               data=json.dumps({"projectId": 1, "usageRate": 0.5}), content_type="application/json",
+               **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 200 and r.json()["code"] == 0
+    a.refresh_from_db()
+    assert a.status == "IN_USE"
+    assert a.project_id == 1
+    assert AStockTxn.objects.filter(ref_asset_id=a.id, type="REQUISITION").exists()
+
+
+def test_lifecycle_events_include_register_and_requisition(seed_auth):
+    """GET /asset/{id}/lifecycle：事件时间线含 REGISTER 与领用流水（前端历史弹窗数据源）。"""
+    from apps.asset.models import AAsset, AStockTxn
+
+    c = _c()
+    a = AAsset.objects.create(tenant_id=1, creator_id=2, name="离心机", status="IDLE")
+    AStockTxn.objects.create(tenant_id=1, creator_id=2, code="TXN-T-1",
+                             type="REQUISITION", ref_asset_id=a.id, qty=1,
+                             balance_after=1, status="ISSUED", operator_id=2,
+                             project_id=1)
+    r = c.get(f"/api/v1/asset/{a.id}/lifecycle", **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 200 and r.json()["code"] == 0
+    events = r.json()["data"]["events"]
+    stages = [e["stage"] for e in events]
+    assert "REGISTER" in stages
+    assert "ISSUE" in stages
+    txn_ev = next(e for e in events if e["refType"] == "A_STOCK_TXN")
+    assert txn_ev["detail"]["type"] == "REQUISITION"

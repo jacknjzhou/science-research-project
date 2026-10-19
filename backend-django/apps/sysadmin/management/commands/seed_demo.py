@@ -615,6 +615,18 @@ class Command(BaseCommand):
                  {"asset_type": "FIXED", "category_code": "FURNITURE",
                   "name": "报废实验台（演示）", "value": 3000, "status": "DISPOSED",
                   "legal_entity_id": ent.id, "dept_id": 1, "creator_id": C1}, "asset")
+        # IDLE 演示资产：让「领用」有可见状态变化对象（IDLE → IN_USE）
+        a4 = put(AAsset, {"tenant_id": T1, "code": "AST-DEMO-0004"},
+                 {"asset_type": "FIXED", "category_code": "INSTRUMENT",
+                  "name": "激光粒度分析仪（演示·闲置）", "value": 420000, "status": "IDLE",
+                  "source_type": "PURCHASE", "legal_entity_id": ent.id,
+                  "dept_id": 2, "location": "材料所 201 室", "creator_id": C1}, "asset")
+        # a1 的领用流水：让「操作历史」有 REQUISITION 事件可展示
+        put(AStockTxn, {"tenant_id": T1, "code": "STK-DEMO-0002"},
+            {"type": "REQUISITION", "ref_asset_id": a1.id, "qty": 1, "balance_after": 1,
+             "status": "ISSUED", "txn_time": now, "project_id": prj1.id,
+             "operator_id": users["staff"].id, "remark": "演示：X 射线衍射仪领用至项目",
+             "creator_id": C1}, "asset")
         con = put(AConsumable, {"tenant_id": T1, "sku": "SKU-DEMO-001"},
                   {"name": "高纯氩气（演示）", "unit": "瓶", "stock_qty": 20,
                    "category": "GAS", "batch_no": "B202610", "status": "ACTIVE",
