@@ -1,5 +1,7 @@
 # 科研管理系统 · 架构与技术方案
 
+> **⚠️ v2 选型变更（2026-10-17）**：后端选型经评审改为 **方案 C：Django 5.x LTS 主体 + FastAPI AI 微服务**（依据资料库《科研管理系统后端技术选型-Django-vs-FastAPI》）。本文以下 Go + Gin 相关内容**已过时**，仅作历史参考；重写计划与规格见 `docs/superpowers/plans/2026-10-17-backend-django-rewrite-plan.md` 与 `docs/superpowers/specs/2026-10-17-backend-django-rewrite-spec.md`。旧 Go/Node 后端源码快照：git tag `legacy-backend-20261017`。
+
 **版本**：v1.1 · **日期**：2026-10-13
 **上游文档**：`./PRODUCT_PLAN.md`（产品规划 v1.1）、`./PRD/README.md`（PRD 通用规约 v1.1）及 01–11 模块 PRD
 **读者对象**：架构师、后端/前端/AI 工程师、运维/SRE、安全合规、项目管理者

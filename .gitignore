@@ -1,1 +1,4 @@
 .workbuddy/
+
+# local storage backend artifacts (smoke/test uploads)
+backend-django/storage/

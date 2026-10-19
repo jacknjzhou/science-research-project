@@ -1,5 +1,7 @@
 # 部署方案 · Docker Compose 一键启动全套服务
 
+> **✅ 现状速览（2026-10-17，Phase 4 完成）**：`docker-compose.yml` 已演进为**全套六服务编排**：`backend`（Django :8787）+ `svc-ai`（FastAPI :8900）+ `frontend`（nginx :8080）+ `postgres`/`redis`/`minio`。一键 `docker compose up -d --build`，全部容器自带 healthcheck，演示账号 `admin / Admin@123456`。速查见根目录 `README.md`；生产 systemd 非容器化方案见 `docs/superpowers/specs/2026-10-17-backend-django-rewrite-spec.md` §九。**本文以下正文描述旧 Node/Fastify 参考栈，仅作历史参考**（源码快照：git tag `legacy-backend-20261017`）。
+
 本方案用 Docker Compose 把「契约驱动参考栈」整套拉起：nginx 托管的前端 SPA + Node/Fastify 参考后端，二者同源、开箱可访问。生产目标（Java 17 + Spring Cloud Alibaba + PostgreSQL）落地后，只需替换同名 `backend` 服务，前端与反代保持不变。
 
 ## 前置条件

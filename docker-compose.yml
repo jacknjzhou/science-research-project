@@ -1,9 +1,9 @@
 # 科研管理系统 · 全套服务一键编排（Docker Compose）
 # 用法：docker compose up -d --build     浏览器访问 http://localhost:8080
-# 说明：backend 现为 Go+Gin 契约驱动后端（golang-migrate 拥有 schema）。
-#   · postgres 首启为空库；schema 由后端启动时 migrate.Up 依 migrations/ 建表（不再 initdb 跑 design/*.sql）。
-#   · 未手工实现的路由由 Go passthrough 依 design 契约生成合规响应，保证直替 Node 后全站可用。
-#   · Node backend/ 已退出编排，仅作契约测试夹具保留于仓库。
+# 说明：
+#   · 2026-10-17 起后端为 Django（方案C，backend-django/）：migrate 拥有 schema，
+#     启动时幂等播种演示数据；未实现契约端点由 stub 层返回合规占位（X-Stub: true）。
+#   · 旧 Go/Node 后端已移除，源码快照见 git tag legacy-backend-20261017。
 #   · 重新初始化：docker compose down -v 清空 pgdata 卷再 up。
 
 name: eplugger-ark
@@ -11,65 +11,103 @@ name: eplugger-ark
 services:
   backend:
     build:
-      context: .                     # 仓库根：镜像内需同时含 backend-go/ 源码与 design/ 契约
-      dockerfile: backend-go/Dockerfile
-    image: eplugger-ark-go:0.1.0
+      context: ./backend-django
+      dockerfile: Dockerfile
+    image: ark-django:0.1.0
     container_name: ark-backend
     environment:
       ARK_DATABASE_URL: postgres://ark:ark@postgres:5432/ark?sslmode=disable
       ARK_REDIS_ADDR: redis:6379
-      ARK_REDIS_PASSWORD: ""
-      ARK_JWT_SECRET: ${ARK_JWT_SECRET:-dev-secret-change-me}   # 生产用 .env 注入强随机
-      ARK_S3_ENDPOINT: minio:9000
-      ARK_S3_ACCESS_KEY: minioadmin
-      ARK_S3_SECRET_KEY: minioadmin
-      ARK_S3_BUCKET: ark-docs
-      # LLM（NewAPI OpenAI 兼容）：未配置时 AI 审核端点自动降级 REVIEW（不阻塞业务）
-      ARK_LLM_BASE_URL: ${ARK_LLM_BASE_URL:-http://10.26.8.43:3002}
+      ARK_JWT_SECRET: ${ARK_JWT_SECRET:-dev-secret-change-me-please-use-32-bytes-min!}
+      # 开发/演示环境开启 ninja 自省文档（/api/v1/docs）；生产删除此行
+      ARK_API_DOCS: "1"
+      # LLM（NewAPI OpenAI 兼容）：未配置时 AI 端点自动降级 REVIEW（不阻塞业务）
+      ARK_LLM_BASE_URL: ${ARK_LLM_BASE_URL:-}
       ARK_LLM_API_KEY: ${ARK_LLM_API_KEY:-}
       ARK_LLM_MODEL: ${ARK_LLM_MODEL:-gpt-4o-mini}
-      ARK_LLM_TIMEOUT_SEC: ${ARK_LLM_TIMEOUT_SEC:-30}
-      # 演示数据播种：空库启动时自动写入 DEMO- 前缀演示数据（幂等；测试/生产可置 0 关闭）
-      ARK_SEED_DEMO: ${ARK_SEED_DEMO:-1}
-      # DESIGN_DIR / ARK_MIGRATIONS_DIR / ARK_AUTH_* 已在镜像 ENV 内烘好，此处可覆盖
     ports:
-      - "8787:8787"                  # 便于宿主机直调 API；仅经 nginx 访问前端时可删
+      - "8787:8787"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio:
-        condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/healthz"]
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8787/healthz')"]
       interval: 15s
-      timeout: 3s
-      # 后端启动先跑 golang-migrate（空库冷启动建表约 1~2 分钟），期间未 listen。
-      # start_period 必须覆盖这段迁移窗口，否则失败计入 retries → 误判 unhealthy，
-      # 依赖 backend(service_healthy) 的 frontend 会 "dependency failed to start"。
-      start_period: 180s
+      timeout: 5s
+      start_period: 60s
       retries: 10
+    restart: unless-stopped
+
+  # svc-ai：AI 微服务（FastAPI，spec §七）。降级契约：ARK_LLM_BASE_URL 未配置 →
+  # {verdict:REVIEW, confidence:0, reasons:[llm-unavailable]} HTTP 200，不阻塞业务。
+  svc-ai:
+    build:
+      context: ./backend-django
+      dockerfile: Dockerfile
+    image: ark-django:0.1.0
+    container_name: ark-svc-ai
+    command: ["uvicorn", "svc_ai.main:app", "--host", "0.0.0.0", "--port", "8900"]
+    environment:
+      ARK_LLM_BASE_URL: ${ARK_LLM_BASE_URL:-}
+      ARK_LLM_API_KEY: ${ARK_LLM_API_KEY:-}
+      ARK_LLM_MODEL: ${ARK_LLM_MODEL:-gpt-4o-mini}
+      ARK_LLM_TIMEOUT_SEC: ${ARK_LLM_TIMEOUT_SEC:-30}
+    ports:
+      - "8900:8900"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8900/healthz')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+    restart: unless-stopped
+
+  # api-docs：design/ 16 份 OpenAPI 契约的 Swagger UI 在线文档（下拉切换模块）
+  api-docs:
+    image: swaggerapi/swagger-ui:latest
+    container_name: ark-api-docs
+    environment:
+      URLS: >-
+        [{"name":"01 项目申报与立项 P","url":"/spec/01-项目申报与立项-P.openapi.yaml"},
+         {"name":"02 项目过程管理 E","url":"/spec/02-项目过程管理-E.openapi.yaml"},
+         {"name":"03 科研经费管理 F","url":"/spec/03-科研经费管理-F.openapi.yaml"},
+         {"name":"04 科研成果管理 R","url":"/spec/04-科研成果管理-R.openapi.yaml"},
+         {"name":"05 科技成果转化 T","url":"/spec/05-科技成果转化-T.openapi.yaml"},
+         {"name":"06 科研诚信与伦理 C","url":"/spec/06-科研诚信与伦理-C.openapi.yaml"},
+         {"name":"07 人员与团队 S","url":"/spec/07-人员与团队-S.openapi.yaml"},
+         {"name":"08 数据分析与决策 D","url":"/spec/08-数据分析与决策-D.openapi.yaml"},
+         {"name":"09 采购与合同管理 G","url":"/spec/09-采购与合同管理-G.openapi.yaml"},
+         {"name":"10 资产与耗材管理 A","url":"/spec/10-资产与耗材管理-A.openapi.yaml"},
+         {"name":"11 涉密管理与多法人治理 X","url":"/spec/11-涉密管理与多法人治理-X.openapi.yaml"},
+         {"name":"12 用户与权限 U","url":"/spec/12-用户与权限-U.openapi.yaml"},
+         {"name":"13 学术活动管理 V","url":"/spec/13-学术活动管理-V.openapi.yaml"},
+         {"name":"14 科研绩效评价 M","url":"/spec/14-科研绩效评价-M.openapi.yaml"},
+         {"name":"15 专家与评审管理 N","url":"/spec/15-专家与评审管理-N.openapi.yaml"},
+         {"name":"16 科研档案管理 O","url":"/spec/16-科研档案管理-O.openapi.yaml"}]
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./design:/usr/share/nginx/html/spec:ro
     restart: unless-stopped
 
   frontend:
     build:
       context: ./frontend            # 前端构建上下文自包含（契约 yaml 已随 frontend/ 提交）
-      dockerfile: Dockerfile         # 已内置 VITE_USE_MOCK=false，直连 Go 后端
+      dockerfile: Dockerfile
     image: eplugger-frontend:0.1.0
-    container_name: ark-frontend
     depends_on:
       backend:
-        condition: service_healthy   # 后端健康后再起 nginx，避免 upstream 解析失败
+        condition: service_healthy
     ports:
       - "8080:80"                    # 对外统一入口：http://localhost:8080
     restart: unless-stopped
 
-  # PostgreSQL 15：空库启动，schema 交给后端 golang-migrate（migrations/000001_init.up.sql）
+  # PostgreSQL 15：schema 将由 backend-django 的 Django migrations 接管（Phase 0）
   postgres:
     image: postgres:15-alpine
     container_name: ark-postgres
-    # 全量并行跑测试时连接数吃紧（多包并发池），开发环境放宽到 300
     command: ["postgres", "-c", "max_connections=300"]
     environment:
       POSTGRES_USER: ark
@@ -79,7 +117,6 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # 不再挂载 ./design 到 initdb —— 建表唯一来源是后端 migrate，避免双写冲突
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ark -d ark"]
       interval: 10s
@@ -88,7 +125,7 @@ services:
       start_period: 15s
     restart: unless-stopped
 
-  # Redis 7：写方法幂等键热存储（Idempotency-Key -> 首次响应快照，TTL 24h）
+  # Redis 7：幂等键热存储（Idempotency-Key -> 首次响应快照，TTL 24h）、Celery broker
   redis:
     image: redis:7-alpine
     container_name: ark-redis
