@@ -83,6 +83,29 @@ const sourceLabel = (c: Output) => SOURCE_TEXT.value[c.source] || c.source
 const typeLabel = (c: Output) => TYPE_TEXT[c.output_type] || c.output_type
 const linked = (c: Output) => (c.project_ids || []).length > 0
 const restCount = computed(() => Math.max(pendingTotal.value - items.value.length, 0))
+// —— 展开全部（真实重拉全量）/ 收起（还原首页）——
+const allLoaded = ref(false)
+const origItems = ref<Output[]>([])
+async function expandAll() {
+  if (busy.value) return
+  busy.value = true
+  try {
+    const { rows } = await list<Output>('/output/pending-claim', { min_confidence: 0, size: Math.max(pendingTotal.value, 20) })
+    const have = new Set(items.value.map((i) => i.id))
+    const merged = [...items.value, ...(rows ?? []).filter((r) => !have.has(r.id))]
+    items.value = merged
+    allLoaded.value = true
+    if (merged.length < pendingTotal.value) toast(`已加载全部可认领记录（共 ${merged.length} 条）`)
+  } catch (e: any) {
+    toast('加载失败：' + (e?.message || e))
+  } finally {
+    busy.value = false
+  }
+}
+function collapseAll() {
+  items.value = origItems.value
+  allLoaded.value = false
+}
 
 // 成果来源：字典 output_source（PRD 2.8），useDict 拉取 + 硬编码 fallback
 const { items: sourceDict } = useDict('output_source', [
@@ -101,6 +124,7 @@ async function load() {
   try {
     const { rows, total } = await list<Output>('/output/pending-claim', { min_confidence: 0 })
     items.value = rows ?? []
+    origItems.value = items.value
     pendingTotal.value = total ?? rows?.length ?? 0
     const mine = await list<Output>('/output/mine')
     mineTotal.value = mine?.total ?? 0
@@ -224,18 +248,25 @@ async function markNotMine(c: Output) {
         <div class="claim-actions">
           <button class="btn sm seal" :disabled="claimed(c)" @click="claimOne(c)">{{ claimed(c) ? '已认领' : '认领' }}</button>
           <button v-if="claimed(c) && !linked(c)" class="btn sm ghost" @click="assignProject(c)">归属项目</button>
-          <button v-if="c.claim_status === 'DOUBTFUL'" class="btn sm ghost" @click="toast('已转交科研办仲裁')">仲裁</button>
+          <button v-if="c.claim_status === 'DOUBTFUL'" class="btn sm ghost" @click="toast('转交仲裁尚未开放')">仲裁</button>
           <button v-else class="btn sm ghost" @click="markNotMine(c)">不是我的</button>
         </div>
       </div>
 
-      <div v-if="!loading && restCount > 0" class="claim-card" style="opacity:.6">
+      <div v-if="!loading && restCount > 0 && !allLoaded" class="claim-card" style="opacity:.6">
         <div class="conf-ring"><b style="font-size:10px;color:var(--ink-mute)">待办</b></div>
         <div style="flex:1">
           <div style="font-weight:700;font-size:13.5px">另有 {{ restCount }} 条低置信与外部成果池记录</div>
           <div style="font-size:12px;color:var(--ink-mute);margin-top:3px">系统持续增量抓取，每日 06:00 更新待认领清单。</div>
         </div>
-        <button class="btn sm ghost" @click="toast(`展开其余 ${restCount} 条（演示）`)">展开全部</button>
+        <button class="btn sm ghost" :disabled="busy" @click="expandAll">展开其余 {{ restCount }} 条</button>
+      </div>
+      <div v-if="allLoaded" class="claim-card">
+        <div class="conf-ring"><b style="font-size:10px;color:var(--ink-mute)">全量</b></div>
+        <div style="flex:1">
+          <div style="font-weight:700;font-size:13.5px">已展开全部待认领记录（{{ items.length }} 条）</div>
+        </div>
+        <button class="btn sm ghost" @click="collapseAll">收起</button>
       </div>
     </div>
   </section>

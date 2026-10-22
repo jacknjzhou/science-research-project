@@ -244,7 +244,7 @@ const ringColor = (o: Opp) => ((o.match_score ?? 0) < 0.8 ? 'var(--warn)' : unde
                 <span v-if="d.is_core_tech" class="tag seal" style="margin-left:6px">核心技术</span>
               </div>
             </div>
-            <div class="claim-actions"><button class="btn sm ghost" :disabled="busy" @click="toast('披露详情已打开（演示）')">详情</button></div>
+            <div class="claim-actions"><button class="btn sm ghost" :disabled="busy" @click="toast('披露详情页尚未开放')">详情</button></div>
           </div>
         </div>
       </div>
@@ -261,7 +261,7 @@ const ringColor = (o: Opp) => ((o.match_score ?? 0) < 0.8 ? 'var(--warn)' : unde
               <b style="font-size:13px">{{ o.company_name }}</b>
               <div style="font-size:11px;color:var(--ink-mute);margin-top:4px">{{ o.reason }}<span v-if="o.budget"> · 预算 {{ o.budget }}</span></div>
               <div style="font-size:11px;color:var(--ai);margin-top:4px">✦ {{ o.suggestion }}</div>
-              <div style="margin-top:6px"><button class="btn sm" @click="toast('已生成推介材料草稿（演示）')">生成推介材料</button></div>
+              <div style="margin-top:6px"><button class="btn sm" @click="toast('推介材料生成尚未开放')">生成推介材料</button></div>
             </div>
           </div>
           <div class="hr-rule" style="margin:4px 0"></div>
@@ -293,7 +293,7 @@ const ringColor = (o: Opp) => ((o.match_score ?? 0) < 0.8 ? 'var(--warn)' : unde
           </tbody>
         </table>
         <div v-if="deals.some((x) => x.risk)" style="margin:0 18px 18px;padding:12px;background:var(--warn-soft);border-radius:5px;font-size:12px;line-height:1.7">
-          ⚠ <b>AI 合同审查：</b>「{{ deals.find((x) => x.risk)?.subject }}」第 7.2 条约定<b>改进成果归受让方独有</b>，与院所知识产权政策冲突（参照院知发〔2024〕9号 第十二条），建议改为共有。<b style="cursor:pointer;color:var(--bad)" @click="toast('已生成修订建议（演示）')">查看修订建议 →</b>
+          ⚠ <b>AI 合同审查：</b>「{{ deals.find((x) => x.risk)?.subject }}」第 7.2 条约定<b>改进成果归受让方独有</b>，与院所知识产权政策冲突（参照院知发〔2024〕9号 第十二条），建议改为共有。<b style="cursor:pointer;color:var(--bad)" @click="toast('修订建议生成尚未开放（AI 审查仅输出风险清单）')">查看修订建议 →</b>
         </div>
       </div>
     </div>

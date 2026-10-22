@@ -111,7 +111,7 @@ function goPage(delta: number) {
 }
 
 function open(p: EProject) {
-  if (p.status === 'CLOSED') { toast('打开归档项目（演示）'); return }
+  // 含 CLOSED 归档项目：正常进入详情（只读视图）
   router.push({ name: 'project', params: { id: p.id } })
 }
 function pick(v: 'card' | 'list' | 'gantt') {

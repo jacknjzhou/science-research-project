@@ -112,7 +112,7 @@ onMounted(load)
         <div class="page-title">PI <em>画像</em></div>
         <div class="page-sub">每周自动刷新 · 数据源：项目 / 经费 / 成果 / 合作 / 诚信 · 供评审、引才、梯队决策参考</div>
       </div>
-      <button class="btn ghost" @click="toast('导出简历 PDF（演示）')">⇩ 导出简历</button>
+      <button class="btn ghost" @click="toast('简历 PDF 导出尚未开放')">⇩ 导出简历</button>
     </div>
 
     <div v-if="loading" class="card"><div class="card-b" style="color:var(--ink-mute)">画像加载中…</div></div>

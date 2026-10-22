@@ -282,7 +282,7 @@ async function submitRequisition() {
             </div>
           </div>
           <hr class="hr-rule" />
-          <div class="ai-hint" v-if="highRisk">✦ <b>AI 合同风险审查：</b>{{ highRisk }} 份合同命中高风险条款（如「知识产权全部归外协方」与院所政策冲突），须法务人工签署意见方可放行。 <b style="cursor:pointer;color:var(--bad)" @click="toast('已生成修订建议（演示）')">查看修订 →</b></div>
+          <div class="ai-hint" v-if="highRisk">✦ <b>AI 合同风险审查：</b>{{ highRisk }} 份合同命中高风险条款（如「知识产权全部归外协方」与院所政策冲突），须法务人工签署意见方可放行。 <b style="cursor:pointer;color:var(--bad)" @click="toast('修订建议生成尚未开放（AI 审查仅输出风险清单）')">查看修订 →</b></div>
           <div class="ai-hint" v-else>✦ AI 合同风险审查：暂未发现高风险条款。</div>
           <div style="font-size:11.5px;color:var(--ink-mute)">到货合格后可一键转入资产台账（G-17 → A-03），自动生成资产卡与条码。</div>
         </div>

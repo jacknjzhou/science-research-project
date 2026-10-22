@@ -179,6 +179,30 @@ function sendAi() {
   aiDraft('content', t)
 }
 
+// 看热点：真实调用 /apply/ai/draft（RAG 检索同领域），仅回显对话，不覆写 §3 草稿
+async function searchHotspots() {
+  if (!app.value || aiBusy.value) return
+  msgs.value.push({ role: 'user', text: '检索近 3 年同领域研究热点' })
+  aiBusy.value = true
+  try {
+    const r = await api.post<AiDraft>('/apply/ai/draft', {
+      application_id: app.value.id,
+      section_code: 'content',
+      keywords: ['扩散模型', '曲面磨抛', '自适应'],
+      project_type: app.value.project_type,
+    })
+    const cite = (r?.references || [])
+      .map((ref, i) => `[${i + 1}] ${ref.project_code || ''}（${ref.title || ''}）`)
+      .join(' ')
+    msgs.value.push({ role: 'bot', text: r?.content || 'AI 暂无热点检索结果。', cite: cite ? '参考：' + cite : undefined })
+  } catch (e: any) {
+    msgs.value.push({ role: 'bot', warn: true, text: 'AI 热点检索暂时不可用（50301）。' })
+    toast('热点检索失败：' + (e?.message || e))
+  } finally {
+    aiBusy.value = false
+  }
+}
+
 async function saveSection(code: string) {
   if (!app.value) return
   try {
@@ -282,7 +306,7 @@ async function submitPrecheck() {
                   </tr>
                 </tbody>
               </table>
-              <div class="compliance-card">⚠ <b>AI 预算检查：</b>劳务费接近占比上限，若后续调增其他科目可能触发超限。依据：《国家自然科学基金资助项目资金管理办法》财教〔2021〕177 号 第十四条。<b style="color:var(--ai);cursor:pointer" @click="toast('查看条款原文（演示）')">查看条款原文 →</b></div>
+              <div class="compliance-card">⚠ <b>AI 预算检查：</b>劳务费接近占比上限，若后续调增其他科目可能触发超限。依据：《国家自然科学基金资助项目资金管理办法》财教〔2021〕177 号 第十四条。<b style="color:var(--ai);cursor:pointer" @click="toast('条款原文查阅尚未开放')">查看条款原文 →</b></div>
             </template>
           </template>
 
@@ -291,7 +315,7 @@ async function submitPrecheck() {
           <div class="att-list">
             <div class="att-item" v-for="(a, i) in (app.attachment_ids || [])" :key="i">
               <span>📎 {{ a }}</span>
-              <button class="btn ghost sm" @click="toast('预览附件（演示）')">预览</button>
+              <button class="btn ghost sm" @click="toast('附件预览尚未开放')">预览</button>
             </div>
             <div v-if="!(app.attachment_ids || []).length" class="att-empty">
               暂未上传附件。代表作全文、合作协议、伦理批件等请先在<a style="color:var(--ai);cursor:pointer" @click="$router.push({ name: 'archive' })">科研档案</a>入库，或联系科研秘书上传。
@@ -315,7 +339,7 @@ async function submitPrecheck() {
               <span v-html="m.text"></span>
               <div class="ai-actions" v-if="m.actions">
                 <button class="btn sm ai" :disabled="aiBusy" @click="aiDraft('content')">✦ 起草 §3</button>
-                <button class="btn sm ghost" @click="toast('将检索近 3 年同领域热点')">看热点</button>
+                <button class="btn sm ghost" :disabled="aiBusy" @click="searchHotspots">看热点</button>
               </div>
               <div class="ai-cite" v-if="m.cite" v-html="m.cite"></div>
             </div>

@@ -20,6 +20,7 @@
     "@types/node": "^16.18.97",
     "@vitejs/plugin-vue": "^4.6.2",
     "openapi-typescript": "^6.7.6",
+    "playwright": "^1.38.1",
     "typescript": "^5.3.3",
     "vite": "^4.5.3",
     "vue-tsc": "^1.8.27"

@@ -85,11 +85,42 @@ const totalAmount = computed(() => lines.value.reduce((a, l) => a + (Number(l.am
 
 function addLine() { lines.value.push({ id: lineSeq++, subjectId: form.subjectId, amount: 0, note: '', invoiceNo: '' }) }
 function removeLine(id: number) { lines.value = lines.value.filter((l) => l.id !== id) }
-function simulateOcr() {
-  addLine()
-  const last = lines.value[lines.value.length - 1]
-  last.note = '新识别发票 · 待补充事由'
-  toast('已识别 2 张发票 · 自动填单成功（演示）')
+// —— 发票 OCR（F-08）：真实文件选择 → POST /invoices/ocr → 结构化结果回填明细行 ——
+// fileUrl 契约要求对象存储 URL；桌面端以 blob URL 承载本地文件（后端未实现时优雅报错，手动补录）
+const fileInput = ref<HTMLInputElement | null>(null)
+function pickInvoiceFiles() { fileInput.value?.click() }
+async function onInvoiceFiles(e: Event) {
+  const input = e.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  input.value = ''
+  for (const f of files) await ocrFile(f)
+}
+interface OcrInvoice {
+  number?: string; invoiceCode?: string; sellerName?: string
+  totalAmount?: string | number; amountExclTax?: string | number
+  issueDate?: string; ocrConfidence?: number
+}
+async function ocrFile(f: File) {
+  try {
+    const r = await api.post<OcrInvoice>('/invoices/ocr', {
+      fileUrl: URL.createObjectURL(f),
+      expenseContext: { reason: form.reason },
+    })
+    const amt = num(r?.totalAmount) || num(r?.amountExclTax) || 0
+    if (!amt && !r?.number) {
+      toast('未能从图片解析出发票要素，请手动填写明细')
+      return
+    }
+    addLine()
+    const last = lines.value[lines.value.length - 1]
+    if (amt) last.amount = amt
+    if (r?.number) last.invoiceNo = r.number
+    if (r?.sellerName) last.note = r.sellerName
+    const conf = r?.ocrConfidence != null ? `（置信度 ${Math.round(r.ocrConfidence * 100)}%）` : ''
+    toast(`发票识别：${r?.sellerName || r?.number || f.name} · ¥${amt ? amt.toLocaleString('zh-CN') : '—'}${conf}`)
+  } catch (e: any) {
+    toast(`发票识别失败：${e?.message || e}（请手动填写明细）`)
+  }
 }
 
 // 水位条：used/planned
@@ -158,31 +189,13 @@ async function submit() {
   submitting.value = true
   try {
     const subject = subjects.value.find((s) => s.id === form.subjectId)
-    // expense_type 按根级科目匹配（子科目如「材料费/耗材」沿父链取根）
-    let rootName = subject?.name || ''
-    let p = subject
-    while (p?.parent_id) {
-      p = subjects.value.find((x) => x.id === p!.parent_id)
-      if (p) rootName = p.name
-    }
     const line = water.value.find((w) => w.subject_id === form.subjectId)
     if (water.value.length && !line) {
       toast('所选科目不在当前预算的科目行内，请重新选择')
       submitting.value = false
       return
     }
-    const invNo = lines.value.map((l) => l.invoiceNo.trim()).find(Boolean) || null
-    const payload = {
-      project_id: b.project_id,
-      legal_entity_id: b.legal_entity_id,
-      budget_line_id: line?.id ?? null,
-      amount: totalAmount.value.toFixed(2),
-      expense_type: TYPE_BY_SUBJECT[rootName] || 'OTHER',
-      submit_mode: b.mode || '预算制',
-      description: form.reason,
-      invoice_no: invNo,
-      invoice_date: form.invoiceDate || null,
-    }
+    const payload = buildPayload()
     const created = await api.post<{ id: number; code: string | null }>('/expenses', payload)
     const expenseId = created?.id
     if (expenseId) {
@@ -199,7 +212,47 @@ async function submit() {
     submitting.value = false
   }
 }
-function saveDraft() { toast('草稿已保存，可在「我的报销」继续编辑') }
+// 报销单 payload（submit 与存草稿共用；expense_type 按根级科目沿父链取根）
+function buildPayload() {
+  const b = curBudget.value!
+  const subject = subjects.value.find((s) => s.id === form.subjectId)
+  let rootName = subject?.name || ''
+  let p: Subject | undefined = subject
+  while (p?.parent_id) {
+    p = subjects.value.find((x) => x.id === p!.parent_id)
+    if (p) rootName = p.name
+  }
+  const line = water.value.find((w) => w.subject_id === form.subjectId)
+  const invNo = lines.value.map((l) => l.invoiceNo.trim()).find(Boolean) || null
+  return {
+    project_id: b.project_id,
+    legal_entity_id: b.legal_entity_id,
+    budget_line_id: line?.id ?? null,
+    amount: totalAmount.value.toFixed(2),
+    expense_type: TYPE_BY_SUBJECT[rootName] || 'OTHER',
+    submit_mode: b.mode || '预算制',
+    description: form.reason,
+    invoice_no: invNo,
+    invoice_date: form.invoiceDate || null,
+  }
+}
+
+// 存草稿：契约 POST /expenses 落库 status=DRAFT（F-10 状态机入口）
+async function saveDraft() {
+  if (submitting.value) return
+  if (!curBudget.value) { toast('请先选择预算再存草稿'); return }
+  if (!totalAmount.value) { toast('请先填写至少一条报销明细（金额 > 0）'); return }
+  submitting.value = true
+  try {
+    const created = await api.post<{ id: number; code: string | null }>('/expenses', buildPayload())
+    toast(`草稿已保存（单号 ${created?.code || '#' + created?.id}），可在「我的报销」继续编辑`)
+    await load()
+  } catch (e: any) {
+    toast('存草稿失败：' + (e?.message || e))
+  } finally {
+    submitting.value = false
+  }
+}
 </script>
 
 <template>
@@ -217,14 +270,15 @@ function saveDraft() { toast('草稿已保存，可在「我的报销」继续�
       <div class="card">
         <div class="card-h"><h4>报销信息</h4><span class="mono" style="font-size:11px;color:var(--ink-mute)">{{ projectLabel }}</span></div>
         <div class="card-b">
-          <div class="expense-drop" @click="simulateOcr">
+          <div class="expense-drop" @click="pickInvoiceFiles">
             <div class="big-ic">🧾</div>
             <div style="font-family:var(--serif);font-size:16px;font-weight:700;margin-top:8px">拖入 / 拍摄 发票</div>
             <div style="font-size:12px;color:var(--ink-mute);margin-top:4px">
               支持 PDF / OFD / JPG · 增值税专票、电子普票、行程单自动识别<br>
-              <span style="color:var(--ai)">同一商家连号发票、重复报销将在 AI 预审拦截</span>
+              <span style="color:var(--ai)">点击选择发票图片 → OCR 结构化 → AI 预审拦截重复报销</span>
             </div>
           </div>
+          <input ref="fileInput" type="file" accept="image/png,image/jpeg,application/pdf" multiple hidden @change="onInvoiceFiles" />
           <hr class="hr-rule">
 
           <!-- 明细行（本地状态，可增删）-->

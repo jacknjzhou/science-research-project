@@ -136,7 +136,7 @@ async function submitScore() {
         </div>
         <div class="compliance-card bad" style="margin-top:14px" v-if="task.doc?.dup">
           ◈ <b>AI 查重提示：</b>{{ task.doc?.dup?.text }}
-          <b style="cursor:pointer;color:var(--bad)" @click="toast('查看高亮对比（演示）')">查看高亮对比 →</b>
+          <b style="cursor:pointer;color:var(--bad)" @click="toast('查重高亮对比尚未开放')">查看高亮对比 →</b>
           　<em style="color:var(--ink-mute)">（仅供参考，不作为唯一依据）</em>
         </div>
       </div>
@@ -172,7 +172,7 @@ async function submitScore() {
             <textarea v-model="comment" class="ed-text" rows="6" style="min-height:130px;background:#fff" placeholder="撰写意见，或点击 AI 根据评分要点起草…"></textarea>
             <div style="display:flex;gap:8px;margin-top:12px">
               <button class="btn seal" style="flex:1;justify-content:center" @click="submitScore">提交评审</button>
-              <button class="btn ghost" @click="toast('已保存为草稿')">暂存</button>
+              <button class="btn ghost" @click="toast('草稿暂存尚未开放（点击「提交评审」正式保存）')">暂存</button>
             </div>
           </div>
         </div>

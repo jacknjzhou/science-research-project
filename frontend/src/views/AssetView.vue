@@ -230,6 +230,56 @@ async function openHistory(a: Asset) {
     histLoading.value = false
   }
 }
+// —— 盘点导入向导（dataio 底座：模板下载 + 逐行导入 + 导入日志）——
+const INV_MODULE = 'asset.inventory'
+const invWizard = ref(false)
+const invBusy = ref(false)
+const invResult = ref<{ rowCount?: number; successCount?: number; failCount?: number; errors?: { row: number; error: string }[] } | null>(null)
+const invError = ref('')
+const invFile = ref<File | null>(null)
+const invFileInput = ref<HTMLInputElement | null>(null)
+
+function openInvWizard() {
+  invResult.value = null
+  invError.value = ''
+  invFile.value = null
+  invWizard.value = true
+}
+async function downloadInvTemplate() {
+  invError.value = ''
+  try {
+    const { blob, filename } = await api.blob('/dataio/template', { module: INV_MODULE }, 'asset_inventory_template.xlsx')
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(a.href)
+    toast('盘点表模板已下载')
+  } catch (e: any) {
+    invError.value = `模板下载失败：${e?.message || e}`
+    toast(invError.value)
+  }
+}
+function pickInvFile(e: Event) {
+  invFile.value = ((e.target as HTMLInputElement).files?.[0]) || null
+}
+async function runInvImport() {
+  if (!invFile.value) { invError.value = '请先选择盘点表 xlsx 文件'; return }
+  invBusy.value = true
+  invError.value = ''
+  try {
+    const fd = new FormData()
+    fd.append('file', invFile.value)
+    invResult.value = await api.form<any>('/dataio/import', fd, { module: INV_MODULE })
+    const r = invResult.value
+    toast(`盘点表导入完成：${r?.rowCount ?? '?'} 行，成功 ${r?.successCount ?? 0}，失败 ${r?.failCount ?? 0}`)
+  } catch (e: any) {
+    invError.value = e?.message || String(e)
+    toast('盘点表导入失败：' + invError.value)
+  } finally {
+    invBusy.value = false
+  }
+}
 </script>
 
 <template>
@@ -239,7 +289,7 @@ async function openHistory(a: Asset) {
         <div class="page-title">资产与耗材<em>台账</em></div>
         <div class="page-sub">建卡 → 领用/调拨 → 折旧计提 → 盘点 → 处置 · 项目全成本分摊 · 危化品双人双锁</div>
       </div>
-      <button class="btn ghost" @click="toast('盘点表导入向导已打开（演示）')">⇪ 盘点导入</button>
+      <button class="btn ghost" @click="openInvWizard">⇪ 盘点导入</button>
     </div>
 
     <div style="display:flex;gap:14px;margin-bottom:18px;overflow-x:auto;padding-bottom:6px">
@@ -340,6 +390,33 @@ async function openHistory(a: Asset) {
             </div>
             <div style="margin-top:10px;font-size:11.5px;color:var(--ink-mute)">按使用机时 / 领用单自动归集部门全成本池，供决算与绩效评价（D-03）取数。</div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 盘点导入向导（dataio 底座：模板下载 + 逐行导入 + 导入日志） -->
+    <div v-if="invWizard" data-test="inv-wizard" style="position:fixed;inset:0;background:rgba(20,26,22,.5);z-index:99;display:flex;align-items:center;justify-content:center" @click.self="invWizard = false">
+      <div style="background:#fff;border-radius:8px;width:540px;max-width:92vw;padding:20px 22px;box-shadow:0 12px 40px rgba(0,0,0,.25)">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <b style="font-size:15px">盘点表导入</b>
+          <button class="btn ghost sm" @click="invWizard = false">✕ 关闭</button>
+        </div>
+        <p style="font-size:12px;color:#667;margin:8px 0 14px;line-height:1.7">
+          下载模板填写盘点明细（资产编号 / 实盘数量 / 位置 / 备注）后上传；导入逐行校验并写入导入日志，可整体撤销。
+        </p>
+        <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+          <button class="btn ghost sm" data-test="inv-tpl" @click="downloadInvTemplate">⬇ 下载模板</button>
+          <button class="btn ghost sm" @click="invFileInput?.click()">📁 选择盘点表（xlsx）</button>
+          <input ref="invFileInput" type="file" accept=".xlsx" hidden @change="pickInvFile" />
+          <span v-if="invFile" style="font-size:12px;color:#333">{{ invFile.name }}</span>
+        </div>
+        <div v-if="invError" style="font-size:12px;color:#c0392b;margin-bottom:10px">⚠ {{ invError }}</div>
+        <div v-if="invResult" style="font-size:12.5px;background:#f3f7f3;border:1px solid #d8e4d8;border-radius:5px;padding:10px 12px;margin-bottom:12px;line-height:1.7">
+          ✓ 导入完成：{{ invResult.rowCount }} 行 · 成功 {{ invResult.successCount }} · 失败 {{ invResult.failCount }}
+          <span v-if="(invResult.errors || []).length">（行级错误：{{ invResult.errors!.slice(0, 3).map((e) => `第${e.row}行 ${e.error}`).join('；') }}）</span>
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button class="btn" :disabled="invBusy || !invFile" @click="runInvImport">{{ invBusy ? '导入中…' : '开始导入' }}</button>
         </div>
       </div>
     </div>

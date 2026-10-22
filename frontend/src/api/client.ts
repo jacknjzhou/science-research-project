@@ -94,6 +94,70 @@ async function request<T>(method: string, path: string, opts: RequestOptions = {
   if (env.code !== 0) {
     throw new ApiError(env.code, env.message, env.traceId)
   }
+  // 契约 stub 兜底层（X-Stub: true）返回的是合规占位数据：延时提示，
+  // 避免调用方把自己的成功 toast 盖掉后才看到（成功 toast 2.6s 自灭）。
+  if (res.headers.get('X-Stub')) {
+    setTimeout(() => (window as any).toast?.('演示数据：该端点后端的真实实现尚未落地'), 900)
+  }
+  return env.data
+}
+
+/**
+ * 二进制下载（dataio 模板 / 文档流）：不解析 JSON，直接取 Blob。
+ * 文件名从 Content-Disposition 解析，缺省用 fallback。
+ */
+async function blob(path: string, params?: RequestOptions['params'], fallbackName = 'download.bin') {
+  const headers: Record<string, string> = {}
+  const t = tokenProvider()
+  if (t) headers['Authorization'] = 'Bearer ' + t
+  const res = await fetch(buildUrl(path, params), { headers })
+  if (res.status === 401) {
+    onUnauthorized()
+    throw new ApiError(40101, '未认证或令牌过期')
+  }
+  if (!res.ok) {
+    // xlsx 流不会带信封，错误时尝试解析 JSON 拿业务码
+    const text = await res.text()
+    try {
+      const env = JSON.parse(text) as ApiEnvelope<unknown>
+      throw new ApiError(env.code, env.message, env.traceId)
+    } catch (e: any) {
+      if (e instanceof ApiError) throw e
+      throw new ApiError(res.status, `HTTP ${res.status}`)
+    }
+  }
+  let name = fallbackName
+  const cd = res.headers.get('Content-Disposition') || ''
+  const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i)
+  if (m) name = m[1]
+  return { blob: await res.blob(), filename: name }
+}
+
+/** multipart 表单上传（dataio import）：body 直接传 FormData，不 JSON 序列化。 */
+function postForm<T>(path: string, formData: FormData, params?: RequestOptions['params']) {
+  const headers: Record<string, string> = {}
+  const t = tokenProvider()
+  if (t) headers['Authorization'] = 'Bearer ' + t
+  headers['Idempotency-Key'] = uuid()
+  return requestRaw<T>('POST', path, { headers, body: formData as unknown as BodyInit, params })
+}
+
+/** 同 request() 的信封/错误处理，但 body 不做 JSON 序列化（FormData 透传）。 */
+async function requestRaw<T>(method: string, path: string, opts: RequestOptions & { body?: unknown }) {
+  const init: RequestInit = { method, headers: { ...(opts.headers || {}) } as Record<string, string> }
+  if (opts.body !== undefined) init.body = opts.body as BodyInit
+  const res = await fetch(buildUrl(path, opts.params), init)
+  if (res.status === 401) {
+    onUnauthorized()
+    throw new ApiError(40101, '未认证或令牌过期')
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, `HTTP ${res.status} ${res.statusText}`)
+  }
+  const env = (await res.json()) as ApiEnvelope<T>
+  if (env.code !== 0) {
+    throw new ApiError(env.code, env.message, env.traceId)
+  }
   return env.data
 }
 
@@ -104,6 +168,15 @@ export const api = {
   put: <T>(path: string, body?: unknown) => request<T>('PUT', path, { body, idempotency: true }),
   del: <T>(path: string, params?: RequestOptions['params']) =>
     request<T>('DELETE', path, { params, idempotency: true }),
+  blob: (path: string, params?: RequestOptions['params'], fallbackName?: string) =>
+    blob(path, params, fallbackName),
+  form: <T>(path: string, formData: FormData, params?: RequestOptions['params']) =>
+    postForm<T>(path, formData, params),
+}
+
+export interface BlobDownload {
+  blob: Blob
+  filename: string
 }
 
 // 便捷：拉一页列表，返回 {rows,total}

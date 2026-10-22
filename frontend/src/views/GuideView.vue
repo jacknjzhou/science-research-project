@@ -179,7 +179,7 @@ function goApply() {
           <span style="color:var(--ok)">{{ openCount }} 条可申报</span> · 点击卡片查看指南详情
         </div>
       </div>
-      <button class="btn ghost" @click="toast('订阅推送设置（演示）')">✉ 订阅推送</button>
+      <button class="btn ghost" @click="toast('订阅推送尚未开放')">✉ 订阅推送</button>
     </div>
 
     <div class="filter-row">
@@ -261,7 +261,7 @@ function goApply() {
               class="gl-ref"
               v-for="f in active.attachment_ids"
               :key="f"
-              @click="toast('附件下载为演示功能：' + f)"
+              @click="toast('附件下载尚未开放')"
             >
               <span class="gl-ref-ico">{{ fileIco(f) }}</span>
               <span class="gl-ref-name">{{ f }}</span>
