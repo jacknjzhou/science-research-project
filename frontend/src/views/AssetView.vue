@@ -234,7 +234,7 @@ async function openHistory(a: Asset) {
 const INV_MODULE = 'asset.inventory'
 const invWizard = ref(false)
 const invBusy = ref(false)
-const invResult = ref<{ rowCount?: number; successCount?: number; failCount?: number; errors?: { row: number; error: string }[] } | null>(null)
+const invResult = ref<{ rowCount?: number; successCount?: number; failCount?: number; matchedCount?: number; gainCount?: number; lossCount?: number; errors?: { row: number; error: string }[] } | null>(null)
 const invError = ref('')
 const invFile = ref<File | null>(null)
 const invFileInput = ref<HTMLInputElement | null>(null)
@@ -402,7 +402,8 @@ async function runInvImport() {
           <button class="btn ghost sm" @click="invWizard = false">✕ 关闭</button>
         </div>
         <p style="font-size:12px;color:#667;margin:8px 0 14px;line-height:1.7">
-          下载模板填写盘点明细（资产编号 / 实盘数量 / 位置 / 备注）后上传；导入逐行校验并写入导入日志，可整体撤销。
+          下载模板填写实盘采集（序列号 / 资产名称 / 存放地点 / 数量 / 盘点人 / 盘点日期）后上传；
+          导入按 A-11 三方比对：序列号匹配台账，实物有而账上无→盘盈流水，账上有而未采集→盘亏流水；写入导入日志，可整体撤销。
         </p>
         <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
           <button class="btn ghost sm" data-test="inv-tpl" @click="downloadInvTemplate">⬇ 下载模板</button>
@@ -413,6 +414,7 @@ async function runInvImport() {
         <div v-if="invError" style="font-size:12px;color:#c0392b;margin-bottom:10px">⚠ {{ invError }}</div>
         <div v-if="invResult" style="font-size:12.5px;background:#f3f7f3;border:1px solid #d8e4d8;border-radius:5px;padding:10px 12px;margin-bottom:12px;line-height:1.7">
           ✓ 导入完成：{{ invResult.rowCount }} 行 · 成功 {{ invResult.successCount }} · 失败 {{ invResult.failCount }}
+          <span v-if="invResult.matchedCount != null"> · 账实相符 {{ invResult.matchedCount }} · 盘盈 {{ invResult.gainCount }} · 盘亏 {{ invResult.lossCount }}</span>
           <span v-if="(invResult.errors || []).length">（行级错误：{{ invResult.errors!.slice(0, 3).map((e) => `第${e.row}行 ${e.error}`).join('；') }}）</span>
         </div>
         <div style="display:flex;gap:10px;justify-content:flex-end">

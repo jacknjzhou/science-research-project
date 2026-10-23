@@ -601,13 +601,15 @@ class Command(BaseCommand):
         # ---- N. A 资产耗材 ----------------------------------------------------
         a1 = put(AAsset, {"tenant_id": T1, "code": "AST-DEMO-0001"},
                  {"asset_type": "FIXED", "category_code": "INSTRUMENT",
-                  "name": "X 射线衍射仪（演示）", "value": 800000, "status": "IN_USE",
+                  "name": "X 射线衍射仪（演示）", "serial_no": "SN-DEMO-0001",
+                  "value": 800000, "status": "IN_USE",
                   "source_type": "PURCHASE", "legal_entity_id": ent.id,
                   "dept_id": 1, "custodian_id": users["staff"].id,
                   "project_id": prj1.id, "creator_id": C1}, "asset")
         a2 = put(AAsset, {"tenant_id": T1, "code": "AST-DEMO-0002"},
                  {"asset_type": "FIXED", "category_code": "INSTRUMENT",
-                  "name": "涉密光谱分析仪（演示）", "value": 1500000, "status": "IN_USE",
+                  "name": "涉密光谱分析仪（演示）", "serial_no": "SN-DEMO-0002",
+                  "value": 1500000, "status": "IN_USE",
                   "security_level": "SECRET", "source_type": "PURCHASE",
                   "legal_entity_id": ent.id, "dept_id": 1,
                   "custodian_id": users["manager"].id, "creator_id": C1}, "asset")
@@ -618,7 +620,8 @@ class Command(BaseCommand):
         # IDLE 演示资产：让「领用」有可见状态变化对象（IDLE → IN_USE）
         a4 = put(AAsset, {"tenant_id": T1, "code": "AST-DEMO-0004"},
                  {"asset_type": "FIXED", "category_code": "INSTRUMENT",
-                  "name": "激光粒度分析仪（演示·闲置）", "value": 420000, "status": "IDLE",
+                  "name": "激光粒度分析仪（演示·闲置）", "serial_no": "SN-DEMO-0004",
+                  "value": 420000, "status": "IDLE",
                   "source_type": "PURCHASE", "legal_entity_id": ent.id,
                   "dept_id": 2, "location": "材料所 201 室", "creator_id": C1}, "asset")
         # a1 的领用流水：让「操作历史」有 REQUISITION 事件可展示

@@ -18,12 +18,14 @@ from django.http import HttpRequest
 from django.utils import timezone as dj_tz
 from openpyxl import Workbook, load_workbook
 
+from apps.asset.models import AAsset, AStockTxn
 from apps.funding.models import FIncome
 from apps.notify.models import SysImportLog
 from core.auth.deps import domain_from
 from core.httpx import ApiError, CODE_BAD_REQUEST, CODE_CONFLICT, CODE_NOT_FOUND, ok
 
 MOD_INCOME = "funding.income"
+MOD_INVENTORY = "asset.inventory"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
@@ -35,8 +37,8 @@ class ModuleSpec:
     hints: list[str]
     export_fields: list[str]
     export_labels: dict[str, str]
-    # rows → (imported, skipped, errors, snapshot_keys)
-    import_fn: Callable[[int, int, list[list[str]]], tuple[int, int, list[dict], list[str]]]
+    # rows → (imported, skipped, errors, snapshot_keys[, summary dict])
+    import_fn: Callable[..., tuple]
     # snapshot_keys → 被业务引用的行数（>0 禁止撤销）
     claimed_fn: Callable[[int, list[str]], int] = field(default=lambda t, k: 0)
     # snapshot_keys → 撤销（返回删除行数）
@@ -154,6 +156,127 @@ def _income_export(tenant_id: int, kw: str | None, claim_status: str | None) -> 
     return out
 
 
+# ---------------------------------------------------------------------------
+# asset.inventory：盘点导入（A-11 三方比对语义：实物采集行 vs 资产卡）
+#   · 序列号命中台账（在册非处置）→ 匹配成功
+#   · 实物有、账上无 → 盘盈 COUNT_GAIN 流水（snapshot 可撤销）
+#   · 账上有、实物未采集 → 盘亏 COUNT_LOSS 流水（snapshot 可撤销）
+# ---------------------------------------------------------------------------
+INVENTORY_HEADERS = ["资产编号", "序列号", "资产名称", "存放地点", "数量", "盘点人", "盘点日期", "备注"]
+INVENTORY_FIELDS = ["code", "serial_no", "name", "location", "qty", "custodian", "status", "value"]
+
+
+def _parse_qty(s: str):
+    s = (s or "").strip()
+    if not s:
+        return Decimal(1), True  # 缺省 1 件
+    try:
+        q = Decimal(s)
+        return (q, True) if q > 0 else (None, False)
+    except InvalidOperation:
+        return None, False
+
+
+def _inventory_txn(tenant_id: int, user_id: int, type_: str, **kw) -> str:
+    import uuid
+    t = AStockTxn.objects.create(
+        tenant_id=tenant_id, creator_id=user_id, operator_id=user_id,
+        legal_entity_id=1, security_level="INTERNAL", type=type_, status="ISSUED",
+        code=f"TXN-INV-{dj_tz.now():%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}",
+        **kw,
+    )
+    return t.code
+
+
+def _inventory_import(tenant_id: int, user_id: int, rows: list[list[str]]):
+    from django.db.models import Q
+
+    imported = matched = gains = losses = skipped = 0
+    errs: list[dict] = []
+    snapshot: list[str] = []
+    seen: set[str] = set()
+    # 台账侧：在册（非处置/待处置）且有序列号的卡
+    active = {
+        a.serial_no: a
+        for a in AAsset.objects.filter(tenant_id=tenant_id, deleted=0)
+        .exclude(status__in=("DISPOSED", "PENDING_DISPOSE"))
+        .exclude(serial_no__isnull=True).exclude(serial_no="")
+    }
+    collected: set[str] = set()
+    for i, row in enumerate(rows):
+        line_no = i + 2  # xlsx 行号（含表头）
+        if len(row) < 8:
+            row = row + [""] * (8 - len(row))
+        serial = (row[1] or "").strip()
+        if not serial:
+            errs.append({"row": line_no, "error": "序列号必填（三方比对匹配键）"})
+            continue
+        qty, ok_qty = _parse_qty(row[4])
+        if not ok_qty:
+            errs.append({"row": line_no, "error": f"数量非法：{row[4]}"})
+            continue
+        if serial in seen:
+            skipped += 1  # 文件内重复行（幂等）
+            continue
+        seen.add(serial)
+        collected.add(serial)
+        a = active.get(serial)
+        if a is not None:
+            matched += 1  # 账实相符（位置差异仅提示，不落流水，对齐 A-11）
+            continue
+        remark = "盘点导入盘盈：" + "，".join(
+            x for x in [f"编号{row[0]}" if row[0].strip() else "",
+                        f"名称{row[2]}" if row[2].strip() else "",
+                        f"地点{row[3]}" if row[3].strip() else "",
+                        f"盘点人{row[5]}" if row[5].strip() else "",
+                        f"日期{row[6]}" if row[6].strip() else ""] if x
+        ) or "实物在册但账上无卡"
+        snapshot.append(_inventory_txn(
+            tenant_id, user_id, "COUNT_GAIN",
+            ref_sku=serial[:64], qty=qty, balance_after=qty, remark=remark[:500],
+        ))
+        gains += 1
+    # 账实核对：账上在册卡未被实物采集到 → 盘亏
+    for a in active.values():
+        if a.serial_no not in collected:
+            snapshot.append(_inventory_txn(
+                tenant_id, user_id, "COUNT_LOSS",
+                ref_asset_id=a.id, qty=1, balance_after=0,
+                remark=f"盘点导入盘亏：{a.code or a.id} {a.name}",
+            ))
+            losses += 1
+    imported = matched + gains
+    summary = {"matchedCount": matched, "gainCount": gains, "lossCount": losses}
+    return imported, skipped, errs, snapshot, summary
+
+
+def _inventory_claimed(tenant_id: int, codes: list[str]) -> int:
+    return AStockTxn.objects.filter(
+        tenant_id=tenant_id, code__in=codes, deleted=0
+    ).exclude(status="ISSUED").count()
+
+
+def _inventory_undo(tenant_id: int, codes: list[str]) -> int:
+    return AStockTxn.objects.filter(
+        tenant_id=tenant_id, code__in=codes, deleted=0
+    ).update(deleted=1, updated_at=dj_tz.now())
+
+
+def _inventory_export(tenant_id: int, kw: str | None, claim_status: str | None) -> list[dict]:
+    qs = AAsset.objects.filter(tenant_id=tenant_id, deleted=0)
+    if kw:
+        from django.db.models import Q
+        qs = qs.filter(Q(name__icontains=kw) | Q(serial_no__icontains=kw) | Q(code__icontains=kw))
+    out = []
+    for a in qs.order_by("-id")[:10000]:
+        out.append({
+            "code": a.code or "", "serial_no": a.serial_no or "", "name": a.name or "",
+            "location": a.location or "", "qty": "1", "custodian": "",
+            "status": a.status, "value": f"{a.value:.2f}",
+        })
+    return out
+
+
 SPECS: dict[str, ModuleSpec] = {
     MOD_INCOME: ModuleSpec(
         module=MOD_INCOME,
@@ -170,6 +293,25 @@ SPECS: dict[str, ModuleSpec] = {
         claimed_fn=_income_claimed,
         undo_fn=_income_undo,
         export_fn=_income_export,
+    ),
+    MOD_INVENTORY: ModuleSpec(
+        module=MOD_INVENTORY,
+        headers=INVENTORY_HEADERS,
+        sample=["AST-DEMO-0001", "SN-DEMO-0001", "X 射线衍射仪（示例）", "分析所 101 室", "1", "示例盘点人", "2026-10-15", "在库可用"],
+        hints=[
+            "序列号必填：与资产卡序列号匹配（三方比对匹配键）",
+            "数量缺省 1；文件内重复序列号自动跳过（幂等）",
+            "实物有而账上无 → 盘盈流水；账上有而未采集 → 盘亏流水（均可在导入日志整体撤销）",
+            "已处置/待处置资产不参与比对",
+        ],
+        export_fields=INVENTORY_FIELDS,
+        export_labels={"code": "资产编号", "serial_no": "序列号", "name": "资产名称",
+                        "location": "存放地点", "qty": "数量", "custodian": "保管人",
+                        "status": "状态", "value": "原值"},
+        import_fn=_inventory_import,
+        claimed_fn=_inventory_claimed,
+        undo_fn=_inventory_undo,
+        export_fn=_inventory_export,
     ),
 }
 

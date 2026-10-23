@@ -50,7 +50,10 @@ def import_rows(request: HttpRequest):
     if f is None:
         raise ApiError(400, CODE_BAD_REQUEST, "multipart 字段 file 必填")
     rows = dataio.read_body_rows(f)
-    imported, skipped, errs, snapshot = spec.import_fn(d.tenant_id, d.user_id, rows)
+    res = spec.import_fn(d.tenant_id, d.user_id, rows)
+    imported, skipped, errs, snapshot = res[:4]
+    # 第 5 元组元素可选：模块附加摘要（如 asset.inventory 的盘盈/盘亏比对结果）
+    summary = dict(res[4]) if len(res) > 4 and isinstance(res[4], dict) else {}
     SysImportLog.objects.create(
         tenant_id=d.tenant_id, user_id=d.user_id, biz_type=spec.module,
         filename=f.name,
@@ -58,7 +61,8 @@ def import_rows(request: HttpRequest):
         snapshot=json.dumps(snapshot, ensure_ascii=False),
     )
     return ok(request, {"rowCount": len(rows), "successCount": imported,
-                        "failCount": len(errs), "skipped": skipped, "errors": errs})
+                        "failCount": len(errs), "skipped": skipped, "errors": errs,
+                        **summary})
 
 
 def list_imports(request: HttpRequest):
