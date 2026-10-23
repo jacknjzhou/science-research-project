@@ -46,10 +46,9 @@ const form = reactive({
   reason: 'M6 样机集成耗材采购；出差参加学会年会并对接联合验证单位。',
   invoiceDate: today(),
 })
-const lines = ref<LineItem[]>([
-  { id: lineSeq++, subjectId: null, amount: 23400, note: '砂轮耗材 · XX精密工具公司', invoiceNo: '' },
-  { id: lineSeq++, subjectId: null, amount: 1860, note: '北京→沈阳往返机票', invoiceNo: '' },
-])
+// 明细行为真实数据：初始为空（可「＋增行」或 OCR 回填）。原 2 条硬编码演示行
+// 在「存草稿」接真端点后会把虚构金额持久化，故移除。
+const lines = ref<LineItem[]>([])
 
 const curBudget = computed(() => budgets.value.find((b) => b.id === form.budgetId) || budgets.value[0] || null)
 

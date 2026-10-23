@@ -59,13 +59,19 @@ console.log('\n[1] 报销填单（staff）· OCR 接 /invoices/ocr + 存草稿�
   await page.click('.expense-drop')
   const chooser = await chooserP
   if (chooser) {
+    const preCount = await page.locator('.inv-card').count()
     await chooser.setFiles(tmpJpg)
     // toast 2.6s 自灭：等 OCR 响应返回后立即读取
     const resp = await page.waitForResponse((r) => r.url().includes('/invoices/ocr'), { timeout: 10000 }).catch(() => null)
     await page.waitForTimeout(300)
+    const isStub = resp ? (await resp.headerValue('x-stub')) === 'true' : false
+    const lineCount = await page.locator('.inv-card').count()
     const t = await page.textContent('#toast').catch(() => null)
-    if (resp && t && !t.includes('演示')) ok(`发票区 → 文件选择 + OCR 请求（HTTP ${resp.status()}），toast：${t}`)
-    else fail(`OCR 流程异常（resp=${resp?.status()}），toast：${t}（不得出现「演示」假成功）`)
+    if (!resp) fail(`点选发票文件后未发 /invoices/ocr 请求（旧代码不发请求）`)
+    else if (isStub && lineCount === preCount && t) ok(`发票区 → 真实 OCR 请求（契约 stub X-Stub），未新增伪造明细行；toast：${t}`)
+    else if (!resp.ok() && t) ok(`发票区 → OCR 真实请求（HTTP ${resp.status()}）诚实失败提示：${t}`)
+    else if (resp.ok() && !isStub && lineCount >= preCount) ok(`发票区 → OCR 真实识别，回填后明细 ${lineCount} 行；toast：${t}`)
+    else fail(`OCR 行为异常：HTTP ${resp.status()} stub=${isStub} 明细行 ${preCount}→${lineCount} toast=${t}（旧代码：伪造演示行）`)
   } else {
     const t = await toastText(page)
     fail(`发票区点击未触发文件选择（旧 simulateOcr 假识别），toast：${t}`)

@@ -27,6 +27,10 @@ services:
       ARK_LLM_MODEL: ${ARK_LLM_MODEL:-gpt-4o-mini}
     ports:
       - "8787:8787"
+    volumes:
+      # 契约真源：core/contract.py 按 <repo>/design 加载 16 份 OpenAPI，
+      # 驱动契约 stub 兜底（X-Stub: true）。不挂则 registry 为空、兜底层失效。
+      - ./design:/design:ro
     depends_on:
       postgres:
         condition: service_healthy
