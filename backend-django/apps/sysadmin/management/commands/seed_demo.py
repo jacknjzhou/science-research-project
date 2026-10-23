@@ -87,11 +87,11 @@ PAGE_GRANTS = [
     ("asset", "R-MANAGER"), ("asset", "R-FINANCE"), ("asset", "R-ADMIN"),
     ("portrait", "R-LEADER"), ("portrait", "R-MANAGER"), ("portrait", "R-ADMIN"),
     ("activity", "R-STAFF"), ("activity", "R-MANAGER"), ("activity", "R-LEADER"), ("activity", "R-AUDITOR"),
-    ("performance", "R-STAFF"), ("performance", "R-MANAGER"), ("performance", "R-LEADER"),
+    ("performance", "R-MANAGER"), ("performance", "R-LEADER"),
     ("performance", "R-FINANCE"), ("performance", "R-AUDITOR"),
     ("expert-review", "R-EXPERT"), ("expert-review", "R-MANAGER"), ("expert-review", "R-LEADER"),
     ("expert-review", "R-AUDITOR"),
-    ("archive", "R-ADMIN"), ("archive", "R-MANAGER"), ("archive", "R-AUDITOR"),
+    ("archive", "R-ADMIN"), ("archive", "R-MANAGER"), ("archive", "R-AUDITOR"), ("archive", "R-STAFF"),
     ("admin-users", "R-ADMIN"), ("admin-roles", "R-ADMIN"), ("admin-roles", "R-AUDITOR"),
     ("admin-dicts", "R-ADMIN"),
     ("funding-config", "R-MANAGER"), ("funding-config", "R-FINANCE"),
@@ -109,6 +109,9 @@ class Command(BaseCommand):
             r, created = SysRole.objects.get_or_create(
                 code=code, tenant_id=1, defaults={"name": name, "is_builtin": True}
             )
+            if not created and r.name != name:
+                r.name = name
+                r.save(update_fields=["name"])
             role_objs[code] = r
             n_roles += int(created)
 
@@ -283,6 +286,14 @@ class Command(BaseCommand):
                     "legal_entity_id": ent.id, "start_date": today - timedelta(days=30),
                     "end_date": today + timedelta(days=335), "total_budget": 500000,
                     "status": "ACTIVE", "creator_id": C1, "security_level": "INTERNAL"}, "project")
+        prj3 = put(EProject, {"tenant_id": T1, "code": "PRJ-DEMO-003"},
+                   {"application_id": app.id, "title": "阴极界面相容性研究（院自立演示）",
+                    "project_type": "ZIGE", "pi_user_id": users["manager"].id,
+                    "member_ids": [users["manager"].id], "department_id": 1,
+                    "legal_entity_id": ent.id,
+                    "start_date": today - timedelta(days=10),
+                    "end_date": today + timedelta(days=700), "total_budget": 800000,
+                    "status": "ACTIVE", "creator_id": C1}, "project")
         put(ETask, {"tenant_id": T1, "code": "TASK-DEMO-001", "project": prj1},
             {"name": "催化剂前驱体合成", "status": "DOING", "owner_user_id": users["staff"].id,
              "creator_id": C1, "progress_percent": 40,
@@ -318,7 +329,7 @@ class Command(BaseCommand):
              "ratio_limit": 0.1, "status": "ACTIVE", "creator_id": C1}, "funding")
         bud = put(FBudget, {"tenant_id": T1, "code": "BUD-DEMO-001"},
                   {"project_id": prj1.id, "legal_entity_id": ent.id, "mode": "ANNUAL",
-                   "total_approved": 2000000, "version": 1, "status": "APPROVED",
+                   "total_approved": 2000000, "version": 1, "status": "EXECUTING",
                    "creator_id": C1, "approved_at": now, "approved_by": C1}, "funding")
         put(FBudgetLine, {"tenant_id": T1, "code": "BUDL-DEMO-001", "budget_id": bud.id,
                           "subject_id": subj_m.id},

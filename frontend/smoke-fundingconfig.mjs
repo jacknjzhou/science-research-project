@@ -79,10 +79,12 @@ if (target) {
   if (cntAfter <= cntBefore) fail('预算列表未新增')
   else { created = true; ok('新建预算出现在列表') }
 }
-// 找到 DRAFT 行点提交
+// 找到 DRAFT 行点提交；无 DRAFT 且无未预算项目 → 幂等跳过（前次运行已建过）
 const draftBtn = page.locator('button:has-text("提交")').first()
-if ((await draftBtn.count()) === 0) fail('无 DRAFT 预算可提交')
-else { await draftBtn.click(); await page.waitForTimeout(1200); ok('DRAFT 预算已提交') }
+if ((await draftBtn.count()) === 0) {
+  if (!target) ok('无 DRAFT 预算且无未预算项目（前次运行已建）——跳过提交（幂等）')
+  else fail('无 DRAFT 预算可提交')
+} else { await draftBtn.click(); await page.waitForTimeout(1200); ok('DRAFT 预算已提交') }
 
 console.log('③ finance：页面可见但只读')
 await page.evaluate(() => localStorage.removeItem('ark_token'))
