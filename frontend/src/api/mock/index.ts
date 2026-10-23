@@ -36,24 +36,31 @@ function extractDataSchema(op: OpenApiOperation): any {
   return rs
 }
 
-type OverrideValue = unknown | ((url: string) => unknown)
-
-function resolveOverride(v: OverrideValue, url: string): unknown {
-  return typeof v === 'function' ? (v as (u: string) => unknown)(url) : v
+/** override 函数可用上下文：登录取 body.username、me 取 Authorization 等。 */
+export interface OverrideCtx {
+  method: string
+  headers: Record<string, string>
+  body: unknown
 }
 
-function buildResponse(op: OpenApiOperation | null, url: string): { status: number; body: string } {
+type OverrideValue = unknown | ((url: string, ctx: OverrideCtx) => unknown)
+
+function resolveOverride(v: OverrideValue, url: string, ctx: OverrideCtx): unknown {
+  return typeof v === 'function' ? (v as (u: string, c: OverrideCtx) => unknown)(url, ctx) : v
+}
+
+function buildResponse(op: OpenApiOperation | null, url: string, ctx: OverrideCtx): { status: number; body: string } {
   const key = `${op?.method.toUpperCase()} ${op?.path}`
-  // 1) curated override 优先（支持静态值或按 url 计算的函数）
+  // 1) curated override 优先（支持静态值或按 url/ctx 计算的函数）
   if (op && overrides[key] !== undefined) {
-    return { status: 200, body: envelope(resolveOverride(overrides[key], url)) }
+    return { status: 200, body: envelope(resolveOverride(overrides[key], url, ctx)) }
   }
   // 也允许按"去前缀请求路径"命中 override（模板未匹配时）
   let reqPath = url
   try { reqPath = new URL(url, 'http://x.local').pathname } catch { /* ignore */ }
   const cleanPath = reqPath.startsWith(API_PREFIX) ? reqPath.slice(API_PREFIX.length) : reqPath
   const ov = overrides[cleanPath]
-  if (ov !== undefined) return { status: 200, body: envelope(resolveOverride(ov, url)) }
+  if (ov !== undefined) return { status: 200, body: envelope(resolveOverride(ov, url, ctx)) }
 
   if (!op) {
     // 未匹配到契约：返回空结构，不阻断（视图侧兜底渲染）
@@ -94,8 +101,18 @@ export function installMock() {
     // 幂等键（演示：仅校验存在性）
     const idem = (init.headers as any)?.['Idempotency-Key']
 
+    // override 上下文：headers 归一为小写键；JSON body 预解析（失败给原文）
+    const rawH = new Headers(init.headers)
+    const headers: Record<string, string> = {}
+    rawH.forEach((v, k) => { headers[k.toLowerCase()] = v })
+    let body: unknown
+    if (typeof init.body === 'string') {
+      try { body = JSON.parse(init.body) } catch { body = init.body }
+    } else body = init.body
+    const ctx: OverrideCtx = { method, headers, body }
+
     const op = matchRoute(method, url)
-    const { status, body } = buildResponse(op, url)
+    const { status, body: respBody } = buildResponse(op, url, ctx)
 
     // 轻微延迟模拟网络，AI 接口更慢
     const isAi = op?.path?.includes('nl-query') || op?.path?.includes('policy-qa') || op?.tag === 'ai'
@@ -107,7 +124,7 @@ export function installMock() {
       console.debug(`[mock] ${method} ${url} → ${op ? op.operationId || op.path : 'UNMATCHED'}${idem ? ' (idempotent)' : ''}`)
     }
 
-    return new Response(body, {
+    return new Response(respBody, {
       status,
       headers: { 'Content-Type': 'application/json' },
     })
