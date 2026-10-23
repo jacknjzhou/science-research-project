@@ -2,3 +2,7 @@
 
 # local storage backend artifacts (smoke/test uploads)
 backend-django/storage/
+
+# python
+__pycache__/
+*.pyc
