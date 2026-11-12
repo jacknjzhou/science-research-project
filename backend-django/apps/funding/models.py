@@ -167,6 +167,11 @@ class FExpense(models.Model):
     paid_at = models.DateTimeField(null=True, blank=True)
     frozen_at = models.DateTimeField(null=True, blank=True)
     policy_pack_id = models.BigIntegerField(null=True, blank=True)
+    # 差旅/借款关联（M1-a）
+    related_loan_id = models.BigIntegerField(null=True, blank=True)
+    travel_over_limit = models.BooleanField(default=False)
+    travel_staff_category = models.CharField(max_length=32, null=True, blank=True)
+    travel_city_tier = models.CharField(max_length=32, null=True, blank=True)
 
     class Meta:
         db_table = "f_expense"
@@ -298,3 +303,97 @@ class FWarnConfig(models.Model):
 
     class Meta:
         db_table = "f_warn_config"
+
+
+class FInvoice(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    code = models.CharField(max_length=64, null=True, blank=True)  # INV-年-序，code_of("INV", id) 回填
+    tenant_id = models.BigIntegerField()
+    # DRAFT/OCR_DONE/CHECKED/BOUND/VOID
+    status = models.CharField(max_length=32, default="DRAFT")
+    deleted = models.SmallIntegerField(default=0)
+    creator_id = models.BigIntegerField()
+    modifier_id = models.BigIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    number = models.CharField(max_length=64, null=True, blank=True)  # 发票号码
+    invoice_code = models.CharField(max_length=32, null=True, blank=True)  # 发票代码
+    # GENERAL/SPECIAL/ELECTRONIC/ITINERARY
+    invoice_type = models.CharField(max_length=16, default="ELECTRONIC")
+    seller_name = models.CharField(max_length=256, null=True, blank=True)
+    seller_tax_id = models.CharField(max_length=32, null=True, blank=True)
+    buyer_name = models.CharField(max_length=256, null=True, blank=True)
+    buyer_tax_id = models.CharField(max_length=32, null=True, blank=True)
+    amount_excl_tax = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    tax_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    total_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    issue_date = models.DateField(null=True, blank=True)
+    ocr_confidence = models.DecimalField(max_digits=6, decimal_places=4, null=True, blank=True)
+    ocr_raw_json = models.JSONField(null=True, blank=True)
+    # PASS/FAIL/PENDING
+    check_result = models.CharField(max_length=16, default="PENDING")
+    is_duplicated = models.BooleanField(default=False)
+    expense_id = models.BigIntegerField(null=True, blank=True)
+    remark = models.TextField(null=True, blank=True)
+
+    class Meta:
+        db_table = "f_invoice"
+
+
+class FLoan(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    code = models.CharField(max_length=64, null=True, blank=True)  # LOAN-年-序
+    tenant_id = models.BigIntegerField()
+    # DRAFT/SUBMITTED/APPROVED/REJECTED/RETURNED/PAID/CLOSED
+    status = models.CharField(max_length=32, default="DRAFT")
+    deleted = models.SmallIntegerField(default=0)
+    creator_id = models.BigIntegerField()
+    modifier_id = models.BigIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    remark = models.TextField(null=True, blank=True)
+    project_id = models.BigIntegerField()
+    budget_line_id = models.BigIntegerField(null=True, blank=True)
+    legal_entity_id = models.BigIntegerField()
+    applicant_user_id = models.BigIntegerField()
+    amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    reason = models.TextField(null=True, blank=True)
+    write_off_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    refunded_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    frozen_at = models.DateTimeField(null=True, blank=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def remaining_for_writeoff(self) -> "decimal.Decimal":
+        return (self.amount - self.write_off_amount - self.refunded_amount)
+
+    class Meta:
+        db_table = "f_loan"
+
+
+class FTravelStandard(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    tenant_id = models.BigIntegerField()
+    name = models.CharField(max_length=64)
+    staff_category = models.CharField(max_length=32)  # 员工类别
+    city_tier = models.CharField(max_length=32)  # 城市类别
+    accommodation_cap = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    meals_cap = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    transport_cap = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    effective_from = models.DateField()
+    effective_to = models.DateField(null=True, blank=True)
+    # ACTIVE/DISABLED
+    status = models.CharField(max_length=16, default="ACTIVE")
+    deleted = models.SmallIntegerField(default=0)
+    creator_id = models.BigIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    remark = models.TextField(null=True, blank=True)
+
+    @property
+    def total_cap(self) -> "decimal.Decimal":
+        return (self.accommodation_cap + self.meals_cap + self.transport_cap)
+
+    class Meta:
+        db_table = "f_travel_standard"
