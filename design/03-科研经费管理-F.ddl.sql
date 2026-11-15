@@ -6,7 +6,7 @@
 -- 覆盖表：F_SUBJECT · F_BUDGET · F_BUDGET_LINE · F_INCOME · F_EXPENSE ·
 --         F_EXPENSE_APPROVAL · F_INVOICE · F_VOUCHER_SYNC · F_INDIRECT_FEE ·
 --         F_SETTLEMENT · F_ANOMALY · F_BUDGET_FORECAST · F_COST_POOL ·
---         F_ACCOUNTING_ENTRY · F_DISBURSEMENT
+--         F_ACCOUNTING_ENTRY · F_DISBURSEMENT · F_LOAN · F_TRAVEL_STANDARD
 --
 -- 【信创达梦差异注记（本模块专用，顶部统一声明）】
 --   1) 自增主键  PG: BIGINT GENERATED ALWAYS AS IDENTITY  →  达梦: BIGINT IDENTITY(1,1)
@@ -633,8 +633,80 @@ COMMENT ON COLUMN F_DISBURSEMENT.compliance_flags       IS '禁止整体转包/�
 COMMENT ON COLUMN F_DISBURSEMENT.security_level         IS '横向/涉密外拨密级，参与读写双重过滤（PRD 2.13）';
 
 
+-- -----------------------------------------------------------------------------
+-- F-23 · F_LOAN 借款单（A2 · M1-a：冻结/审批/放款/冲销/退回，联动 F-10 预算明细行）
+-- -----------------------------------------------------------------------------
+CREATE TABLE F_LOAN (
+  id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  code              VARCHAR(64),
+  tenant_id         BIGINT       NOT NULL,
+  status            VARCHAR(32)  NOT NULL DEFAULT 'DRAFT'
+                    CHECK (status IN ('DRAFT','SUBMITTED','APPROVED','REJECTED','RETURNED','PAID','CLOSED')),
+  deleted           SMALLINT     NOT NULL DEFAULT 0,
+  creator_id        BIGINT       NOT NULL,
+  modifier_id       BIGINT,
+  created_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  remark            TEXT,
+  -- 业务列
+  project_id        BIGINT       NOT NULL,                        -- 归属项目（跨模块逻辑引用 P_PROJECT）
+  budget_line_id    BIGINT,                                         -- 预算明细行（预算制借款提交时冻结，可空=非预算制）
+  legal_entity_id   BIGINT       NOT NULL,                          -- 法人口径（PRD 2.12）
+  applicant_user_id BIGINT       NOT NULL,                          -- 申请人
+  amount            NUMERIC(18,2) NOT NULL DEFAULT 0,               -- 借款金额
+  reason            TEXT,                                           -- 借款事由
+  write_off_amount  NUMERIC(18,2) NOT NULL DEFAULT 0,               -- 累计冲销额
+  refunded_amount   NUMERIC(18,2) NOT NULL DEFAULT 0,               -- 累计退回额
+  submitted_at      TIMESTAMPTZ,                                    -- 提交时间（冻结时点）
+  frozen_at         TIMESTAMPTZ,                                    -- 预算冻结时点
+  paid_at           TIMESTAMPTZ                                     -- 放款时间（R-FINANCE）
+);
+CREATE UNIQUE INDEX uk_loan_code_tenant ON F_LOAN(tenant_id, code) WHERE deleted = 0;
+CREATE INDEX idx_loan_tenant_status ON F_LOAN(tenant_id, status);
+CREATE INDEX idx_loan_project ON F_LOAN(tenant_id, project_id);
+CREATE INDEX idx_loan_expense ON F_EXPENSE(related_loan_id);
+COMMENT ON TABLE  F_LOAN IS '借款单（F-23/M1-a A2）：审批放款后冻结转已用，报销冲销或退回补齐后 CLOSED';
+COMMENT ON COLUMN F_LOAN.budget_line_id IS '预算制借款提交时冻结该行 amount_frozen，余额不足 40902；放款结转为 amount_used';
+COMMENT ON COLUMN F_LOAN.legal_entity_id IS '法人口径（PRD 2.12），成本归属列统一携带';
+COMMENT ON COLUMN F_LOAN.write_off_amount IS '经已批准报销单冲销的累计额，write_off_amount+refunded_amount=amount 时 CLOSED';
+COMMENT ON COLUMN F_LOAN.refunded_amount IS 'PAID 后按 refund 退回的累计额，超 remaining 40901';
+
+
+-- -----------------------------------------------------------------------------
+-- F-24 · F_TRAVEL_STANDARD 差旅费用标准（A3 · M1-a：住宿/餐费/交通三上限，软删+生效区间）
+-- -----------------------------------------------------------------------------
+CREATE TABLE F_TRAVEL_STANDARD (
+  id                 BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  tenant_id          BIGINT       NOT NULL,
+  name               VARCHAR(64)  NOT NULL,                        -- 标准名称
+  staff_category     VARCHAR(32)  NOT NULL,                        -- 员工类别
+  city_tier          VARCHAR(32)  NOT NULL,                        -- 城市类别
+  accommodation_cap  NUMERIC(18,2) NOT NULL DEFAULT 0,              -- 住宿上限/天
+  meals_cap          NUMERIC(18,2) NOT NULL DEFAULT 0,              -- 餐费上限/天
+  transport_cap      NUMERIC(18,2) NOT NULL DEFAULT 0,              -- 交通上限
+  effective_from     DATE         NOT NULL,                         -- 生效起始
+  effective_to       DATE,                                          -- 生效截止（可空=长期）
+  status             VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE'
+                     CHECK (status IN ('ACTIVE','DISABLED')),
+  deleted            SMALLINT     NOT NULL DEFAULT 0,
+  creator_id         BIGINT       NOT NULL,
+  modifier_id        BIGINT,
+  created_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  remark             TEXT
+);
+CREATE INDEX idx_travel_std_tenant_cat ON F_TRAVEL_STANDARD(tenant_id, staff_category, city_tier);
+CREATE INDEX idx_travel_std_status ON F_TRAVEL_STANDARD(tenant_id, status, deleted);
+COMMENT ON TABLE  F_TRAVEL_STANDARD IS '差旅费用标准（F-24/M1-a A3）：按(员工类别,城市类别)配三上限，生效区间+软删';
+COMMENT ON COLUMN F_TRAVEL_STANDARD.staff_category IS '同(tenant_id,staff_category,city_tier)仅一条 ACTIVE（应用层校验 40901）';
+COMMENT ON COLUMN F_TRAVEL_STANDARD.effective_to IS '可空=长期有效；match 按 effective_from<=date<=effective_to 命中';
+COMMENT ON COLUMN F_TRAVEL_STANDARD.accommodation_cap IS '三 cap 合计 total_cap，报销超限仅 warn-only（travelOverLimit），不硬拦（M1-a）';
+
+
 -- =============================================================================
 -- 备注：
+--   0) M1-a 增补（A1-A3）：F_LOAN（F-23 借款）、F_TRAVEL_STANDARD（F-24 差旅标准）两表；
+--      单号前缀 INV/LOAN 需在 00-common.sql `seq_prefix_registry` 补登记（owner=F）。
 --   1) 单号前缀 BUD/EXP/DISB 已在 00-common.sql `seq_prefix_registry` 登记（owner=F），
 --      业务取号一律走 svc-numbering，作废不回收、重试幂等（PRD 2.11）。
 --   2) 跨模块引用（project_id / contract_id / outsource_unit_id / policy_pack_id）

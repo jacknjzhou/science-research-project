@@ -29,6 +29,10 @@ tags:
     description: F-07/F-09 报销创建、提交、多级审批；F-10 预算冻结与余额
   - name: Invoice
     description: F-08 发票 OCR 结构化与三重指纹查重
+  - name: Loan
+    description: 借款申请·审批·放款·冲销·退款全流程（M1-a A2/F-23，CoNow P99 对齐）
+  - name: TravelStandard
+    description: 差旅费用标准维护与匹配（M1-a A3/F-24，CoNow P98 对齐，超标 warn-only）
   - name: AIReview
     description: F-15/F-16 AI 发票审核与违规识别（仅建议，不自动决策）
   - name: Voucher
@@ -50,7 +54,276 @@ tags:
   - name: Dashboard
     description: F-18 经费监督大屏数据聚合查询
 
+  - name: WarnConfig
+    description: F-19 经费预警配置（T15/T24；channel=cron 按 template 渲染）
 paths:
+  /outwards:
+    post:
+      tags: [Disbursement]
+      summary: 创建经费外拨单（T14，联动 G 合同金额上限拦截）
+      operationId: createOutward
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectId, amount, toUnit]
+              properties:
+                projectId: { type: integer, format: int64 }
+                budgetId: { type: integer, format: int64, nullable: true }
+                budgetLineId: { type: integer, format: int64, nullable: true }
+                amount: { $ref: '#/components/schemas/Money' }
+                toUnit: { type: string }
+                reason: { type: string, nullable: true }
+      responses:
+        "200":
+          description: 外拨单（status=PENDING）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Outward' }
+    get:
+      tags: [Disbursement]
+      summary: 分页查询外拨单
+      operationId: listOutwards
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        "200":
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/Outward' }
+
+  /outwards/{id}/approval:
+    post:
+      tags: [Disbursement]
+      summary: 外拨单审批（R-LEADER/R-ADMIN；action=APPROVE|REJECT）
+      operationId: outwardApproval
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [APPROVE, REJECT] }
+                comment: { type: string, nullable: true }
+      responses:
+        "200":
+          description: 审批后单据
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Outward' }
+
+  /carryovers:
+    post:
+      tags: [Settlement]
+      summary: 创建结转单（T14；仅 CLOSED 项目，targetYear > fiscalYear）
+      operationId: createCarryover
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectId, fiscalYear, targetYear, amount]
+              properties:
+                projectId: { type: integer, format: int64 }
+                fiscalYear: { type: integer }
+                targetYear: { type: integer }
+                amount: { $ref: '#/components/schemas/Money' }
+                remark: { type: string, nullable: true }
+      responses:
+        "200":
+          description: 结转单（status=PENDING）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Carryover' }
+    get:
+      tags: [Settlement]
+      summary: 分页查询结转单
+      operationId: listCarryovers
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        "200":
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/Carryover' }
+
+  /carryovers/{id}/approval:
+    post:
+      tags: [Settlement]
+      summary: 结转单审批（action=APPROVE|REJECT）
+      operationId: carryoverApproval
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [APPROVE, REJECT] }
+      responses:
+        "200":
+          description: 审批后单据
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Carryover' }
+
+  /budgets/{id}/append:
+    post:
+      tags: [Budget]
+      summary: 预算追加申请（T14；仅 EXECUTING 预算，行级 delta 汇总置 ADJUSTING）
+      operationId: appendBudget
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lines]
+              properties:
+                lines:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [lineId, delta]
+                    properties:
+                      lineId: { type: integer, format: int64 }
+                      delta: { $ref: '#/components/schemas/Money' }
+                      reason: { type: string, nullable: true }
+      responses:
+        "200":
+          description: 追加申请受理（budgetId + pendingDelta）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          budgetId: { type: integer, format: int64 }
+                          pendingDelta: { $ref: '#/components/schemas/Money' }
+
+  /budgets/{id}/append/approve:
+    post:
+      tags: [Budget]
+      summary: 预算追加批复（T14；R-LEADER；仅 ADJUSTING 状态）
+      operationId: approveBudgetAppend
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 批复后预算（totalApproved 累加 pendingDelta，version+1）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Budget' }
+
+  /subjects/tree:
+    get:
+      tags: [Subject]
+      summary: 查询科目树（含多级 children 嵌套，T15）
+      operationId: subjectsTree
+      responses:
+        "200":
+          description: 多级科目树
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/SubjectNode' }
+
   /subjects:
     get:
       tags: [Subject]
@@ -77,6 +350,232 @@ paths:
                       data:
                         type: array
                         items: { $ref: '#/components/schemas/Subject' }
+
+    post:
+      tags: [Subject]
+      summary: 新建科目（T15；parent_id 缺省为顶级 level=1）
+      operationId: createSubject
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubjectUpsert' }
+      responses:
+        "200":
+          description: 科目
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/FSubject' }
+
+  /subjects/{id}:
+    put:
+      tags: [Subject]
+      summary: 更新科目（T15；局部更新 name/ratioLimit/sortNo/remark）
+      operationId: updateSubject
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubjectUpsert' }
+      responses:
+        "200":
+          description: 更新后科目
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/FSubject' }
+    delete:
+      tags: [Subject]
+      summary: 删除科目（T15；有子级/被预算引用禁止删除）
+      operationId: deleteSubject
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 删除结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id: { type: integer, format: int64 }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+
+  /funding/warn-configs:
+    get:
+      tags: [WarnConfig]
+      summary: 分页查询预警配置（T15；query warnKind/enabled 过滤）
+      operationId: listWarnConfigs
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: warnKind
+          in: query
+          schema: { type: string, enum: [EXEC_RATE, DEADLINE, ANNUAL_FEE, MIDCHECK, CLOSING] }
+        - name: enabled
+          in: query
+          schema: { type: string, enum: ["true", "false"] }
+      responses:
+        "200":
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/WarnConfig' }
+    post:
+      tags: [WarnConfig]
+      summary: 新建预警配置（T15；channel=cron 时按 template 渲染推送）
+      operationId: createWarnConfig
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WarnConfigUpsert' }
+      responses:
+        "200":
+          description: 预警配置
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/WarnConfig' }
+
+  /funding/warn-configs/{id}:
+    put:
+      tags: [WarnConfig]
+      summary: 更新预警配置（T15；空值不覆盖）
+      operationId: updateWarnConfig
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WarnConfigUpsert' }
+      responses:
+        "200":
+          description: 更新后配置
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/WarnConfig' }
+    delete:
+      tags: [WarnConfig]
+      summary: 删除预警配置（T15）
+      operationId: deleteWarnConfig
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 删除结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id: { type: integer, format: int64 }
+
+  /expenses/approval-batch:
+    post:
+      tags: [Expense]
+      summary: 报销批量审批（T19；逐条独立事务，部分失败不影响其余）
+      operationId: approvalBatch
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids, action]
+              properties:
+                ids:
+                  type: array
+                  minItems: 1
+                  items: { type: integer, format: int64 }
+                action: { type: string, enum: [APPROVE, REJECT, RETURN] }
+                comment: { type: string }
+      responses:
+        "200":
+          description: 批量结果（total/ok/逐条 results，含单条错误信息）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          total: { type: integer }
+                          ok: { type: integer }
+                          results:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                id: { type: integer, format: int64 }
+                                ok: { type: boolean }
+                                err: { type: string, nullable: true }
 
   /budgets:
     post:
@@ -385,7 +884,11 @@ paths:
   /invoices/ocr:
     post:
       tags: [Invoice]
-      summary: 上传发票图像执行 OCR 结构化（F-08，移动端拍照）
+      summary: 上传发票图像执行 OCR 结构化（F-08，移动端拍照；M1-a A1 三级回落）
+      description: >-
+        识别链路三级回落：LLM 多模态优先 → 规则引擎（core/invoice_ocr.py parse_invoice_text）→
+        双不可用时降级 DRAFT 骨架（ocrConfidence=0，ocrWarnings 含 ocr-engine-unavailable，HTTP 200 恒定）。
+        置信度 ≥0.85 置 status=OCR_DONE，否则保持 DRAFT 等待人工补录；is_duplicated 按三重指纹标记但不拦截。
       operationId: invoiceOcr
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -395,15 +898,43 @@ paths:
           application/json:
             schema:
               type: object
-              required: [fileUrl]
               properties:
-                fileUrl: { type: string, description: 对象存储发票图 URL }
+                fileUrl: { type: string, description: 对象存储发票图 URL（LLM 多模态识别入口，与 text 至少其一） }
+                text: { type: string, description: 发票 OCR 原始文本（规则引擎回落入口） }
                 expenseContext:
                   type: object
                   description: 报销上下文（项目/科目/事由）供 AI 合理性判定
       responses:
         "200":
-          description: OCR 结构化结果（含置信度）
+          description: OCR 结构化结果（Invoice 全字段 + ocrWarnings；恒定 HTTP 200，降级时 status=DRAFT/confidence=0）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/InvoiceOcrResponse' }
+
+  /invoices:
+    post:
+      tags: [Invoice]
+      summary: 手工新建发票（M1-a A1；number、totalAmount>0 必填）
+      description: >-
+        新建即 status=DRAFT，code=code_of("INV", id) 回填；
+        is_duplicated=同租户存在其他非 VOID 发票且 (number, totalAmount, issueDate) 三元组全等
+        （仅标记不拦截，硬拦截走 /expenses 创建时的三重指纹查重）。
+      operationId: createInvoice
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvoiceCreateRequest' }
+      responses:
+        "200":
+          description: 发票草稿（status=DRAFT，可能带 isDuplicated=true 标记）
           content:
             application/json:
               schema:
@@ -412,6 +943,540 @@ paths:
                   - type: object
                     properties:
                       data: { $ref: '#/components/schemas/Invoice' }
+        "422": { $ref: '#/components/responses/RuleRejected' }
+    get:
+      tags: [Invoice]
+      summary: 分页查询发票（可按绑定报销单/状态过滤）
+      operationId: listInvoices
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: expenseId
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/InvoiceStatus' }
+      responses:
+        "200":
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/Invoice' }
+
+  /invoices/{id}:
+    get:
+      tags: [Invoice]
+      summary: 发票详情
+      operationId: getInvoice
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 发票详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Invoice' }
+        "404": { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Invoice]
+      summary: 修改发票（仅 DRAFT/OCR_DONE 可改，M1-a A1）
+      description: BOUND/CHECKED/VOID 状态返回 40901（状态不允许修改）；修改不改变 status。
+      operationId: updateInvoice
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvoiceUpdateRequest' }
+      responses:
+        "200":
+          description: 修改后的发票
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Invoice' }
+        "404": { $ref: '#/components/responses/NotFound' }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+
+  /invoices/{id}/bind:
+    post:
+      tags: [Invoice]
+      summary: 绑定发票到报销单（M1-a A1）
+      description: >-
+        发票须为 DRAFT/OCR_DONE/CHECKED 且未绑定（已 BOUND 不可重复绑定，违者 40901）；
+        报销单须存在且未 PAID。事务内：expense.invoice_ids 追加本票、invoice.expense_id 落值、status=BOUND。
+      operationId: bindInvoice
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expenseId]
+              properties:
+                expenseId: { type: integer, format: int64, description: 目标报销单 id }
+      responses:
+        "200":
+          description: 绑定后的发票（status=BOUND，expenseId 已落值）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Invoice' }
+        "404": { $ref: '#/components/responses/NotFound' }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+
+  /invoices/{id}/void:
+    post:
+      tags: [Invoice]
+      summary: 作废发票（M1-a A1）
+      description: BOUND（已绑定报销单）返回 40901；其余状态置 VOID（终态，作废不回收号码）。
+      operationId: voidInvoice
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        "200":
+          description: 作废后的发票（status=VOID）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Invoice' }
+        "404": { $ref: '#/components/responses/NotFound' }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+
+  /loans:
+    post:
+      tags: [Loan]
+      summary: 创建借款单（M1-a A2/F-23；status=DRAFT）
+      description: >-
+        必填 projectId、amount>0；创建即 DRAFT 并取号 code_of("LOAN", id)。
+        budgetLineId 为空=包干制（提交不冻结预算）；有值=预算制（提交时冻结 F_BUDGET_LINE.amount_frozen）。
+      operationId: createLoan
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoanCreateRequest' }
+      responses:
+        "200":
+          description: 借款草稿（status=DRAFT）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Loan' }
+        "422": { $ref: '#/components/responses/RuleRejected' }
+    get:
+      tags: [Loan]
+      summary: 分页查询借款单（可按状态/项目过滤）
+      operationId: listLoans
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/LoanStatus' }
+        - name: projectId
+          in: query
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/Loan' }
+
+  /loans/{id}:
+    get:
+      tags: [Loan]
+      summary: 借款单详情（含审批流水）
+      operationId: getLoan
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 借款单详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Loan' }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /loans/{id}/submit:
+    post:
+      tags: [Loan]
+      summary: 提交借款（预算制冻结预算；余额不足 40902）
+      description: >-
+        仅 DRAFT 可提交。预算制（budgetLineId 非空）时冻结 F_BUDGET_LINE.amount_frozen，
+        可支余额不足返回 40902；成功置 status=SUBMITTED、frozen_at=now，并通知审批链首步。
+      operationId: submitLoan
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        "200":
+          description: 提交后的借款单（status=SUBMITTED）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Loan' }
+        "404": { $ref: '#/components/responses/NotFound' }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+
+  /loans/{id}/approve:
+    post:
+      tags: [Loan]
+      summary: 借款审批动作（approve/reject/return）
+      description: >-
+        审批链 steps=["R-MANAGER","R-FINANCE"]，amount≥100000 或租户开启两步审批时前插 R-LEADER；
+        逐 step 校验当前用户角色。approve 步进推进（走完链路置 APPROVED）；
+        reject 置 REJECTED、return 置 RETURNED（两者均释放冻结金额）；每次动作落审批流水并通知下一步。
+      operationId: approveLoan
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [approve, reject, return], description: 审批动作（小写，区别于报销 F-09 的 APPROVE/REJECT/RETURN/DELEGATE） }
+                comment: { type: string, description: 审批意见 }
+      responses:
+        "200":
+          description: 审批后的借款单（SUBMITTED 步进 / APPROVED / REJECTED / RETURNED）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Loan' }
+        "404": { $ref: '#/components/responses/NotFound' }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+
+  /loans/{id}/pay:
+    post:
+      tags: [Loan]
+      summary: 借款放款（R-FINANCE；仅 APPROVED 可放款）
+      description: 仅 APPROVED → PAID；amount_frozen 结转 amount_used（原子冻结转实扣），paid_at=now。
+      operationId: payLoan
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        "200":
+          description: 放款后的借款单（status=PAID）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Loan' }
+        "404": { $ref: '#/components/responses/NotFound' }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+
+  /loans/{id}/write-off:
+    post:
+      tags: [Loan]
+      summary: 借款冲销（关联已批复报销单）
+      description: >-
+        body.expenseId 指向的报销单须 APPROVED 且 related_loan_id=本单（违者 40901）；
+        冲销额=报销单金额，累计不得超过 remainingForWriteoff（超出 40902）；
+        remainingForWriteoff=0（补齐）时置 CLOSED。
+      operationId: writeOffLoan
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expenseId]
+              properties:
+                expenseId: { type: integer, format: int64, description: 冲销来源报销单 id（须 APPROVED 且 related_loan_id=本单） }
+      responses:
+        "200":
+          description: 冲销后的借款单（PAID 继续 / 补齐 CLOSED）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Loan' }
+        "404": { $ref: '#/components/responses/NotFound' }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+
+  /loans/{id}/refund:
+    post:
+      tags: [Loan]
+      summary: 借款退款（仅 PAID 可退）
+      description: body.amount 为本次退款额，须 ≤ remainingForWriteoff（超出 40901）；
+        累计退款后 remainingForWriteoff=0（补齐）时置 CLOSED。
+      operationId: refundLoan
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                amount: { $ref: '#/components/schemas/Money' }
+      responses:
+        "200":
+          description: 退款后的借款单（PAID 继续 / 补齐 CLOSED）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Loan' }
+        "404": { $ref: '#/components/responses/NotFound' }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+
+  /travel-standards:
+    post:
+      tags: [TravelStandard]
+      summary: 新建差旅费用标准（M1-a A3/F-24）
+      description: >-
+        唯一性约束：同 (tenant, staffCategory, cityTier) 仅允许一条 ACTIVE（违者 40901，应用层校验）。
+      operationId: createTravelStandard
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TravelStandardUpsertRequest' }
+      responses:
+        "200":
+          description: 新建的差旅标准（status=ACTIVE）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/TravelStandard' }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+        "422": { $ref: '#/components/responses/RuleRejected' }
+    get:
+      tags: [TravelStandard]
+      summary: 分页查询差旅费用标准
+      operationId: listTravelStandards
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/TravelStandardStatus' }
+      responses:
+        "200":
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/TravelStandard' }
+
+  /travel-standards/{id}:
+    put:
+      tags: [TravelStandard]
+      summary: 修改差旅费用标准（R-FINANCE/R-MANAGER）
+      description: 唯一性约束同 POST（同 tenant+staffCategory+cityTier 仅一条 ACTIVE，违者 40901）。
+      operationId: updateTravelStandard
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TravelStandardUpsertRequest' }
+      responses:
+        "200":
+          description: 修改后的差旅标准
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/TravelStandard' }
+        "404": { $ref: '#/components/responses/NotFound' }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+    delete:
+      tags: [TravelStandard]
+      summary: 删除差旅费用标准（软删 deleted=1）
+      operationId: deleteTravelStandard
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 删除成功（data=null）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /travel-standards/match:
+    get:
+      tags: [TravelStandard]
+      summary: 差旅标准匹配（报销提交与前端预算试算共用）
+      description: >-
+        命中规则：ACTIVE 且 effective_from ≤ date ≤ effective_to（effective_to 空=长期有效）；
+        date 缺省取服务端当天；无命中返回 40401。匹配出的 totalCap
+        （= accommodationCap + mealsCap + transportCap）仅用于超标告警（travelOverLimit=true，warn-only 不拦截）。
+      operationId: matchTravelStandard
+      parameters:
+        - name: staffCategory
+          in: query
+          required: true
+          schema: { type: string }
+        - name: cityTier
+          in: query
+          required: true
+          schema: { type: string }
+        - name: date
+          in: query
+          schema: { type: string, format: date, description: 匹配基准日（缺省今天） }
+      responses:
+        "200":
+          description: 命中的差旅标准
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/TravelStandard' }
+        "404": { $ref: '#/components/responses/NotFound' }
+
 
   /expenses:
     post:
@@ -1093,6 +2158,10 @@ paths:
       summary: 项目经费执行率聚合（预算批复/到账/已用/冻结/剩余，两口径执行率）
       operationId: fundingExecution
       parameters:
+        - name: dim
+          in: query
+          schema: { type: string, enum: [project, college, subject], default: project }
+          description: 聚合维度（T23）：project=按项目明细；college=按学院分组；subject=按学科分组（返回 list[dimRow]）
         - name: projectId
           in: query
           required: true
@@ -1392,11 +2461,14 @@ components:
 
     Invoice:
       type: object
+      description: 发票（M1-a A1 扩展：补 code/status/expenseId/remark/createdAt；ocrConfidence 改 string 对齐 NUMERIC 精度）
       properties:
         id: { type: integer, format: int64 }
-        number: { type: string }
-        invoiceCode: { type: string }
-        invoiceType: { type: string, enum: [GENERAL, SPECIAL, ELECTRONIC, ITINERARY] }
+        code: { type: string, description: 'INV-年-序，code_of("INV", id) 回填' }
+        status: { $ref: '#/components/schemas/InvoiceStatus' }
+        number: { type: string, description: 发票号码（三重指纹之一） }
+        invoiceCode: { type: string, description: 发票代码 }
+        invoiceType: { $ref: '#/components/schemas/InvoiceType' }
         sellerName: { type: string }
         sellerTaxId: { type: string }
         buyerName: { type: string }
@@ -1405,9 +2477,12 @@ components:
         taxAmount: { $ref: '#/components/schemas/Money' }
         totalAmount: { $ref: '#/components/schemas/Money' }
         issueDate: { type: string, format: date }
-        ocrConfidence: { type: number, format: double }
+        ocrConfidence: { type: string, format: number, description: OCR 识别置信度（0-1，两位示例 0.9875；降级=0） }
         checkResult: { type: string, enum: [PASS, FAIL, PENDING] }
-        isDuplicated: { type: boolean }
+        isDuplicated: { type: boolean, description: 三重指纹命中标记（仅标记不拦截） }
+        expenseId: { type: integer, format: int64, nullable: true, description: 绑定报销单 id（bind 后落值） }
+        remark: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
 
     Expense:
       type: object
@@ -1740,3 +2815,228 @@ components:
         execRate: { type: number, format: double }
         deadline: { type: string, format: date, nullable: true, description: 结题/验收截止日期 }
         message: { type: string }
+    Outward:
+      type: object
+      description: 经费外拨单（T14）
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        status: { type: string, enum: [PENDING, APPROVED, REJECTED] }
+        projectId: { type: integer, format: int64 }
+        budgetLineId: { type: integer, format: int64, nullable: true }
+        amount: { $ref: '#/components/schemas/Money' }
+        toUnit: { type: string }
+        reason: { type: string, nullable: true }
+        firstApprovedBy: { type: integer, format: int64, nullable: true }
+        approvedBy: { type: integer, format: int64, nullable: true }
+        createdAt: { type: string }
+
+    Carryover:
+      type: object
+      description: 结转单（T14；仅 CLOSED 项目可发起）
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        status: { type: string, enum: [PENDING, APPROVED, REJECTED] }
+        projectId: { type: integer, format: int64 }
+        fiscalYear: { type: integer }
+        targetYear: { type: integer }
+        amount: { $ref: '#/components/schemas/Money' }
+        incomeId: { type: integer, format: int64, nullable: true }
+        remark: { type: string, nullable: true }
+        createdAt: { type: string }
+
+    SubjectUpsert:
+      type: object
+      description: 科目创建/更新请求（T15；update 仅 name/ratioLimit/sortNo/remark 生效）
+      properties:
+        code: { type: string, nullable: true }
+        name: { type: string }
+        parentId: { type: integer, format: int64, nullable: true }
+        category: { type: string, enum: [DIRECT, INDIRECT, PERFORMANCE] }
+        isLeaf: { type: boolean, default: true }
+        ratioLimit: { type: string, nullable: true, description: 上限比例 NUMERIC 字符串 }
+        appliesTo:
+          type: array
+          nullable: true
+          items: { type: string }
+        sortNo: { type: integer, format: int32, nullable: true }
+        remark: { type: string, nullable: true }
+
+    FSubject:
+      type: object
+      description: 经费科目（T15）
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string, nullable: true }
+        name: { type: string }
+        parentId: { type: integer, format: int64, nullable: true }
+        level: { type: integer }
+        category: { type: string }
+        isLeaf: { type: boolean }
+        ratioLimit: { type: string, nullable: true }
+        appliesTo:
+          type: array
+          items: { type: string }
+        sortNo: { type: integer, format: int32, nullable: true }
+
+    SubjectNode:
+      type: object
+      description: 科目树节点（T15；children 递归）
+      allOf:
+        - $ref: '#/components/schemas/FSubject'
+        - type: object
+          properties:
+            children:
+              type: array
+              items: { $ref: '#/components/schemas/SubjectNode' }
+
+    WarnConfigUpsert:
+      type: object
+      description: 预警配置创建/更新请求（T15）
+      properties:
+        projectCategoryId: { type: integer, format: int64, nullable: true }
+        warnKind: { type: string, enum: [EXEC_RATE, DEADLINE, ANNUAL_FEE, MIDCHECK, CLOSING] }
+        thresholdPct: { type: string, nullable: true }
+        aheadDays: { type: integer, format: int32, nullable: true }
+        level: { type: string, default: P2 }
+        channel: { type: string, enum: [INBOX, cron], default: INBOX }
+        cronExpr: { type: string, nullable: true }
+        template: { type: string, nullable: true, description: "消息模板，支持 {project}/{date} 占位" }
+        enabled: { type: boolean, default: true }
+        remark: { type: string, nullable: true }
+
+    WarnConfig:
+      type: object
+      description: 经费预警配置（T15；T24 接入 T18/T21 扫描）
+      properties:
+        id: { type: integer, format: int64 }
+        warnKind: { type: string }
+        projectCategoryId: { type: integer, format: int64, nullable: true }
+        thresholdPct: { type: string, nullable: true }
+        aheadDays: { type: integer, format: int32, nullable: true }
+        level: { type: string }
+        channel: { type: string }
+        cronExpr: { type: string, nullable: true }
+        template: { type: string, nullable: true }
+        enabled: { type: boolean }
+        remark: { type: string, nullable: true }
+        createdAt: { type: string }
+
+    InvoiceStatus:
+      type: string
+      enum: [DRAFT, OCR_DONE, CHECKED, BOUND, VOID]
+    InvoiceType:
+      type: string
+      enum: [GENERAL, SPECIAL, ELECTRONIC, ITINERARY]
+    LoanStatus:
+      type: string
+      enum: [DRAFT, SUBMITTED, APPROVED, REJECTED, RETURNED, PAID, CLOSED]
+    TravelStandardStatus:
+      type: string
+      enum: [ACTIVE, DISABLED]
+
+    InvoiceOcrResponse:
+      description: OCR 响应 = Invoice 全字段 + ocrWarnings（M1-a A1）
+      allOf:
+        - $ref: '#/components/schemas/Invoice'
+        - type: object
+          properties:
+            ocrWarnings:
+              type: array
+              description: OCR 告警/降级说明（引擎全不可用降级时含 ocr-engine-unavailable）
+              items: { type: string }
+
+    InvoiceCreateRequest:
+      type: object
+      required: [number, totalAmount]
+      properties:
+        number: { type: string, description: 发票号码（三重指纹之一） }
+        invoiceCode: { type: string, description: 发票代码 }
+        invoiceType: { $ref: '#/components/schemas/InvoiceType' }
+        sellerName: { type: string }
+        sellerTaxId: { type: string }
+        buyerName: { type: string }
+        buyerTaxId: { type: string }
+        amountExclTax: { $ref: '#/components/schemas/Money' }
+        taxAmount: { $ref: '#/components/schemas/Money' }
+        totalAmount: { $ref: '#/components/schemas/Money' }
+        issueDate: { type: string, format: date }
+        remark: { type: string }
+
+    InvoiceUpdateRequest:
+      type: object
+      description: 发票修改（部分更新，仅提供的字段被覆盖；字段同 InvoiceCreateRequest）
+      properties:
+        number: { type: string }
+        invoiceCode: { type: string }
+        invoiceType: { $ref: '#/components/schemas/InvoiceType' }
+        sellerName: { type: string }
+        sellerTaxId: { type: string }
+        buyerName: { type: string }
+        buyerTaxId: { type: string }
+        amountExclTax: { $ref: '#/components/schemas/Money' }
+        taxAmount: { $ref: '#/components/schemas/Money' }
+        totalAmount: { $ref: '#/components/schemas/Money' }
+        issueDate: { type: string, format: date }
+        remark: { type: string }
+
+    Loan:
+      type: object
+      description: 借款单（M1-a A2）；remainingForWriteoff = amount - writeOffAmount - refundedAmount（出参计算值）
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string, description: 'LOAN-年-序' }
+        status: { $ref: '#/components/schemas/LoanStatus' }
+        projectId: { type: integer, format: int64 }
+        budgetLineId: { type: integer, format: int64, nullable: true, description: 预算行 id（空=包干制，提交不冻结预算） }
+        applicantUserId: { type: integer, format: int64 }
+        amount: { $ref: '#/components/schemas/Money' }
+        reason: { type: string, nullable: true, description: 借款事由 }
+        writeOffAmount: { $ref: '#/components/schemas/Money' }
+        refundedAmount: { $ref: '#/components/schemas/Money' }
+        remainingForWriteoff: { $ref: '#/components/schemas/Money' }
+        submittedAt: { type: string, format: date-time, nullable: true }
+        frozenAt: { type: string, format: date-time, nullable: true, description: 预算冻结时间（预算制 submit 时落值） }
+        paidAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    LoanCreateRequest:
+      type: object
+      required: [projectId, amount]
+      properties:
+        projectId: { type: integer, format: int64 }
+        budgetLineId: { type: integer, format: int64, nullable: true, description: 预算行 id（预算制冻结入口；空=包干制） }
+        amount: { $ref: '#/components/schemas/Money' }
+        reason: { type: string, description: 借款事由 }
+
+    TravelStandard:
+      type: object
+      description: 差旅费用标准（M1-a A3）；totalCap = accommodationCap + mealsCap + transportCap，报销提交超标仅告警 travelOverLimit（warn-only）
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        staffCategory: { type: string, description: 员工类别 }
+        cityTier: { type: string, description: 城市类别 }
+        accommodationCap: { $ref: '#/components/schemas/Money' }
+        mealsCap: { $ref: '#/components/schemas/Money' }
+        transportCap: { $ref: '#/components/schemas/Money' }
+        effectiveFrom: { type: string, format: date }
+        effectiveTo: { type: string, format: date, nullable: true, description: 空=长期有效 }
+        status: { $ref: '#/components/schemas/TravelStandardStatus' }
+        remark: { type: string, nullable: true }
+
+    TravelStandardUpsertRequest:
+      type: object
+      required: [name, staffCategory, cityTier, accommodationCap, mealsCap, transportCap, effectiveFrom]
+      properties:
+        name: { type: string }
+        staffCategory: { type: string, description: 员工类别 }
+        cityTier: { type: string, description: 城市类别 }
+        accommodationCap: { $ref: '#/components/schemas/Money' }
+        mealsCap: { $ref: '#/components/schemas/Money' }
+        transportCap: { $ref: '#/components/schemas/Money' }
+        effectiveFrom: { type: string, format: date }
+        effectiveTo: { type: string, format: date, nullable: true, description: 空=长期有效 }
+        status: { $ref: '#/components/schemas/TravelStandardStatus' }
+        remark: { type: string }
