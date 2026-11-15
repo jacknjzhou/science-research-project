@@ -16,8 +16,11 @@ from apps.funding.models import (
     FExpense,
     FExpenseApproval,
     FIncome,
+    FInvoice,
+    FLoan,
     FOutward,
     FSubject,
+    FTravelStandard,
     FWarnConfig,
 )
 
@@ -152,4 +155,53 @@ def to_api_warn_config(w: FWarnConfig) -> dict[str, Any]:
         "level": w.level, "channel": w.channel, "cron_expr": w.cron_expr,
         "template": w.template, "enabled": w.enabled,
         "remark": w.remark, "created_at": fmt_ts(w.created_at),
+    }
+
+
+def to_api_invoice(i: FInvoice) -> dict[str, Any]:
+    # M1-a A1：键名对齐契约 Invoice schema（camelCase，03-F.openapi.yaml:2462）
+    return {
+        "id": i.id, "code": i.code, "status": i.status,
+        "number": i.number, "invoiceCode": i.invoice_code,
+        "invoiceType": i.invoice_type,
+        "sellerName": i.seller_name, "sellerTaxId": i.seller_tax_id,
+        "buyerName": i.buyer_name, "buyerTaxId": i.buyer_tax_id,
+        "amountExclTax": num2(i.amount_excl_tax),
+        "taxAmount": num2(i.tax_amount), "totalAmount": num2(i.total_amount),
+        "issueDate": fmt_date(i.issue_date),
+        "ocrConfidence": num2(i.ocr_confidence),
+        "checkResult": i.check_result, "isDuplicated": i.is_duplicated,
+        "expenseId": i.expense_id,
+        "createdAt": fmt_ts(i.created_at),
+    }
+
+
+def to_api_loan(l: FLoan) -> dict[str, Any]:
+    # M1-a A2：键名对齐契约 Loan schema；remainingForWriteoff 出参计算值
+    # （模型 @property，Decimal 相减无浮点）
+    return {
+        "id": l.id, "code": l.code, "status": l.status,
+        "projectId": l.project_id, "budgetLineId": l.budget_line_id,
+        "applicantUserId": l.applicant_user_id,
+        "amount": num2(l.amount),
+        "writeOffAmount": num2(l.write_off_amount),
+        "refundedAmount": num2(l.refunded_amount),
+        "remainingForWriteoff": num2(l.remaining_for_writeoff),
+        "reason": l.reason,
+        "submittedAt": fmt_ts(l.submitted_at),
+        "frozenAt": fmt_ts(l.frozen_at), "paidAt": fmt_ts(l.paid_at),
+        "createdAt": fmt_ts(l.created_at),
+    }
+
+
+def to_api_travel_standard(t: FTravelStandard) -> dict[str, Any]:
+    # M1-a A3：键名对齐契约 TravelStandard schema
+    return {
+        "id": t.id, "name": t.name,
+        "staffCategory": t.staff_category, "cityTier": t.city_tier,
+        "accommodationCap": num2(t.accommodation_cap),
+        "mealsCap": num2(t.meals_cap), "transportCap": num2(t.transport_cap),
+        "effectiveFrom": fmt_date(t.effective_from),
+        "effectiveTo": fmt_date(t.effective_to),
+        "status": t.status, "remark": t.remark,
     }
