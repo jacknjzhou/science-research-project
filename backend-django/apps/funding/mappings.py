@@ -171,7 +171,7 @@ def to_api_invoice(i: FInvoice) -> dict[str, Any]:
         "issueDate": fmt_date(i.issue_date),
         "ocrConfidence": num2(i.ocr_confidence),
         "checkResult": i.check_result, "isDuplicated": i.is_duplicated,
-        "expenseId": i.expense_id,
+        "expenseId": i.expense_id, "remark": i.remark,
         "createdAt": fmt_ts(i.created_at),
     }
 

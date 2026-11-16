@@ -281,6 +281,17 @@ api.delete(
     "/travel-standards/{id}", auth=ark_auth, tags=["funding"]
 )(funding_api.delete_travel_standard)
 
+# —— F 发票（M1-a A1）——（注意：静态路由 /invoices/ocr 由 Task 7 注册，须先于 {id} 动态路由）
+api.get("/invoices", auth=ark_auth, tags=["funding"])(funding_api.list_invoices)
+api.post("/invoices", auth=ark_auth, tags=["funding"])(funding_api.create_invoice)
+# 动态段用 ninja 类型化语法 {int:id}（Django 序：converter:name → <int:id>，正则 [0-9]+），
+# 确保 /invoices/ocr（Task 7 注册的静态路由）不会被 {id} 的 [^/]+ 吞掉 —— 被吞会先命中
+# ninja 405（非 JSON），urls.py 的契约 stub 兜底失效。
+api.get("/invoices/{int:id}", auth=ark_auth, tags=["funding"])(funding_api.get_invoice)
+api.put("/invoices/{int:id}", auth=ark_auth, tags=["funding"])(funding_api.update_invoice)
+api.post("/invoices/{int:id}/bind", auth=ark_auth, tags=["funding"])(funding_api.bind_invoice)
+api.post("/invoices/{int:id}/void", auth=ark_auth, tags=["funding"])(funding_api.void_invoice)
+
 # ==================== Phase 3：R/N/V/O/M/D 域 ====================
 from apps.output import api as output_api
 from apps.expertreview import api as expertreview_api

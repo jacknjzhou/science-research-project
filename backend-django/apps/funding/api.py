@@ -32,6 +32,7 @@ from apps.funding.mappings import (
     to_api_carryover,
     to_api_expense,
     to_api_income,
+    to_api_invoice,
     to_api_line,
     to_api_outward,
     to_api_subject,
@@ -46,6 +47,7 @@ from apps.funding.models import (
     FExpenseApproval,
     FIncome,
     FIndirectFee,
+    FInvoice,
     FOutward,
     FSubject,
     FTravelStandard,
@@ -1258,3 +1260,189 @@ def match_travel_standard(request: HttpRequest):
     if w is None:
         raise ApiError(404, CODE_NOT_FOUND, "无生效的差旅标准")
     return ok(request, to_api_travel_standard(w))
+
+
+# ---------------------------------------------------------------------------
+# 发票（M1-a A1）：CRUD + bind/void + is_duplicated
+# ---------------------------------------------------------------------------
+def _invoice_duplicated(tenant_id: int, number: str, total: Decimal, issue_date, exclude_id: int | None = None) -> bool:
+    """同租户存在其他非 VOID 发票且 (number, totalAmount, issueDate) 三元组全等。
+
+    仅标记不拦截（is_duplicated=true 仍创建）；硬拦截走 /expenses 创建时的
+    三重指纹查重 40903（互不影响）。issue_date 为空则只比对 (number, total)。
+    """
+    qs = FInvoice.objects.filter(
+        tenant_id=tenant_id, deleted=0,
+        number=number, total_amount=total,
+    ).exclude(status="VOID")
+    if issue_date is not None:
+        qs = qs.filter(issue_date=issue_date)
+    else:
+        qs = qs.filter(issue_date__isnull=True)
+    if exclude_id is not None:
+        qs = qs.exclude(id=exclude_id)
+    return qs.exists()
+
+
+def _get_invoice_or_404(request_domain_tenant_id: int, id: int) -> "FInvoice":
+    inv = FInvoice.objects.filter(id=id, tenant_id=request_domain_tenant_id, deleted=0).first()
+    if inv is None:
+        raise ApiError(404, CODE_NOT_FOUND, "发票不存在")
+    return inv
+
+
+def list_invoices(request: HttpRequest):
+    d = domain_from(request)
+    page, size, limit, offset = page_args(request)
+    qs = FInvoice.objects.filter(tenant_id=d.tenant_id, deleted=0)
+    if request.GET.get("expenseId"):
+        qs = qs.filter(expense_id=request.GET["expenseId"])
+    if request.GET.get("status"):
+        qs = qs.filter(status=request.GET["status"])
+    total = qs.count()
+    rows = qs.order_by("-id")[offset : offset + limit]
+    return ok(request, {"list": [to_api_invoice(i) for i in rows], "total": total, "page": page, "size": size})
+
+
+def create_invoice(request: HttpRequest):
+    d = domain_from(request)
+    b = read_json(request)
+    number = b.get("number")
+    if not number:
+        raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
+    total = _money(b.get("totalAmount"))
+    if total is None or total <= 0:
+        raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
+    issue_date = _parse_date(b.get("issueDate")) if b.get("issueDate") else None
+    invoice_type = b.get("invoiceType") or "ELECTRONIC"
+    if invoice_type not in ("GENERAL", "SPECIAL", "ELECTRONIC", "ITINERARY"):
+        raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
+    with transaction.atomic():
+        inv = FInvoice.objects.create(
+            tenant_id=d.tenant_id, creator_id=d.user_id,
+            status="DRAFT", number=number,
+            invoice_code=b.get("invoiceCode"), invoice_type=invoice_type,
+            seller_name=b.get("sellerName"), seller_tax_id=b.get("sellerTaxId"),
+            buyer_name=b.get("buyerName"), buyer_tax_id=b.get("buyerTaxId"),
+            amount_excl_tax=_money(b.get("amountExclTax")) or Decimal("0"),
+            tax_amount=_money(b.get("taxAmount")) or Decimal("0"),
+            total_amount=total, issue_date=issue_date,
+            remark=b.get("remark"),
+        )
+        # code=INV-年-序 回填（对齐 create_income 先建后回填模式）
+        inv.code = code_of("INV", inv.id)
+        inv.save(update_fields=["code"])
+        # 新建即重算标记：与既有非 VOID 票三元组全等 → true（仅标记不拦截；排除自身）
+        inv.is_duplicated = _invoice_duplicated(
+            d.tenant_id, number, total, issue_date, exclude_id=inv.id)
+        if inv.is_duplicated:
+            inv.save(update_fields=["is_duplicated"])
+    return ok(request, to_api_invoice(inv))
+
+
+def get_invoice(request: HttpRequest, id: int):
+    d = domain_from(request)
+    inv = _get_invoice_or_404(d.tenant_id, id)
+    return ok(request, to_api_invoice(inv))
+
+
+def update_invoice(request: HttpRequest, id: int):
+    d = domain_from(request)
+    inv = _get_invoice_or_404(d.tenant_id, id)
+    b = read_json(request)
+    # 仅 DRAFT/OCR_DONE 可改；BOUND/CHECKED/VOID → 40901（契约 PUT /invoices/{id}）
+    if inv.status not in ("DRAFT", "OCR_DONE"):
+        raise ApiError(409, CODE_CONFLICT, "当前状态不允许修改发票")
+    invoice_type = b.get("invoiceType")
+    if invoice_type is not None and invoice_type not in ("GENERAL", "SPECIAL", "ELECTRONIC", "ITINERARY"):
+        raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
+    total = None
+    if b.get("totalAmount") is not None:
+        total = _money(b["totalAmount"])
+        if total is None or total <= 0:
+            raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
+    issue_date = None
+    if b.get("issueDate") is not None:
+        issue_date = _parse_date(b["issueDate"])
+        if issue_date is None:
+            raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
+    with transaction.atomic():
+        # 部分更新：仅提供的字段被覆盖（对齐 Task 5 update_travel_standard 风格）
+        if b.get("number") is not None:
+            inv.number = b["number"]
+        if b.get("invoiceCode") is not None:
+            inv.invoice_code = b["invoiceCode"]
+        if invoice_type is not None:
+            inv.invoice_type = invoice_type
+        if b.get("sellerName") is not None:
+            inv.seller_name = b["sellerName"]
+        if b.get("sellerTaxId") is not None:
+            inv.seller_tax_id = b["sellerTaxId"]
+        if b.get("buyerName") is not None:
+            inv.buyer_name = b["buyerName"]
+        if b.get("buyerTaxId") is not None:
+            inv.buyer_tax_id = b["buyerTaxId"]
+        if b.get("amountExclTax") is not None:
+            inv.amount_excl_tax = _money(b["amountExclTax"]) or Decimal("0")
+        if b.get("taxAmount") is not None:
+            inv.tax_amount = _money(b["taxAmount"]) or Decimal("0")
+        if total is not None:
+            inv.total_amount = total
+        if issue_date is not None:
+            inv.issue_date = issue_date
+        if b.get("remark") is not None:
+            inv.remark = b["remark"]
+        # number/total/issue_date 变更后重算标记（exclude_id=self，自身不计）
+        inv.is_duplicated = _invoice_duplicated(
+            d.tenant_id, inv.number, inv.total_amount, inv.issue_date, exclude_id=inv.id)
+        inv.save()
+    return ok(request, to_api_invoice(inv))
+
+
+def bind_invoice(request: HttpRequest, id: int):
+    d = domain_from(request)
+    b = read_json(request)
+    expense_id = b.get("expenseId")
+    if not expense_id:
+        raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
+    with transaction.atomic():
+        inv = FInvoice.objects.filter(id=id, tenant_id=d.tenant_id, deleted=0).first()
+        if inv is None:
+            raise ApiError(404, CODE_NOT_FOUND, "发票不存在")
+        e = FExpense.objects.filter(id=expense_id, tenant_id=d.tenant_id, deleted=0).first()
+        if e is None:
+            raise ApiError(404, CODE_NOT_FOUND, "报销单不存在")
+        if e.status == "PAID":
+            raise ApiError(409, CODE_CONFLICT, "报销单已支付，不可绑定发票")
+        if inv.status == "BOUND":
+            if inv.expense_id == e.id:
+                # 幂等：重复绑定同一报销单 → 直接返回现状
+                return ok(request, to_api_invoice(inv))
+            raise ApiError(409, CODE_CONFLICT, "发票已绑定报销单，不可重复绑定")
+        if inv.status in ("VOID",):
+            raise ApiError(409, CODE_CONFLICT, "已作废发票不可绑定")
+        # 事务内：invoice_ids 追加（幂等）、expense_id 落值、status=BOUND
+        ids = list(e.invoice_ids or [])
+        if inv.id not in ids:
+            ids.append(inv.id)
+        e.invoice_ids = ids
+        e.save(update_fields=["invoice_ids", "updated_at"])
+        inv.expense_id = e.id
+        inv.status = "BOUND"
+        inv.save(update_fields=["expense_id", "status", "updated_at"])
+    return ok(request, to_api_invoice(inv))
+
+
+def void_invoice(request: HttpRequest, id: int):
+    d = domain_from(request)
+    with transaction.atomic():
+        inv = FInvoice.objects.filter(id=id, tenant_id=d.tenant_id, deleted=0).first()
+        if inv is None:
+            raise ApiError(404, CODE_NOT_FOUND, "发票不存在")
+        # BOUND（已绑定报销单）→ 40901；其余状态置 VOID（终态，作废不回收号码）
+        if inv.status == "BOUND":
+            raise ApiError(409, CODE_CONFLICT, "已绑定报销单的发票不可作废")
+        if inv.status != "VOID":
+            inv.status = "VOID"
+            inv.save(update_fields=["status", "updated_at"])
+    return ok(request, to_api_invoice(inv))
