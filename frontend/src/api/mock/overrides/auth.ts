@@ -35,7 +35,7 @@ const ROLE_CAPS: Record<string, string[]> = {
     ...W(['GET']),
     // M1-a（policy.csv:371-403）：财务可发起借款、维护差旅标准、登记发票
     '/api/v1/loans POST', '/api/v1/loans/* POST',
-    '/api/v1/travel-standards POST', '/api/v1/travel-standards PUT',
+    '/api/v1/travel-standards POST', '/api/v1/travel-standards PUT', '/api/v1/travel-standards DELETE',
     '/api/v1/invoices POST', '/api/v1/invoices/* POST', '/api/v1/invoices/* PUT',
   ], // 只读为主 + M1-a 经费写（与 policy.csv 同口径）
   'R-ETHICS': W(['GET']),

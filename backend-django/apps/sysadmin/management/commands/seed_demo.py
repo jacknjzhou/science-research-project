@@ -80,6 +80,7 @@ PAGE_GRANTS = [
     ("review", "R-MANAGER"), ("review", "R-EXPERT"), ("review", "R-ETHICS"), ("review", "R-LEADER"), ("review", "R-ADMIN"),
     ("projects", "R-STAFF"), ("projects", "R-MANAGER"), ("projects", "R-LEADER"),
     ("expense", "R-STAFF"), ("expense", "R-MANAGER"), ("expense", "R-FINANCE"),
+    ("loan", "R-MANAGER"), ("loan", "R-FINANCE"),  # M1-a A2 借款管理（镜像 auth.ts PAGE_GRANTS loan 行）
     ("claim", "R-STAFF"), ("claim", "R-MANAGER"), ("claim", "R-LEADER"),
     ("output", "R-STAFF"), ("output", "R-MANAGER"), ("output", "R-LEADER"),
     ("transfer", "R-MANAGER"), ("transfer", "R-LEADER"), ("transfer", "R-ADMIN"),
