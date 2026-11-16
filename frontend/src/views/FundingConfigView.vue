@@ -32,6 +32,104 @@ const err = ref('')
 const canWriteSubjects = computed(() => auth.can('/subjects POST'))
 const canWriteBudgets = computed(() => auth.can('/budgets POST'))
 
+// —— 差旅费用标准（M1-a A3 / F-24）：契约 TravelStandard camelCase、Money string（design/03 :3013）——
+// 唯一性：同 (tenant, staffCategory, cityTier) 仅一条 ACTIVE（违者 40901）；报销超标仅告警 travelOverLimit（warn-only）
+interface TravelStandard {
+  id: number; name: string; staffCategory: string; cityTier: string
+  accommodationCap: string; mealsCap: string; transportCap: string
+  effectiveFrom: string; effectiveTo: string | null
+  status: 'ACTIVE' | 'DISABLED'; remark: string | null
+}
+const tab = ref<'base' | 'travel'>('base')
+const canWriteTravel = computed(() => auth.can('/travel-standards POST'))
+const canDeleteTravel = computed(() => auth.can('/travel-standards DELETE'))
+const travel = ref<TravelStandard[]>([])
+const travelLoading = ref(false)
+const TS_STATUS_ZH: Record<string, string> = { ACTIVE: '生效中', DISABLED: '已停用' }
+const tsCls = (s: string) => (s === 'ACTIVE' ? 'ok' : 'muted')
+const capTotal = (t: TravelStandard) => num(t.accommodationCap) + num(t.mealsCap) + num(t.transportCap)
+const STAFF_CAT_OPTS = ['普通员工', '中层管理人员'] // 与 seed_demo 词表对齐，仅作输入建议
+const CITY_TIER_OPTS = ['一类城市', '二类城市']
+
+async function reloadTravel() {
+  travelLoading.value = true
+  try {
+    const d = await list<TravelStandard>('/travel-standards', { size: 50 }).catch(() => ({ rows: [] as TravelStandard[], total: 0 }))
+    travel.value = d.rows ?? []
+  } finally {
+    travelLoading.value = false
+  }
+}
+
+// 差旅标准抽屉（新增/编辑；PUT 全量字段，POST 返回 200 envelope ok）
+const tDrawer = reactive({ open: false, editing: false, saving: false })
+const tForm = reactive({ id: 0, name: '', staffCategory: '', cityTier: '', accommodationCap: '', mealsCap: '', transportCap: '', effectiveFrom: '', effectiveTo: '', remark: '' })
+function openTravelCreate() {
+  Object.assign(tForm, {
+    id: 0, name: '', staffCategory: STAFF_CAT_OPTS[0], cityTier: CITY_TIER_OPTS[0],
+    accommodationCap: '', mealsCap: '', transportCap: '',
+    effectiveFrom: new Date().toISOString().slice(0, 10), effectiveTo: '', remark: '',
+  })
+  tDrawer.editing = false
+  tDrawer.open = true
+}
+function openTravelEdit(t: TravelStandard) {
+  Object.assign(tForm, {
+    id: t.id, name: t.name, staffCategory: t.staffCategory, cityTier: t.cityTier,
+    accommodationCap: t.accommodationCap, mealsCap: t.mealsCap, transportCap: t.transportCap,
+    effectiveFrom: t.effectiveFrom, effectiveTo: t.effectiveTo ?? '', remark: t.remark ?? '',
+  })
+  tDrawer.editing = true
+  tDrawer.open = true
+}
+async function saveTravel() {
+  if (tDrawer.saving) return
+  if (!tForm.name.trim()) { toast('请填写标准名称'); return }
+  if (!tForm.staffCategory.trim() || !tForm.cityTier.trim()) { toast('请填写员工类别与城市类别'); return }
+  const caps = [tForm.accommodationCap, tForm.mealsCap, tForm.transportCap].map((v) => num(v))
+  if (caps.some((c) => !(c > 0))) { toast('住宿 / 伙食 / 交通三项上限均须 > 0'); return }
+  if (!tForm.effectiveFrom) { toast('请选择生效起始日'); return }
+  tDrawer.saving = true
+  err.value = ''
+  try {
+    const body: Record<string, unknown> = {
+      name: tForm.name.trim(),
+      staffCategory: tForm.staffCategory.trim(),
+      cityTier: tForm.cityTier.trim(),
+      accommodationCap: caps[0].toFixed(2),
+      mealsCap: caps[1].toFixed(2),
+      transportCap: caps[2].toFixed(2),
+      effectiveFrom: tForm.effectiveFrom,
+      effectiveTo: tForm.effectiveTo || null, // 空=长期有效
+      status: 'ACTIVE',
+    }
+    if (tForm.remark.trim()) body.remark = tForm.remark.trim()
+    if (tDrawer.editing) {
+      await api.put(`/travel-standards/${tForm.id}`, body)
+      toast('差旅标准已更新')
+    } else {
+      await api.post('/travel-standards', body)
+      toast('差旅标准已创建（生效中）；同类别组合重复将被 40901 拒绝')
+    }
+    tDrawer.open = false
+    await reloadTravel()
+  } catch (e: any) {
+    err.value = e?.message || '保存失败'
+  } finally {
+    tDrawer.saving = false
+  }
+}
+async function removeTravel(t: TravelStandard) {
+  if (!confirm(`删除差旅标准「${t.name}」（${t.staffCategory} × ${t.cityTier}）？`)) return
+  try {
+    await api.del(`/travel-standards/${t.id}`)
+    toast('差旅标准已删除')
+    await reloadTravel()
+  } catch (e: any) {
+    err.value = e?.message || '删除失败'
+  }
+}
+
 // —— 科目树（GET /subjects 扁平 + 客户端组树，mapper 输出干净字段）——
 const subjects = ref<Subject[]>([])
 interface TreeNode extends Subject { kids: TreeNode[] }
@@ -231,6 +329,7 @@ onMounted(async () => {
     await Promise.all([
       reloadSubjects(),
       reloadBudgets(),
+      reloadTravel(),
       list<MyProject>('/project/mine', { size: 50 }).catch(() => ({ rows: [] as MyProject[], total: 0 })).then((d) => { myProjects.value = d.rows ?? [] }),
     ])
   } finally {
@@ -250,6 +349,13 @@ onMounted(async () => {
       报销填单页「预算（执行中）」「支出科目」两个下拉的数据真源：科目为 <code>f_subject</code> 树形字典（末级科目方可挂预算行），预算为 <code>f_budget + f_budget_line</code>。写操作限管理/主管（Casbin 粒度②），财务为只读视图。
     </p>
 
+    <!-- tab 导航：科目与预算 / 差旅标准（M1-a A3，无新路由） -->
+    <div style="display:flex;gap:4px;margin:10px 0 14px;border-bottom:2px solid var(--line-hard)">
+      <button class="tabbtn" :class="{ on: tab === 'base' }" @click="tab = 'base'">科目与预算</button>
+      <button class="tabbtn" :class="{ on: tab === 'travel' }" @click="tab = 'travel'">差旅标准（{{ travel.length }}）</button>
+    </div>
+
+    <div v-show="tab === 'base'">
     <!-- ===== 节一：支出科目树 ===== -->
     <h4 style="display:flex;align-items:center;gap:10px">
       支出科目（{{ subjects.length }}）
@@ -330,6 +436,52 @@ onMounted(async () => {
           <tr v-if="!budgets.length"><td colspan="7" style="opacity:.6">{{ budLoading ? '加载中…' : '无' }}</td></tr>
         </tbody>
       </table>
+    </div>
+    </div><!-- /tab base -->
+
+    <!-- ===== 节三：差旅费用标准（M1-a A3 / F-24） ===== -->
+    <div v-show="tab === 'travel'">
+      <h4 style="display:flex;align-items:center;gap:10px;margin-top:4px;flex-wrap:wrap">
+        差旅费用标准（{{ travel.length }}）
+        <span style="font-size:12px;font-weight:400;opacity:.6">同一（员工类别 × 城市类别）仅一条生效标准（40901）；报销超标仅告警不拦截</span>
+        <button v-if="canWriteTravel" class="btn sm seal" @click="openTravelCreate">＋ 新建标准</button>
+      </h4>
+      <div style="overflow:auto;min-width:0">
+        <table class="tbl" style="border-collapse:collapse;font-size:13px;table-layout:fixed;width:100%">
+          <thead>
+            <tr style="text-align:left">
+              <th style="width:15%">名称</th>
+              <th style="width:11%">员工类别</th>
+              <th style="width:11%">城市类别</th>
+              <th style="width:11%" class="num">住宿/晚</th>
+              <th style="width:11%" class="num">伙食/天</th>
+              <th style="width:11%" class="num">交通/天</th>
+              <th style="width:11%" class="num">合计上限</th>
+              <th style="width:13%">有效期</th>
+              <th style="width:7%">状态</th>
+              <th v-if="canWriteTravel" style="width:12%">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="t in travel" :key="t.id">
+              <td><b>{{ t.name }}</b><span v-if="t.remark" class="mono" style="opacity:.5;margin-left:6px">{{ t.remark }}</span></td>
+              <td>{{ t.staffCategory }}</td>
+              <td>{{ t.cityTier }}</td>
+              <td class="mono num">¥ {{ money(t.accommodationCap) }}</td>
+              <td class="mono num">¥ {{ money(t.mealsCap) }}</td>
+              <td class="mono num">¥ {{ money(t.transportCap) }}</td>
+              <td class="mono num"><b>¥ {{ money(capTotal(t)) }}</b></td>
+              <td class="mono" style="font-size:11px">{{ t.effectiveFrom }} ~ {{ t.effectiveTo || '长期' }}</td>
+              <td><span class="tag" :class="tsCls(t.status)">{{ TS_STATUS_ZH[t.status] || t.status }}</span></td>
+              <td v-if="canWriteTravel" style="white-space:nowrap">
+                <button class="btn sm mini" @click="openTravelEdit(t)">编辑</button>
+                <button v-if="canDeleteTravel" class="btn sm mini" @click="removeTravel(t)">删除</button>
+              </td>
+            </tr>
+            <tr v-if="!travel.length"><td :colspan="canWriteTravel ? 10 : 9" style="opacity:.6">{{ travelLoading ? '加载中…' : '无' }}</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <!-- 科目新增/编辑抽屉 -->
@@ -420,10 +572,39 @@ onMounted(async () => {
         </div>
       </div>
     </div>
+    <!-- 差旅标准新增/编辑抽屉（M1-a A3） -->
+    <div v-if="tDrawer.open" style="position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;z-index:60">
+      <div style="background:#fff;width:min(540px,92vw);max-height:88vh;overflow:auto;padding:20px;border-radius:10px">
+        <h3 style="margin-top:0">{{ tDrawer.editing ? '编辑差旅标准' : '新建差旅标准' }}</h3>
+        <div class="fld"><label>标准名称 *</label><input v-model="tForm.name" placeholder="如：普通员工一类城市标准" /></div>
+        <div style="display:flex;gap:10px">
+          <div class="fld" style="flex:1"><label>员工类别 *</label><input v-model="tForm.staffCategory" list="dl-staff-cat" placeholder="普通员工" /></div>
+          <div class="fld" style="flex:1"><label>城市类别 *</label><input v-model="tForm.cityTier" list="dl-city-tier" placeholder="一类城市" /></div>
+        </div>
+        <datalist id="dl-staff-cat"><option v-for="s in STAFF_CAT_OPTS" :key="s" :value="s" /></datalist>
+        <datalist id="dl-city-tier"><option v-for="c in CITY_TIER_OPTS" :key="c" :value="c" /></datalist>
+        <div style="display:flex;gap:10px">
+          <div class="fld" style="flex:1"><label>住宿上限（元/晚）*</label><input v-model="tForm.accommodationCap" inputmode="decimal" placeholder="450" /></div>
+          <div class="fld" style="flex:1"><label>伙食上限（元/天）*</label><input v-model="tForm.mealsCap" inputmode="decimal" placeholder="130" /></div>
+          <div class="fld" style="flex:1"><label>交通上限（元/天）*</label><input v-model="tForm.transportCap" inputmode="decimal" placeholder="500" /></div>
+        </div>
+        <div style="display:flex;gap:10px">
+          <div class="fld" style="flex:1"><label>生效起始日 *</label><input v-model="tForm.effectiveFrom" type="date" /></div>
+          <div class="fld" style="flex:1"><label>失效日（空 = 长期有效）</label><input v-model="tForm.effectiveTo" type="date" /></div>
+        </div>
+        <div class="fld"><label>备注（可选）</label><input v-model="tForm.remark" placeholder="依据财字〔2025〕12号" /></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+          <button class="btn" @click="tDrawer.open = false">取消</button>
+          <button class="btn seal" :disabled="tDrawer.saving" @click="saveTravel">{{ tDrawer.saving ? '保存中…' : '保存' }}</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
+.tabbtn { border: none; background: none; padding: 8px 14px; font: inherit; font-size: 13.5px; cursor: pointer; color: var(--ink-mute, #888); border-bottom: 2px solid transparent; margin-bottom: -2px; }
+.tabbtn.on { color: var(--ink, #1c2b4a); font-weight: 700; border-bottom-color: var(--seal, #8b2e2e); }
 .mono { font-family: var(--mono, monospace); font-size: 12px; }
 .tbl .btn.sm.mini { padding: 2px 8px; font-size: 11px; border-radius: 3px; }
 .tbl .btn.sm.mini + .btn.sm.mini { margin-left: 4px; }

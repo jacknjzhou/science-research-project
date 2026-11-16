@@ -13,9 +13,22 @@ interface BudgetLine {
   id: number; budget_id: number; subject_id: number
   amount_planned: string; amount_frozen: string; amount_used: string; remaining: string
 }
-interface ExpenseRow { id: number; code: string | null; amount: string; status: string; ai_verdict: string | null; expense_type: string }
+interface ExpenseRow { id: number; code: string | null; amount: string; status: string; aiVerdict?: string | null; expenseType?: string }
 interface AiIssue { rule: string; reason: string; clauseRef?: string }
 interface AiReviewResult { verdict: string; confidence: number; issues?: AiIssue[] }
+
+// 发票契约（design/03-科研经费管理-F.openapi.yaml Invoice :2462 / InvoiceOcrResponse）：
+// camelCase，Money 字段为 string，ocrConfidence 为 string（format:number 对齐 NUMERIC 精度）。
+interface OcrInvoice {
+  id?: number; code?: string | null; status?: string
+  number?: string; invoiceCode?: string; invoiceType?: string
+  sellerName?: string; sellerTaxId?: string; buyerName?: string; buyerTaxId?: string
+  amountExclTax?: string; taxAmount?: string; totalAmount?: string
+  issueDate?: string; ocrConfidence?: string
+  checkResult?: 'PASS' | 'FAIL' | 'PENDING'; isDuplicated?: boolean
+  expenseId?: number | null; remark?: string | null; createdAt?: string
+  ocrWarnings?: string[]
+}
 
 const toast = (m: string) => (window as any).toast?.(m)
 const num = (v?: string | number | null) => toNum(v)
@@ -94,11 +107,6 @@ async function onInvoiceFiles(e: Event) {
   input.value = ''
   for (const f of files) await ocrFile(f)
 }
-interface OcrInvoice {
-  number?: string; invoiceCode?: string; sellerName?: string
-  totalAmount?: string | number; amountExclTax?: string | number
-  issueDate?: string; ocrConfidence?: number
-}
 async function ocrFile(f: File) {
   try {
     const r = await api.post<OcrInvoice>('/invoices/ocr', {
@@ -115,8 +123,14 @@ async function ocrFile(f: File) {
     if (amt) last.amount = amt
     if (r?.number) last.invoiceNo = r.number
     if (r?.sellerName) last.note = r.sellerName
-    const conf = r?.ocrConfidence != null ? `（置信度 ${Math.round(r.ocrConfidence * 100)}%）` : ''
-    toast(`发票识别：${r?.sellerName || r?.number || f.name} · ¥${amt ? amt.toLocaleString('zh-CN') : '—'}${conf}`)
+    // 契约 ocrConfidence 为 string（如 "0.9875"），降级=0
+    const conf = num(r?.ocrConfidence)
+    const confText = conf > 0 ? `（置信度 ${Math.round(conf * 100)}%）` : ''
+    toast(`发票识别：${r?.sellerName || r?.number || f.name} · ¥${amt ? amt.toLocaleString('zh-CN') : '—'}${confText}`)
+    if (r?.ocrWarnings?.length) toast('OCR 告警：' + r.ocrWarnings.join('；'))
+    if (r?.isDuplicated) toast('⚠ 三重指纹命中重复发票（仅标记不拦截）')
+    // 成功后刷新发票面板（OCR 落库 status=OCR_DONE 的发票记录）
+    await loadInvoices()
   } catch (e: any) {
     toast(`发票识别失败：${e?.message || e}（请手动填写明细）`)
   }
@@ -139,6 +153,41 @@ const STATUS_META: Record<string, { tag: string; cls: string }> = {
   DRAFT: { tag: '草稿', cls: 'warn' },
 }
 
+// —— 发票面板（M1-a A1）：GET /invoices?expenseId= 列表 + bind 下拉绑定到报销单 ——
+const INV_STATUS_META: Record<string, { tag: string; cls: string }> = {
+  DRAFT: { tag: '草稿', cls: 'warn' }, OCR_DONE: { tag: '已识别', cls: 'info' },
+  CHECKED: { tag: '已查验', cls: 'info' }, BOUND: { tag: '已绑定', cls: 'ok' },
+  VOID: { tag: '已作废', cls: 'info' },
+}
+const invoices = ref<OcrInvoice[]>([])
+const invLoading = ref(false)
+const invExpenseId = ref<number | null>(null) // 过滤：绑定报销单（空=全部）
+const bindTargetId = ref<number | null>(null) // bind 下拉目标报销单
+
+async function loadInvoices() {
+  invLoading.value = true
+  try {
+    const params: Record<string, unknown> = { size: 20 }
+    if (invExpenseId.value) params.expenseId = invExpenseId.value
+    const d = await list<OcrInvoice>('/invoices', params).catch(() => ({ rows: [] as OcrInvoice[], total: 0 }))
+    invoices.value = d.rows ?? []
+    if (!bindTargetId.value && recent.value.length) bindTargetId.value = recent.value[0].id
+  } finally {
+    invLoading.value = false
+  }
+}
+
+async function bindInvoice(inv: OcrInvoice) {
+  if (!bindTargetId.value) { toast('请先在 bind 下拉选择目标报销单'); return }
+  try {
+    await api.post(`/invoices/${inv.id}/bind`, { expenseId: bindTargetId.value })
+    toast(`发票 ${inv.code || '#' + inv.id} 已绑定到报销单 #${bindTargetId.value}`)
+    await loadInvoices()
+  } catch (e: any) {
+    toast('绑定失败：' + (e?.message || e))
+  }
+}
+
 async function load() {
   loading.value = true
   try {
@@ -146,6 +195,7 @@ async function load() {
       api.get<{ list: Subject[] }>('/subjects').catch(() => null),
       list<Budget>('/budgets', { status: 'EXECUTING', size: 10 }).catch(() => ({ rows: [] as Budget[], total: 0 })),
       list<ExpenseRow>('/expenses', { size: 4 }).catch(() => ({ rows: [] as ExpenseRow[], total: 0 })),
+      loadInvoices(),
     ])
     subjects.value = subs?.list ?? []
     budgets.value = bud.rows ?? []
@@ -159,6 +209,8 @@ async function load() {
       water.value = []
     }
     recent.value = rec.rows ?? []
+    // bind 下拉默认目标：首张近单（Promise.all 并发下 loadInvoices 先于 recent 落值）
+    if (!bindTargetId.value && recent.value.length) bindTargetId.value = recent.value[0].id
   } catch (e: any) {
     toast('数据加载失败：' + (e?.message || e))
   } finally {
@@ -390,6 +442,33 @@ async function saveDraft() {
               <div><span class="tag bad">AI 驳回</span> ¥12,000 · 连号拆分嫌疑</div>
             </template>
           </div>
+
+          <!-- 发票面板（M1-a A1）：发票列表（GET /invoices?expenseId=）+ bind 下拉绑定 -->
+          <div class="divider-double"></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+            <b style="font-size:13px">发票面板（{{ invoices.length }}）</b>
+            <select v-model.number="invExpenseId" @change="loadInvoices" style="font-size:11px;padding:4px 6px;border:1px solid var(--line);border-radius:4px;background:#fff;color:var(--ink)">
+              <option :value="null">全部发票</option>
+              <option v-for="r in recent" :key="r.id" :value="r.id">按报销单 {{ r.code || '#' + r.id }} 过滤</option>
+            </select>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-mute);margin-top:6px">
+            <span>bind 目标</span>
+            <select v-model.number="bindTargetId" style="flex:1;font-size:11px;padding:4px 6px;border:1px solid var(--line);border-radius:4px;background:#fff;color:var(--ink)">
+              <option :value="null">选择报销单…</option>
+              <option v-for="r in recent" :key="r.id" :value="r.id">{{ r.code || '报销单 #' + r.id }}（{{ STATUS_META[r.status]?.tag || r.status }}）</option>
+            </select>
+          </div>
+          <div v-if="invLoading" style="font-size:12px;color:var(--ink-mute);margin-top:6px">发票加载中…</div>
+          <div v-for="v in invoices" :key="v.id" style="display:flex;align-items:center;gap:8px;font-size:12px;margin-top:8px">
+            <span class="tag" :class="INV_STATUS_META[v.status || '']?.cls || 'info'">{{ INV_STATUS_META[v.status || '']?.tag || v.status || '—' }}</span>
+            <span class="mono" style="font-size:11px">{{ v.code || ('INV #' + v.id) }}</span>
+            <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ v.sellerName || v.number || '' }}</span>
+            <b class="mono">¥ {{ num(v.totalAmount).toLocaleString('zh-CN') }}</b>
+            <span v-if="v.isDuplicated" class="tag warn">重复</span>
+            <button v-if="v.status !== 'BOUND' && v.status !== 'VOID'" class="btn ghost" style="padding:3px 8px;font-size:11px" @click="bindInvoice(v)">绑定</button>
+          </div>
+          <div v-if="!invLoading && !invoices.length" style="font-size:12px;color:var(--ink-mute);text-align:center;margin-top:6px">暂无发票；OCR 识别成功后自动进入此列表。</div>
         </div>
       </div>
     </div>

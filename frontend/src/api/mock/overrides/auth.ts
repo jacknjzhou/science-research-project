@@ -31,7 +31,13 @@ const W = (acts: string[]) => acts.map((a) => `/api/v1/* ${a}`)
 const ROLE_CAPS: Record<string, string[]> = {
   'R-ADMIN': W(['GET', 'POST', 'PUT', 'DELETE']),
   'R-AUDITOR': W(['GET']),
-  'R-FINANCE': W(['GET']), // 只读（与经费配置冒烟「finance 无写按钮」同口径）
+  'R-FINANCE': [
+    ...W(['GET']),
+    // M1-a（policy.csv:371-403）：财务可发起借款、维护差旅标准、登记发票
+    '/api/v1/loans POST', '/api/v1/loans/* POST',
+    '/api/v1/travel-standards POST', '/api/v1/travel-standards PUT',
+    '/api/v1/invoices POST', '/api/v1/invoices/* POST', '/api/v1/invoices/* PUT',
+  ], // 只读为主 + M1-a 经费写（与 policy.csv 同口径）
   'R-ETHICS': W(['GET']),
   'R-EXPERT': [...W(['GET']), '/api/v1/review* POST', '/api/v1/review* PUT'],
   'R-LEADER': [...W(['GET']), '/api/v1/apply/* PUT'],
@@ -41,6 +47,10 @@ const ROLE_CAPS: Record<string, string[]> = {
     '/api/v1/subjects POST', '/api/v1/subjects PUT',
     '/api/v1/budgets POST', '/api/v1/budgets PUT',
     '/api/v1/projects POST', '/api/v1/procurement/* POST', '/api/v1/asset/* POST',
+    // M1-a（policy.csv:371-403）：借款发起/审批、差旅标准维护、发票登记/绑定
+    '/api/v1/loans POST', '/api/v1/loans/* POST',
+    '/api/v1/travel-standards POST', '/api/v1/travel-standards PUT',
+    '/api/v1/invoices POST', '/api/v1/invoices/* POST', '/api/v1/invoices/* PUT',
   ],
   'R-STAFF': [
     ...W(['GET']),
@@ -57,6 +67,7 @@ const PAGE_GRANTS: Array<[string, string]> = [
   ['review', 'R-MANAGER'], ['review', 'R-EXPERT'], ['review', 'R-ETHICS'], ['review', 'R-LEADER'], ['review', 'R-ADMIN'],
   ['projects', 'R-STAFF'], ['projects', 'R-MANAGER'], ['projects', 'R-LEADER'],
   ['expense', 'R-STAFF'], ['expense', 'R-MANAGER'], ['expense', 'R-FINANCE'],
+  ['loan', 'R-MANAGER'], ['loan', 'R-FINANCE'], // M1-a A2 借款管理（meta.roles 同口径）
   ['claim', 'R-STAFF'], ['claim', 'R-MANAGER'], ['claim', 'R-LEADER'],
   ['output', 'R-STAFF'], ['output', 'R-MANAGER'], ['output', 'R-LEADER'],
   ['transfer', 'R-MANAGER'], ['transfer', 'R-LEADER'], ['transfer', 'R-ADMIN'],
