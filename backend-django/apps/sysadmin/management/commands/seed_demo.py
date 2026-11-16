@@ -186,7 +186,10 @@ class Command(BaseCommand):
         from apps.expertreview.models import (
             NExpert, NExpertGroup, NReviewFee, NReviewScore, NReviewTask,
         )
-        from apps.funding.models import FBudget, FBudgetLine, FExpense, FIncome, FSubject
+        from apps.funding.models import (
+            FBudget, FBudgetLine, FExpense, FIncome, FInvoice, FLoan, FSubject,
+            FTravelStandard,
+        )
         from apps.notify.models import SysImportLog, SysNotification, SysTask
         from apps.output.models import RDataset, RJournalSource, ROutput
         from apps.p.models import PApplication, PGuideline
@@ -331,10 +334,10 @@ class Command(BaseCommand):
                   {"project_id": prj1.id, "legal_entity_id": ent.id, "mode": "ANNUAL",
                    "total_approved": 2000000, "version": 1, "status": "EXECUTING",
                    "creator_id": C1, "approved_at": now, "approved_by": C1}, "funding")
-        put(FBudgetLine, {"tenant_id": T1, "code": "BUDL-DEMO-001", "budget_id": bud.id,
-                          "subject_id": subj_m.id},
-            {"amount_planned": 800000, "amount_used": 320000, "status": "ACTIVE",
-             "creator_id": C1}, "funding")
+        budl = put(FBudgetLine, {"tenant_id": T1, "code": "BUDL-DEMO-001", "budget_id": bud.id,
+                                 "subject_id": subj_m.id},
+                   {"amount_planned": 800000, "amount_used": 320000, "status": "ACTIVE",
+                    "creator_id": C1}, "funding")
         put(FBudgetLine, {"tenant_id": T1, "code": "BUDL-DEMO-002", "budget_id": bud.id,
                           "subject_id": subj_m_2.id},
             {"amount_planned": 400000, "status": "ACTIVE", "creator_id": C1}, "funding")
@@ -355,6 +358,43 @@ class Command(BaseCommand):
              "receipt_no": "RCP-DEMO-0001", "receipt_date": today,
              "payer_name": "某某新能源科技有限公司", "purpose_text": "横向课题首付款（演示）",
              "claim_status": "UNCLAIMED", "status": "CONFIRMED", "creator_id": C1}, "funding")
+
+        # M1-a 演示数据：差旅标准（A3）/ 发票（A1）/ 借款（A2，PAID 部分冲销）
+        put(FTravelStandard,
+            {"tenant_id": T1, "staff_category": "普通员工", "city_tier": "一类城市"},
+            {"name": "一类城市差旅标准（普通员工）", "accommodation_cap": 450,
+             "meals_cap": 130, "transport_cap": 500,
+             "effective_from": today - timedelta(days=30), "status": "ACTIVE",
+             "creator_id": C1, "remark": "演示差旅标准（M1-a A3）"}, "funding")
+        put(FTravelStandard,
+            {"tenant_id": T1, "staff_category": "中层管理人员", "city_tier": "二类城市"},
+            {"name": "二类城市差旅标准（中层管理人员）", "accommodation_cap": 380,
+             "meals_cap": 100, "transport_cap": 400,
+             "effective_from": today - timedelta(days=30), "status": "ACTIVE",
+             "creator_id": C1, "remark": "演示差旅标准（M1-a A3）"}, "funding")
+        put(FInvoice, {"tenant_id": T1, "number": "25301000000123456789"},
+            {"status": "DRAFT", "invoice_type": "ELECTRONIC",
+             "seller_name": "某某仪器设备有限公司", "seller_tax_id": "91330100MA27X0DEMO",
+             "buyer_name": "演示研究院", "buyer_tax_id": "12100000MB1C00DEMO",
+             "amount_excl_tax": 5000, "tax_amount": 650, "total_amount": 5650,
+             "issue_date": today, "check_result": "PASS", "creator_id": C1,
+             "remark": "演示发票（M1-a A1，DRAFT）"}, "funding")
+        loan, loan_created = FLoan.objects.get_or_create(
+            tenant_id=T1, code="LOAN-DEMO-0001",
+            defaults=self._filt(FLoan, {
+                "status": "PAID", "project_id": prj1.id,
+                "budget_line_id": budl.id, "legal_entity_id": ent.id,
+                "applicant_user_id": users["staff"].id, "amount": 20000,
+                "reason": "外地测试出差借款（演示，PAID 部分冲销）",
+                "write_off_amount": 8000, "refunded_amount": 0,
+                "submitted_at": now - timedelta(days=3),
+                "frozen_at": now - timedelta(days=3),
+                "paid_at": now - timedelta(days=2),
+                "creator_id": C1, "remark": "演示借款（M1-a A2）"}))
+        cnt["funding"] += int(loan_created)
+        if loan_created:
+            # 台账自洽：借款 20000 付款后结转预算线 amount_used（320000 → 340000）
+            FBudgetLine.objects.filter(id=budl.id).update(amount_used=340000)
 
         # ---- F. R 成果 -------------------------------------------------------
         out1 = put(ROutput, {"tenant_id": T1, "title": "一种高熵合金催化剂及其制备方法"},
