@@ -225,3 +225,118 @@ def test_page_matrix_endpoint(seed_auth, seed_pages):
                   {"page_name": "bigscreen", "role_code": "R-LEADER"}]}),
               content_type="application/json", **bearer(1, ["R-ADMIN"]))
     assert _json(r)["code"] == 0
+
+
+# ===========================================================================
+# 4. M1-b：凭证同步/决算/成本池/平行记账策略放行（A4/A5/A7）
+# ===========================================================================
+
+import os
+
+_POLICY_CSV = os.path.join(os.path.dirname(__file__), "..", "config", "casbin", "policy.csv")
+
+
+def _policy_p_rows():
+    """解析 policy.csv 中全部 p, 规则行为 (sub, obj, act) 三元组集合。"""
+    rows = set()
+    with open(_POLICY_CSV, encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line.startswith("p,"):
+                continue
+            parts = [x.strip() for x in line.split(",")]
+            rows.add((parts[1], parts[2], parts[3]))
+    return rows
+
+
+def _m1b_expected_rows():
+    """M1-b F 块新增 27 行（R-FINANCE 12、R-MANAGER 8、R-LEADER 7）。
+
+    keyMatch2 裁决：裸路径 POST 不匹配子段 /cost-pools/calculate，
+    故 calculate 以显式行放行（同 /api/v1/expense/ai-invoice-review 先例）。
+    """
+    rows = [
+        # R-MANAGER：成本池读写（calculate 显式行）、平行记账只读、决算只读
+        ("R-MANAGER", "/api/v1/settlements", "GET"),
+        ("R-MANAGER", "/api/v1/settlements/*", "GET"),
+        ("R-MANAGER", "/api/v1/cost-pools", "GET"),
+        ("R-MANAGER", "/api/v1/cost-pools", "POST"),
+        ("R-MANAGER", "/api/v1/cost-pools/*", "GET"),
+        ("R-MANAGER", "/api/v1/cost-pools/calculate", "POST"),
+        ("R-MANAGER", "/api/v1/accounting-entries", "GET"),
+        ("R-MANAGER", "/api/v1/accounting-entries/*", "GET"),
+        # R-LEADER：决算只读 + 审批；成本池/平行记账只读
+        ("R-LEADER", "/api/v1/settlements", "GET"),
+        ("R-LEADER", "/api/v1/settlements/*", "GET"),
+        ("R-LEADER", "/api/v1/settlements/*/approve", "POST"),
+        ("R-LEADER", "/api/v1/cost-pools", "GET"),
+        ("R-LEADER", "/api/v1/cost-pools/*", "GET"),
+        ("R-LEADER", "/api/v1/accounting-entries", "GET"),
+        ("R-LEADER", "/api/v1/accounting-entries/*", "GET"),
+        # R-FINANCE：凭证同步/回调 + 决算全量 + 审批 + 成本池读写（calculate 显式行）+ 平行记账只读
+        ("R-FINANCE", "/api/v1/vouchers/sync", "POST"),
+        ("R-FINANCE", "/api/v1/vouchers/sync-callback", "POST"),
+        ("R-FINANCE", "/api/v1/settlements", "GET"),
+        ("R-FINANCE", "/api/v1/settlements", "POST"),
+        ("R-FINANCE", "/api/v1/settlements/*", "GET"),
+        ("R-FINANCE", "/api/v1/settlements/*/approve", "POST"),
+        ("R-FINANCE", "/api/v1/cost-pools", "GET"),
+        ("R-FINANCE", "/api/v1/cost-pools", "POST"),
+        ("R-FINANCE", "/api/v1/cost-pools/*", "GET"),
+        ("R-FINANCE", "/api/v1/cost-pools/calculate", "POST"),
+        ("R-FINANCE", "/api/v1/accounting-entries", "GET"),
+        ("R-FINANCE", "/api/v1/accounting-entries/*", "GET"),
+    ]
+    return rows
+
+
+def test_m1b_policy_rows_exist():
+    """M1-b 27 行 (role,path,action) 必须全部存在于 policy.csv。"""
+    rows = _policy_p_rows()
+    missing = [r for r in _m1b_expected_rows() if r not in rows]
+    assert not missing, f"缺少 M1-b 策略行: {missing}"
+
+
+def test_m1b_bare_and_wildcard_paired():
+    """keyMatch2 铁律：裸路径永不匹配子路径，资源 GET 必须与 /* 成对放行；
+    POST 仅集合根（创建）+ 显式动作行，不要求裸/通配成对。"""
+    rows = _policy_p_rows()
+    for role in ("R-MANAGER", "R-LEADER", "R-FINANCE"):
+        for bare, wild in (
+            ("/api/v1/settlements", "/api/v1/settlements/*"),
+            ("/api/v1/cost-pools", "/api/v1/cost-pools/*"),
+            ("/api/v1/accounting-entries", "/api/v1/accounting-entries/*"),
+        ):
+            # GET 必须裸/通配成对（列表 + 详情）
+            assert (role, bare, "GET") in rows or (role, wild, "GET") not in rows
+            if (role, bare, "GET") in rows:
+                assert (role, wild, "GET") in rows, \
+                    f"{role} {bare} GET 缺少配对的 {wild} GET（keyMatch2 铁律）"
+    # R-FINANCE 决算 POST 也需裸/通配成对（决算明细可写）
+    assert ("R-FINANCE", "/api/v1/settlements/*", "GET") in rows
+
+
+def test_m1b_keymatch2_multi_segment_coverage():
+    """keyMatch2 实测裁决：裸路径 POST 不匹配 /cost-pools/calculate 子段（显式行放行，
+    同 /api/v1/expense/ai-invoice-review 先例）；/settlements/*/approve 两段子路径显式行。"""
+    from casbin.util import key_match2
+    rows = _policy_p_rows()
+    # 裁决 1：calculate（子段）不被裸路径匹配 → 需显式行（铁律：裸路径永不匹配子路径）
+    assert not key_match2("/api/v1/cost-pools/calculate", "/api/v1/cost-pools")
+    assert key_match2("/api/v1/cost-pools/calculate", "/api/v1/cost-pools/*")
+    # 裁决 2：calculate 由显式行覆盖（主管/财务可算）
+    assert key_match2("/api/v1/cost-pools/calculate", "/api/v1/cost-pools/calculate")
+    assert ("R-MANAGER", "/api/v1/cost-pools/calculate", "POST") in rows
+    assert ("R-FINANCE", "/api/v1/cost-pools/calculate", "POST") in rows
+    # 裁决 3：approve 动作路由显式成行（bare/* 行只有 GET，不带 POST）
+    assert key_match2("/api/v1/settlements/1/approve", "/api/v1/settlements/*/approve")
+    assert ("R-LEADER", "/api/v1/settlements/*/approve", "POST") in rows
+    assert ("R-FINANCE", "/api/v1/settlements/*/approve", "POST") in rows
+    # 裁决 4：sync-callback 与 sync 是不同路径，各自显式放行
+    assert not key_match2("/api/v1/vouchers/sync-callback", "/api/v1/vouchers/sync")
+    assert ("R-FINANCE", "/api/v1/vouchers/sync-callback", "POST") in rows
+    # 负面：R-LEADER 不得写成本池 / 不得同步凭证 / 不得建决算
+    assert ("R-LEADER", "/api/v1/cost-pools", "POST") not in rows
+    assert ("R-LEADER", "/api/v1/cost-pools/calculate", "POST") not in rows
+    assert ("R-LEADER", "/api/v1/vouchers/sync", "POST") not in rows
+    assert ("R-LEADER", "/api/v1/settlements", "POST") not in rows

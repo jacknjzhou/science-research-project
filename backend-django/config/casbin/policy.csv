@@ -408,6 +408,37 @@ p, R-FINANCE, /api/v1/travel-standards/*,           GET
 p, R-FINANCE, /api/v1/travel-standards/*,           PUT
 p, R-FINANCE, /api/v1/travel-standards/*,           DELETE
 
+# —— F 凭证同步/决算/成本池/平行记账（M1-b A4/A5/A7）——
+# 裁决：keyMatch2 下裸路径永不匹配子路径——/cost-pools/calculate 以显式行放行（同 expense/ai-invoice-review 先例）；
+# /settlements/*/approve 两段子路径亦需显式行；sync 与 sync-callback 为不同路径各自成行。
+p, R-MANAGER, /api/v1/settlements,                  GET
+p, R-MANAGER, /api/v1/settlements/*,                GET
+p, R-MANAGER, /api/v1/cost-pools,                   GET
+p, R-MANAGER, /api/v1/cost-pools,                   POST
+p, R-MANAGER, /api/v1/cost-pools/*,                 GET
+p, R-MANAGER, /api/v1/cost-pools/calculate,         POST
+p, R-MANAGER, /api/v1/accounting-entries,           GET
+p, R-MANAGER, /api/v1/accounting-entries/*,         GET
+p, R-LEADER,  /api/v1/settlements,                  GET
+p, R-LEADER,  /api/v1/settlements/*,                GET
+p, R-LEADER,  /api/v1/settlements/*/approve,        POST
+p, R-LEADER,  /api/v1/cost-pools,                   GET
+p, R-LEADER,  /api/v1/cost-pools/*,                 GET
+p, R-LEADER,  /api/v1/accounting-entries,           GET
+p, R-LEADER,  /api/v1/accounting-entries/*,         GET
+p, R-FINANCE, /api/v1/vouchers/sync,                POST
+p, R-FINANCE, /api/v1/vouchers/sync-callback,       POST
+p, R-FINANCE, /api/v1/settlements,                  GET
+p, R-FINANCE, /api/v1/settlements,                  POST
+p, R-FINANCE, /api/v1/settlements/*,                GET
+p, R-FINANCE, /api/v1/settlements/*/approve,        POST
+p, R-FINANCE, /api/v1/cost-pools,                   GET
+p, R-FINANCE, /api/v1/cost-pools,                   POST
+p, R-FINANCE, /api/v1/cost-pools/*,                 GET
+p, R-FINANCE, /api/v1/cost-pools/calculate,         POST
+p, R-FINANCE, /api/v1/accounting-entries,           GET
+p, R-FINANCE, /api/v1/accounting-entries/*,         GET
+
 # ---- 通知中心（NF）：全员读写自己的收件箱 ----
 p, R-STAFF,   /api/v1/notifications,              GET
 p, R-STAFF,   /api/v1/notifications/*,            GET
