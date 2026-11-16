@@ -484,10 +484,11 @@ def create_expense(request: HttpRequest):
     if submit_mode not in ("预算制", "包干制"):
         raise ApiError(400, CODE_BAD_REQUEST, "submit_mode 仅支持 预算制/包干制")
     # 差旅匹配元数据（M1-a A3/P98，随填单提交；匹配在 submit 时点做，warn-only）
-    travel_staff_category = b.get("travel_staff_category")
-    travel_city_tier = b.get("travel_city_tier")
+    # 键名 camelCase 对齐契约 03-F ExpenseCreateRequest（终审收口 Task 8 Important①）
+    travel_staff_category = b.get("travelStaffCategory")
+    travel_city_tier = b.get("travelCityTier")
     # 关联借款（冲销溯源）：借款须存在于本租户（40401；状态不设限，冲销时点再校验）
-    related_loan_id = b.get("related_loan_id")
+    related_loan_id = b.get("relatedLoanId")
     if related_loan_id is not None:
         loan = FLoan.objects.filter(id=related_loan_id, tenant_id=d.tenant_id, deleted=0).first()
         if loan is None:

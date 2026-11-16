@@ -2500,6 +2500,10 @@ components:
         aiVerdict: { type: string, enum: [PASS, REVIEW, REJECT], nullable: true }
         aiConfidence: { type: number, format: double, nullable: true }
         invoiceCheckStatus: { type: string, enum: [PENDING, PASSED, FAILED, MANUAL] }
+        travelOverLimit: { type: boolean, description: 差旅超标提示（M1-a A3 提交时按 TravelStandard 匹配计算，warn-only 不拦截） }
+        travelStaffCategory: { type: string, nullable: true, description: 差旅人员类别（与 travelCityTier 联合匹配标准） }
+        travelCityTier: { type: string, nullable: true, description: 差旅城市类别 }
+        relatedLoanId: { type: integer, format: int64, nullable: true, description: 关联借款单 id（创建时存在性校验 40401；冲销溯源） }
         submittedAt: { type: string, format: date-time, nullable: true }
         policyPackId: { type: integer, format: int64, nullable: true }
 
@@ -2543,6 +2547,9 @@ components:
         description: { type: string }
         invoiceIds: { type: array, items: { type: integer, format: int64 } }
         attachmentIds: { type: array, items: { type: integer, format: int64 } }
+        travelStaffCategory: { type: string, nullable: true, description: 差旅人员类别（M1-a A3 TRAVEL 提交时与 travelCityTier 联合匹配标准；超标仅告警不拦截） }
+        travelCityTier: { type: string, nullable: true, description: 差旅城市类别 }
+        relatedLoanId: { type: integer, format: int64, nullable: true, description: 关联借款单 id（不存在/跨租户 → 40401） }
 
     ApprovalActionRequest:
       type: object

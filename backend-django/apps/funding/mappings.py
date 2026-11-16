@@ -113,6 +113,10 @@ def to_api_expense(e: FExpense) -> dict[str, Any]:
         "invoice_check": e.invoice_check_status,
         # M1-a A3/P98：差旅超标提示（warn-only，不拦截提交）
         "travelOverLimit": bool(e.travel_over_limit),
+        # 终审收口 Task 8：补差旅元数据出参（camelCase 对齐契约 03-F Expense；既有键 snake_case 为 pre-existing 债务不动）
+        "travelStaffCategory": e.travel_staff_category,
+        "travelCityTier": e.travel_city_tier,
+        "relatedLoanId": e.related_loan_id,
         "submitted_at": fmt_ts(e.submitted_at),
         "paid_at": fmt_ts(e.paid_at),
         "frozen_at": fmt_ts(e.frozen_at),

@@ -667,7 +667,7 @@ def _budget_line(project_id: int = 1, planned: str = "50000.00"):
 
 
 def _create_expense_via_api(c, **kw):
-    """POST /api/v1/expenses 走 create_expense（payload 键为 snake_case，对齐 Go 契约）。"""
+    """POST /api/v1/expenses 走 create_expense（既有键 snake_case；M1-a 差旅 4 字段 camelCase 对齐契约 03-F）。"""
     body = {
         "project_id": 1, "legal_entity_id": 1, "amount": "1000.00",
         "expense_type": "TRAVEL",
@@ -686,7 +686,7 @@ def test_expense_travel_over_limit_true(seed_auth):
     c = _c()
     r = _create_expense_via_api(
         c, budget_line_id=line.id, amount="500.00",
-        travel_staff_category="普通员工", travel_city_tier="一线城市",
+        travelStaffCategory="普通员工", travelCityTier="一线城市",
     )
     assert r.status_code == 200
     eid = r.json()["data"]["id"]
@@ -712,7 +712,7 @@ def test_expense_travel_within_limit_false(seed_auth):
     c = _c()
     r = _create_expense_via_api(
         c, budget_line_id=line.id, amount="400.00",
-        travel_staff_category="普通员工", travel_city_tier="一线城市",
+        travelStaffCategory="普通员工", travelCityTier="一线城市",
     )
     eid = r.json()["data"]["id"]
     r = c.post(f"/api/v1/expenses/{eid}/submit", **bearer(2, ["R-STAFF"]))
@@ -728,7 +728,7 @@ def test_expense_travel_no_matching_standard_false(seed_auth):
     c = _c()
     r = _create_expense_via_api(
         c, budget_line_id=line.id, amount="99999.00",
-        travel_staff_category="普通员工", travel_city_tier="一线城市",
+        travelStaffCategory="普通员工", travelCityTier="一线城市",
     )
     eid = r.json()["data"]["id"]
     r = c.post(f"/api/v1/expenses/{eid}/submit", **bearer(2, ["R-STAFF"]))
@@ -744,7 +744,7 @@ def test_expense_non_travel_skips_standard_check(seed_auth):
     c = _c()
     r = _create_expense_via_api(
         c, budget_line_id=line.id, amount="50000.00", expense_type="EQUIPMENT",
-        travel_staff_category="普通员工", travel_city_tier="一线城市",
+        travelStaffCategory="普通员工", travelCityTier="一线城市",
     )
     eid = r.json()["data"]["id"]
     r = c.post(f"/api/v1/expenses/{eid}/submit", **bearer(2, ["R-STAFF"]))
@@ -758,12 +758,12 @@ def test_expense_create_related_loan_id(seed_auth):
     c = _c()
     loan = FLoan.objects.create(tenant_id=1, creator_id=1, project_id=1, legal_entity_id=1,
                                 applicant_user_id=1, amount=Decimal("800.00"), status="PAID")
-    r = _create_expense_via_api(c, related_loan_id=loan.id)
+    r = _create_expense_via_api(c, relatedLoanId=loan.id)
     assert r.status_code == 200
     eid = r.json()["data"]["id"]
     assert FExpense.objects.get(pk=eid).related_loan_id == loan.id
     # 借款不存在（他租/已删/编号错）→ 40401
-    r = _create_expense_via_api(c, related_loan_id=999999)
+    r = _create_expense_via_api(c, relatedLoanId=999999)
     assert r.status_code == 404
     assert r.json()["code"] == 40401
 
