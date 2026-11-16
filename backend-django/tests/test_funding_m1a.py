@@ -4,8 +4,10 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.test import Client
+from django.test.utils import override_settings
 from django.utils import timezone as dj_tz
 
+from core.models import SysApprovalLog
 from apps.funding.models import FBudget, FBudgetLine, FExpense, FInvoice, FLoan, FSubject, FTravelStandard
 from tests.conftest import bearer
 
@@ -762,5 +764,393 @@ def test_expense_create_related_loan_id(seed_auth):
     assert FExpense.objects.get(pk=eid).related_loan_id == loan.id
     # 借款不存在（他租/已删/编号错）→ 40401
     r = _create_expense_via_api(c, related_loan_id=999999)
+    assert r.status_code == 404
+    assert r.json()["code"] == 40401
+
+
+# ---------------------------------------------------------------------------
+# Task 9：借款全生命周期（POST /loans → submit → approve → pay → write-off/refund）
+# ---------------------------------------------------------------------------
+
+_MONEY_100K = "100000.00"
+
+
+def _loan_body(**kw):
+    body = {"project_id": 1, "amount": _MONEY_100K, "reason": "出差备用金"}
+    body.update(kw)
+    return body
+
+
+def _create_loan_via_api(c, **kw):
+    """POST /api/v1/loans（payload 键为 snake_case，对齐既有 expenses/invoices 先例）。"""
+    return c.post("/api/v1/loans", data=json.dumps(_loan_body(**kw)),
+                  content_type="application/json", **bearer(2, ["R-MANAGER", "R-STAFF"]))
+
+
+def _loan_detail(cid):
+    """借款单详情断言（GET /loans/{id}：审批流水含 ledger 仅 APPROVE/REJECT/RETURN）。"""
+    c = _c()
+    r = c.get(f"/api/v1/loans/{cid}", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 200
+    return r.json()["data"]
+
+
+def _approvals_of(cid):
+    return _loan_detail(cid)["approvals"]
+
+
+# ① 创建借款：DRAFT + 取号 LOAN-年-序 + legal_entity 从项目派生
+def test_loan_create_draft_and_code(seed_auth):
+    c = _c()
+    r = _create_loan_via_api(c)
+    assert r.status_code == 200
+    loan = r.json()["data"]
+    assert loan["status"] == "DRAFT"
+    year = dj_tz.localdate().year
+    assert loan["code"] == f"LOAN-{year}-{loan['id']:06d}"
+    assert loan["amount"] == _MONEY_100K
+    assert loan["writeOffAmount"] == "0.00"
+    assert loan["refundedAmount"] == "0.00"
+    assert loan["remainingForWriteoff"] == _MONEY_100K
+    row = FLoan.objects.get(pk=loan["id"])
+    # legal_entity 从关联项目 EProject.legal_entity_id 派生（缺省项目无值 → 默认 1）
+    assert row.legal_entity_id == 1
+    assert row.budget_line_id is None
+    # 金额非法 → 40001（不静默归 0）
+    r = _create_loan_via_api(c, amount="abc")
+    assert r.status_code == 400
+    assert r.json()["code"] == 40001
+    # 金额非正 → 40001
+    r = _create_loan_via_api(c, amount="0")
+    assert r.status_code == 400
+    assert r.json()["code"] == 40001
+
+
+# ② 提交：预算制冻结 / 余额不足 40902 / 包干制不冻结 / 非 DRAFT 40901 / 详情含流水
+def test_loan_submit_freeze_and_conflict(seed_auth):
+    c = _c()
+    line = _budget_line(planned="800.00")
+    _create_loan_via_api(c, amount="500.00", budget_line_id=line.id)
+    cid = FLoan.objects.order_by("-id").first().id
+    r = c.post(f"/api/v1/loans/{cid}/submit", **bearer(2, ["R-MANAGER"]))
+    assert r.status_code == 200
+    loan = r.json()["data"]
+    assert loan["status"] == "SUBMITTED"
+    assert loan["frozenAt"] is not None
+    assert loan["submittedAt"] is not None
+    line.refresh_from_db()
+    assert line.amount_frozen == Decimal("500.00")
+    # 提交事件落 SysApprovalLog（SUBMIT）；契约审批流水仅展示审批动作（APPROVE/REJECT/RETURN）
+    assert len(_approvals_of(cid)) == 0
+    assert SysApprovalLog.objects.filter(
+        tenant_id=1, biz_type="LOAN", biz_id=cid, action="SUBMIT").count() == 1
+    # 再次提交 → 40901
+    r = c.post(f"/api/v1/loans/{cid}/submit", **bearer(2, ["R-MANAGER"]))
+    assert r.status_code == 409
+    assert r.json()["code"] == 40901
+    # 余额不足 → 40902
+    _create_loan_via_api(c, amount="800.00", budget_line_id=line.id)
+    cid2 = FLoan.objects.order_by("-id").first().id
+    r = c.post(f"/api/v1/loans/{cid2}/submit", **bearer(2, ["R-MANAGER"]))
+    assert r.status_code == 409
+    assert r.json()["code"] == 40902
+    # 包干制（无 budget_line_id）：提交不冻结
+    _create_loan_via_api(c, amount="300.00")
+    cid3 = FLoan.objects.order_by("-id").first().id
+    r = c.post(f"/api/v1/loans/{cid3}/submit", **bearer(2, ["R-MANAGER"]))
+    assert r.status_code == 200
+    line.refresh_from_db()
+    assert line.amount_frozen == Decimal("500.00")
+    # 预算行不存在（悬空 budget_line_id）→ 40401
+    _create_loan_via_api(c, amount="100.00", budget_line_id=999999)
+    cid4 = FLoan.objects.order_by("-id").first().id
+    r = c.post(f"/api/v1/loans/{cid4}/submit", **bearer(2, ["R-MANAGER"]))
+    assert r.status_code == 404
+    assert r.json()["code"] == 40401
+
+
+# ③ 审批链：小额 [R-MANAGER,R-FINANCE] / ≥10w 前插 R-LEADER / 错误角色 40301
+#    / reject、return 释放冻结 / 两步开关前插 R-LEADER / 非法 action 40001
+def test_loan_approve_chain_steps(seed_auth):
+    c = _c()
+    line = _budget_line(planned="500.00")
+    _create_loan_via_api(c, amount="500.00", budget_line_id=line.id)
+    cid = FLoan.objects.order_by("-id").first().id
+    c.post(f"/api/v1/loans/{cid}/submit", **bearer(2, ["R-MANAGER"]))
+    line.refresh_from_db()
+    assert line.amount_frozen == Decimal("500.00")
+    # 非审批角色 → 40301
+    r = c.post(f"/api/v1/loans/{cid}/approve", data=json.dumps({"action": "approve"}),
+               content_type="application/json", **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 403
+    assert r.json()["code"] == 40301
+    # 非法 action → 40001
+    r = c.post(f"/api/v1/loans/{cid}/approve", data=json.dumps({"action": "foo"}),
+               content_type="application/json", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 400
+    assert r.json()["code"] == 40001
+    # 第一步 R-MANAGER approve → 仍 SUBMITTED（未走完）
+    r = c.post(f"/api/v1/loans/{cid}/approve", data=json.dumps({"action": "approve", "comment": "ok"}),
+               content_type="application/json", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "SUBMITTED"
+    aprs = _approvals_of(cid)
+    assert [a["action"] for a in aprs] == ["APPROVE"]
+    assert aprs[0]["role"] == "R-MANAGER"
+    line.refresh_from_db()
+    assert line.amount_frozen == Decimal("500.00")
+    # 第二步 R-FINANCE approve → 走完 APPROVED（借款资金结转在 pay，不在 approve）
+    r = c.post(f"/api/v1/loans/{cid}/approve", data=json.dumps({"action": "approve"}),
+               content_type="application/json", **bearer(1, ["R-FINANCE", "R-MANAGER"]))
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "APPROVED"
+    aprs = _approvals_of(cid)
+    assert [a["action"] for a in aprs] == ["APPROVE", "APPROVE"]
+    assert aprs[1]["role"] == "R-FINANCE"
+    assert _loan_detail(cid)["remainingForWriteoff"] == "500.00"
+    # 终态后再审批 → 40901
+    r = c.post(f"/api/v1/loans/{cid}/approve", data=json.dumps({"action": "approve"}),
+               content_type="application/json", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 409
+    assert r.json()["code"] == 40901
+
+
+def test_loan_approve_big_amount_inserts_leader_first(seed_auth):
+    c = _c()
+    _create_loan_via_api(c, amount="100000.00")
+    cid = FLoan.objects.order_by("-id").first().id
+    c.post(f"/api/v1/loans/{cid}/submit", **bearer(2, ["R-MANAGER"]))
+    # ≥100000：链首是 R-LEADER，R-MANAGER 不在第一步 → 40301
+    r = c.post(f"/api/v1/loans/{cid}/approve", data=json.dumps({"action": "approve"}),
+               content_type="application/json", **bearer(1, ["R-MANAGER", "R-FINANCE"]))
+    assert r.status_code == 403
+    assert r.json()["code"] == 40301
+    # R-LEADER（带 R-MANAGER 过 Casbin）approve 第一步
+    r = c.post(f"/api/v1/loans/{cid}/approve", data=json.dumps({"action": "approve"}),
+               content_type="application/json", **bearer(1, ["R-MANAGER", "R-LEADER"]))
+    assert r.status_code == 200
+    aprs = _approvals_of(cid)
+    assert aprs[-1]["role"] == "R-LEADER"
+    # 第二步 R-MANAGER
+    r = c.post(f"/api/v1/loans/{cid}/approve", data=json.dumps({"action": "approve"}),
+               content_type="application/json", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "SUBMITTED"
+    # 第三步 R-FINANCE → APPROVED
+    r = c.post(f"/api/v1/loans/{cid}/approve", data=json.dumps({"action": "approve"}),
+               content_type="application/json", **bearer(1, ["R-MANAGER", "R-FINANCE"]))
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "APPROVED"
+    assert [a["role"] for a in _approvals_of(cid)] == ["R-LEADER", "R-MANAGER", "R-FINANCE"]
+
+
+def test_loan_approve_reject_releases_freeze(seed_auth):
+    c = _c()
+    line = _budget_line(planned="500.00")
+    _create_loan_via_api(c, amount="400.00", budget_line_id=line.id)
+    cid = FLoan.objects.order_by("-id").first().id
+    c.post(f"/api/v1/loans/{cid}/submit", **bearer(2, ["R-MANAGER"]))
+    r = c.post(f"/api/v1/loans/{cid}/approve", data=json.dumps({"action": "reject", "comment": "不符"}),
+               content_type="application/json", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 200
+    loan = r.json()["data"]
+    assert loan["status"] == "REJECTED"
+    assert loan["frozenAt"] is None
+    line.refresh_from_db()
+    assert line.amount_frozen == Decimal("0.00")
+    assert _approvals_of(cid)[-1]["action"] == "REJECT"
+
+
+def test_loan_approve_return_releases_freeze(seed_auth):
+    c = _c()
+    line = _budget_line(planned="500.00")
+    _create_loan_via_api(c, amount="400.00", budget_line_id=line.id)
+    cid = FLoan.objects.order_by("-id").first().id
+    c.post(f"/api/v1/loans/{cid}/submit", **bearer(2, ["R-MANAGER"]))
+    r = c.post(f"/api/v1/loans/{cid}/approve", data=json.dumps({"action": "return", "comment": "退回补材料"}),
+               content_type="application/json", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 200
+    loan = r.json()["data"]
+    assert loan["status"] == "RETURNED"
+    line.refresh_from_db()
+    assert line.amount_frozen == Decimal("0.00")
+    assert _approvals_of(cid)[-1]["action"] == "RETURN"
+
+
+def test_loan_approve_twostep_flag_inserts_leader(seed_auth):
+    c = _c()
+    _create_loan_via_api(c, amount="500.00")
+    cid = FLoan.objects.order_by("-id").first().id
+    c.post(f"/api/v1/loans/{cid}/submit", **bearer(2, ["R-MANAGER"]))
+    with override_settings(APPROVAL_TWOSTEP=True):
+        r = c.post(f"/api/v1/loans/{cid}/approve", data=json.dumps({"action": "approve"}),
+                   content_type="application/json", **bearer(1, ["R-MANAGER", "R-LEADER"]))
+    assert r.status_code == 200
+    assert _approvals_of(cid)[-1]["role"] == "R-LEADER"
+
+
+# ④ 付款：仅 APPROVED→PAID；frozen→used 结转；paid_at 落；R-FINANCE 硬拦
+def test_loan_pay_settlement(seed_auth):
+    c = _c()
+    line = _budget_line(planned="500.00")
+    _create_loan_via_api(c, amount="500.00", budget_line_id=line.id)
+    cid = FLoan.objects.order_by("-id").first().id
+    c.post(f"/api/v1/loans/{cid}/submit", **bearer(2, ["R-MANAGER"]))
+    # 非 R-FINANCE（即使 R-MANAGER）→ 40301（Preflight Ruling 8）
+    r = c.post(f"/api/v1/loans/{cid}/pay", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 403
+    assert r.json()["code"] == 40301
+    # 非 APPROVED → 40901
+    r = c.post(f"/api/v1/loans/{cid}/pay", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 409
+    assert r.json()["code"] == 40901
+    # 两步审批到 APPROVED
+    c.post(f"/api/v1/loans/{cid}/approve", data=json.dumps({"action": "approve"}),
+           content_type="application/json", **bearer(1, ["R-MANAGER"]))
+    c.post(f"/api/v1/loans/{cid}/approve", data=json.dumps({"action": "approve"}),
+           content_type="application/json", **bearer(1, ["R-MANAGER", "R-FINANCE"]))
+    r = c.post(f"/api/v1/loans/{cid}/pay", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 200
+    loan = r.json()["data"]
+    assert loan["status"] == "PAID"
+    assert loan["paidAt"] is not None
+    line.refresh_from_db()
+    assert line.amount_frozen == Decimal("0.00")
+    assert line.amount_used == Decimal("500.00")
+
+
+# ⑤ 冲销：expense 须 APPROVED 且关联本单；累加；超 remaining 40902；补齐 CLOSED；防双计
+def test_loan_write_off(seed_auth):
+    c = _c()
+    _create_loan_via_api(c, amount="800.00")
+    cid = FLoan.objects.order_by("-id").first().id
+    c.post(f"/api/v1/loans/{cid}/submit", **bearer(2, ["R-MANAGER"]))
+    c.post(f"/api/v1/loans/{cid}/approve", data=json.dumps({"action": "approve"}),
+           content_type="application/json", **bearer(1, ["R-MANAGER"]))
+    c.post(f"/api/v1/loans/{cid}/approve", data=json.dumps({"action": "approve"}),
+           content_type="application/json", **bearer(1, ["R-MANAGER", "R-FINANCE"]))
+    c.post(f"/api/v1/loans/{cid}/pay", **bearer(1, ["R-FINANCE"]))
+    exp = _expense(amount=Decimal("300.00"), status="APPROVED", related_loan_id=cid)
+    # 未关联本单的报销 → 40901
+    other = _expense(amount=Decimal("100.00"), status="APPROVED")
+    r = c.post(f"/api/v1/loans/{cid}/write-off", data=json.dumps({"expense_id": other.id}),
+               content_type="application/json", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 409
+    assert r.json()["code"] == 40901
+    # 未 APPROVED 的报销 → 40901
+    draft = _expense(amount=Decimal("100.00"), related_loan_id=cid)
+    r = c.post(f"/api/v1/loans/{cid}/write-off", data=json.dumps({"expense_id": draft.id}),
+               content_type="application/json", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 409
+    assert r.json()["code"] == 40901
+    # 正常冲销 300
+    r = c.post(f"/api/v1/loans/{cid}/write-off", data=json.dumps({"expense_id": exp.id}),
+               content_type="application/json", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 200
+    loan = r.json()["data"]
+    assert loan["writeOffAmount"] == "300.00"
+    assert loan["refundedAmount"] == "0.00"
+    assert loan["remainingForWriteoff"] == "500.00"
+    assert loan["status"] == "PAID"
+    # 同一报销重复冲销 → 40901（防双计）
+    r = c.post(f"/api/v1/loans/{cid}/write-off", data=json.dumps({"expense_id": exp.id}),
+               content_type="application/json", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 409
+    assert r.json()["code"] == 40901
+    # 第二笔冲销 250
+    exp2 = _expense(amount=Decimal("250.00"), status="APPROVED", related_loan_id=cid)
+    r = c.post(f"/api/v1/loans/{cid}/write-off", data=json.dumps({"expense_id": exp2.id}),
+               content_type="application/json", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 200
+    loan = r.json()["data"]
+    assert loan["writeOffAmount"] == "550.00"
+    assert loan["status"] == "PAID"
+    # 超额冲销（300+250+300=850 > 800）→ 40902
+    exp3 = _expense(amount=Decimal("300.00"), status="APPROVED", related_loan_id=cid)
+    r = c.post(f"/api/v1/loans/{cid}/write-off", data=json.dumps({"expense_id": exp3.id}),
+               content_type="application/json", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 409
+    assert r.json()["code"] == 40902
+    # 补齐冲销 250（=800）→ CLOSED
+    exp4 = _expense(amount=Decimal("250.00"), status="APPROVED", related_loan_id=cid)
+    r = c.post(f"/api/v1/loans/{cid}/write-off", data=json.dumps({"expense_id": exp4.id}),
+               content_type="application/json", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 200
+    loan = r.json()["data"]
+    assert loan["writeOffAmount"] == "800.00"
+    assert loan["status"] == "CLOSED"
+    # CLOSED 后再冲销 → 40901
+    exp5 = _expense(amount=Decimal("50.00"), status="APPROVED", related_loan_id=cid)
+    r = c.post(f"/api/v1/loans/{cid}/write-off", data=json.dumps({"expense_id": exp5.id}),
+               content_type="application/json", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 409
+    assert r.json()["code"] == 40901
+
+
+# ⑥ 退款：仅 PAID；超 remaining 40901（契约明示）；补齐 CLOSED
+def test_loan_refund(seed_auth):
+    c = _c()
+    _create_loan_via_api(c, amount="800.00")
+    cid = FLoan.objects.order_by("-id").first().id
+    c.post(f"/api/v1/loans/{cid}/submit", **bearer(2, ["R-MANAGER"]))
+    c.post(f"/api/v1/loans/{cid}/approve", data=json.dumps({"action": "approve"}),
+           content_type="application/json", **bearer(1, ["R-MANAGER"]))
+    c.post(f"/api/v1/loans/{cid}/approve", data=json.dumps({"action": "approve"}),
+           content_type="application/json", **bearer(1, ["R-MANAGER", "R-FINANCE"]))
+    c.post(f"/api/v1/loans/{cid}/pay", **bearer(1, ["R-FINANCE"]))
+    # 非 PAID 的单子不可退款
+    _create_loan_via_api(c, amount="100.00")
+    cid2 = FLoan.objects.order_by("-id").first().id
+    r = c.post(f"/api/v1/loans/{cid2}/refund", data=json.dumps({"amount": "50.00"}),
+               content_type="application/json", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 409
+    assert r.json()["code"] == 40901
+    # 超额退款 1000 > 800 → 40901
+    r = c.post(f"/api/v1/loans/{cid}/refund", data=json.dumps({"amount": "1000.00"}),
+               content_type="application/json", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 409
+    assert r.json()["code"] == 40901
+    # 非法金额 → 40001
+    r = c.post(f"/api/v1/loans/{cid}/refund", data=json.dumps({"amount": "abc"}),
+               content_type="application/json", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 400
+    assert r.json()["code"] == 40001
+    # 部分退款 500
+    r = c.post(f"/api/v1/loans/{cid}/refund", data=json.dumps({"amount": "500.00"}),
+               content_type="application/json", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 200
+    loan = r.json()["data"]
+    assert loan["refundedAmount"] == "500.00"
+    assert loan["status"] == "PAID"
+    # 补齐退款 300 → CLOSED
+    r = c.post(f"/api/v1/loans/{cid}/refund", data=json.dumps({"amount": "300.00"}),
+               content_type="application/json", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 200
+    loan = r.json()["data"]
+    assert loan["refundedAmount"] == "800.00"
+    assert loan["status"] == "CLOSED"
+
+
+# 列表：分页 + status/projectId 过滤（camelCase query，对齐契约）
+def test_loan_list_filter(seed_auth):
+    c = _c()
+    _create_loan_via_api(c, amount="100.00")
+    _create_loan_via_api(c, amount="200.00")
+    r = c.get("/api/v1/loans", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["total"] >= 2
+    assert len(data["list"]) >= 2
+    cid = data["list"][0]["id"]
+    r = c.get("/api/v1/loans", data={"status": "DRAFT", "projectId": 1}, **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 200
+    for it in r.json()["data"]["list"]:
+        assert it["status"] == "DRAFT"
+
+
+# 详情 404（他租/不存在）→ 40401
+def test_loan_get_404(seed_auth):
+    c = _c()
+    r = c.get("/api/v1/loans/999999", **bearer(1, ["R-MANAGER"]))
     assert r.status_code == 404
     assert r.json()["code"] == 40401

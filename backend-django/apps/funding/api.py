@@ -25,6 +25,7 @@ from django.utils import timezone as dj_tz
 
 from apps.funding.mappings import (
     code_of,
+    fmt_ts,
     num2,
     num4,
     to_api_approval,
@@ -33,6 +34,7 @@ from apps.funding.mappings import (
     to_api_expense,
     to_api_income,
     to_api_invoice,
+    to_api_loan,
     to_api_line,
     to_api_outward,
     to_api_subject,
@@ -1600,3 +1602,282 @@ def invoice_ocr(request: HttpRequest):
     # 无 text 时「ocr-text-empty」与引擎原因重复，噪音过滤。
     resp["ocrWarnings"] = reasons + (warnings if text else [])
     return ok(request, resp)
+
+
+# ---------------------------------------------------------------------------
+# 借款全生命周期（F-13 / Task 9 / 契约 /loans :1094-1341）
+# ---------------------------------------------------------------------------
+
+# 借款审批链基准步骤（契约 /approve :1209）：金额 <100000 → [R-MANAGER, R-FINANCE]；
+# ≥100000 或租户开启两步审批（core.approval.twostep_enabled）→ 前插 R-LEADER。
+_LOAN_LEADER_THRESHOLD = Decimal("100000.00")
+
+
+def _loan_steps(amount: Decimal) -> list[str]:
+    steps = ["R-MANAGER", "R-FINANCE"]
+    if amount >= _LOAN_LEADER_THRESHOLD or approval.twostep_enabled():
+        steps.insert(0, "R-LEADER")
+    return steps
+
+
+def _get_loan_or_404(tenant_id: int, loan_id: int) -> FLoan:
+    loan = FLoan.objects.filter(id=loan_id, tenant_id=tenant_id, deleted=0).first()
+    if loan is None:
+        raise ApiError(404, CODE_NOT_FOUND, "借款单不存在")
+    return loan
+
+
+def _loan_approvals(tenant_id: int, loan_id: int) -> list[dict]:
+    """审批流水：SysApprovalLog(biz_type=LOAN) 仅 APPROVE/REJECT/RETURN 动作
+    （SUBMIT 是提交事件不是审批动作，对齐报销 FExpenseApproval 语义）。
+    SysApprovalLog 无现成 mapper（to_api_approval 仅收 FExpenseApproval，且恰 3 文件
+    约束不改 mappings.py），在此按其字段自建 dict：键对齐 to_api_approval 范式，
+    expense_id 处放 loan_id（借款流水归属借款单）。"""
+    out: list[dict] = []
+    for l in approval.list_logs(tenant_id, "LOAN", loan_id):
+        if l.action not in ("APPROVE", "REJECT", "RETURN"):
+            continue
+        out.append({
+            "id": l.id, "expense_id": loan_id, "step_order": l.step,
+            "approver_user_id": l.actor_id, "role": l.actor_role,
+            "action": l.action, "comment": l.comment,
+            "status": l.action, "acted_at": fmt_ts(l.acted_at),
+        })
+    return out
+
+
+def create_loan(request: HttpRequest):
+    """创建借款（契约 :1094）：必填 projectId、amount>0，创建即 DRAFT 并取号。
+
+    legal_entity_id 派生依据（Task 3 裁定）：FLoan.legal_entity_id NOT NULL 无 default
+    （apps/funding/models.py:357），而契约 LoanCreateRequest 无 legalEntityId 字段（不改契约），
+    故从关联项目 EProject.legal_entity_id（apps/project/models.py:23，default=1）派生；
+    项目缺失/无值时落 default=1（对齐 import_bank_flow 的 legal_entity_id 先例 api.py:456）。
+    """
+    d = domain_from(request)
+    b = read_json(request)
+    project_id = b.get("project_id") or b.get("projectId")
+    amount = _money(b.get("amount"))
+    if not project_id or amount is None or amount <= 0:
+        raise ApiError(400, CODE_BAD_REQUEST, "参数错误（projectId、amount>0 必填）")
+    project = EProject.objects.filter(id=project_id, tenant_id=d.tenant_id, deleted=0).first()
+    loan = FLoan.objects.create(
+        tenant_id=d.tenant_id,
+        creator_id=d.user_id,
+        project_id=project_id,
+        legal_entity_id=project.legal_entity_id if project else 1,
+        applicant_user_id=d.user_id,
+        amount=_d2(amount),
+        reason=b.get("reason"),
+        budget_line_id=b.get("budget_line_id") or b.get("budgetLineId"),
+    )
+    loan.code = code_of("LOAN", loan.id)
+    loan.save(update_fields=["code", "updated_at"])
+    return ok(request, to_api_loan(loan))
+
+
+def list_loans(request: HttpRequest):
+    """分页查询借款单（契约 :1118）：page/size/status/projectId 过滤。"""
+    d = domain_from(request)
+    page, size, limit, offset = page_args(request)
+    qs = FLoan.objects.filter(tenant_id=d.tenant_id, deleted=0)
+    if request.GET.get("status"):
+        qs = qs.filter(status=request.GET["status"])
+    if request.GET.get("projectId"):
+        qs = qs.filter(project_id=request.GET["projectId"])
+    total = qs.count()
+    rows = qs.order_by("-id")[offset : offset + limit]
+    return ok(request, {"list": [to_api_loan(l) for l in rows], "total": total, "page": page, "size": size})
+
+
+def get_loan(request: HttpRequest, id: int):
+    """借款单详情（契约 :1153）：含审批流水（SysApprovalLog biz_type=LOAN）。"""
+    d = domain_from(request)
+    loan = _get_loan_or_404(d.tenant_id, id)
+    m = to_api_loan(loan)
+    m["approvals"] = _loan_approvals(d.tenant_id, loan.id)
+    return ok(request, m)
+
+
+def submit_loan(request: HttpRequest, id: int):
+    """提交借款（契约 :1176）：仅 DRAFT；预算制冻结 amount_frozen（40902）；
+    置 SUBMITTED + frozen_at=now；通知审批链首步。仿 submit_expense:544-592 事务链。"""
+    d = domain_from(request)
+    with transaction.atomic():
+        loan = FLoan.objects.filter(
+            id=id, tenant_id=d.tenant_id, deleted=0, status="DRAFT",
+        ).select_for_update().first()
+        if loan is None:
+            raise ApiError(409, CODE_CONFLICT, "仅 DRAFT 状态可提交")
+        if loan.budget_line_id:
+            # 预算制：锁定预算行并冻结（包干制跳过，语义与 submit_expense 一致）
+            line = FBudgetLine.objects.select_for_update().filter(
+                id=loan.budget_line_id, deleted=0).first()
+            if line is None:
+                raise ApiError(404, CODE_NOT_FOUND, "预算行不存在")
+            if line.remaining < loan.amount:
+                raise ApiError(409, CODE_CONFLICT_REF, "预算行可支余额不足，冻结失败")
+            line.amount_frozen = _d2(line.amount_frozen + loan.amount)
+            line.save(update_fields=["amount_frozen", "updated_at"])
+            loan.frozen_at = dj_tz.now()
+        loan.status = "SUBMITTED"
+        loan.submitted_at = dj_tz.now()
+        loan.modifier_id = d.user_id
+        loan.save()
+        # 提交事件落审批流水（step=0 / action=SUBMIT；流水仅展示 APPROVE/REJECT/RETURN）
+        approval.log(d.tenant_id, "LOAN", loan.id, 0, d.user_id, "", "SUBMIT")
+    steps = _loan_steps(loan.amount)
+    _notify_role(d.tenant_id, steps[0], "LOAN_APPROVAL",
+                 f"待审批：借款单 {loan.code or loan.id}",
+                 f"金额 {num2(loan.amount)} 元，请及时审批", f"loan/{loan.id}")
+    loan.refresh_from_db()
+    return ok(request, to_api_loan(loan))
+
+
+def approve_loan(request: HttpRequest, id: int):
+    """借款审批（契约 :1204）：action 小写枚举 approve/reject/return（区别于报销大写）。
+    steps 由金额/两步开关内存推导，进度=SysApprovalLog 已 APPROVE 条数；逐 step 校验角色
+    （R-ADMIN 可代审，对齐 _approve_one）；reject/return 释放冻结；走完 → APPROVED。
+    借款资金结转发生在 pay（区别于报销 approve 末步即转实扣）。"""
+    d = domain_from(request)
+    b = read_json(request)
+    raw = b.get("action")
+    if raw not in ("approve", "reject", "return"):
+        raise ApiError(400, CODE_BAD_REQUEST, "action 仅支持 approve/reject/return")
+    action = raw.upper()
+    loan = _get_loan_or_404(d.tenant_id, id)
+    if loan.status != "SUBMITTED":
+        raise ApiError(409, CODE_CONFLICT, "单据不在审批中状态")
+    steps = _loan_steps(loan.amount)
+    done = sum(1 for l in approval.list_logs(d.tenant_id, "LOAN", id)
+               if l.action == "APPROVE")
+    step_order = done + 1
+    if step_order > len(steps):
+        raise ApiError(409, CODE_CONFLICT, "单据不在审批中状态")
+    want = steps[done]
+    if want not in set(d.roles) and "R-ADMIN" not in set(d.roles):
+        raise ApiError(403, CODE_FORBIDDEN, f"当前步骤需要 {want} 角色")
+    final = step_order == len(steps)
+    new_status = "SUBMITTED"
+    if action == "APPROVE":
+        if final:
+            new_status = "APPROVED"
+    elif action == "REJECT":
+        new_status = "REJECTED"
+    else:  # RETURN
+        new_status = "RETURNED"
+    releases = action in ("REJECT", "RETURN")
+    with transaction.atomic():
+        if releases and loan.budget_line_id:
+            FBudgetLine.objects.filter(id=loan.budget_line_id, deleted=0).update(
+                amount_frozen=F("amount_frozen") - loan.amount,
+                amount_released=F("amount_released") + loan.amount,
+                updated_at=dj_tz.now())
+        updates = {"status": new_status, "modifier_id": d.user_id,
+                   "updated_at": dj_tz.now()}
+        if releases:
+            updates["frozen_at"] = None
+        FLoan.objects.filter(id=loan.id).update(**updates)
+        approval.log(d.tenant_id, "LOAN", loan.id, step_order, d.user_id, want,
+                     action, b.get("comment"))
+    if final and new_status == "APPROVED":
+        _notify_role(d.tenant_id, "R-FINANCE", "LOAN_APPROVAL",
+                     f"待放款：借款单 {loan.code or loan.id}",
+                     f"金额 {num2(loan.amount)} 元，审批已通过", f"loan/{loan.id}")
+    loan.refresh_from_db()
+    return ok(request, to_api_loan(loan))
+
+
+def pay_loan(request: HttpRequest, id: int):
+    """放款（契约 :1243）：仅 APPROVED → PAID；frozen→used 结转；paid_at=now。
+    Preflight Ruling 8：Casbin 已放行 R-MANAGER+R-FINANCE 的 POST /loans/*，
+    代码层必须收紧为仅 R-FINANCE（R-ADMIN 不代行放款，资金动作无代审）。"""
+    d = domain_from(request)
+    if not approval.has_role(d.roles, "R-FINANCE"):
+        raise ApiError(403, CODE_FORBIDDEN, "仅 R-FINANCE 可执行放款")
+    with transaction.atomic():
+        loan = FLoan.objects.filter(
+            id=id, tenant_id=d.tenant_id, deleted=0, status="APPROVED",
+        ).select_for_update().first()
+        if loan is None:
+            raise ApiError(409, CODE_CONFLICT, "仅 APPROVED 状态可放款")
+        if loan.budget_line_id:
+            FBudgetLine.objects.filter(id=loan.budget_line_id, deleted=0).update(
+                amount_frozen=F("amount_frozen") - loan.amount,
+                amount_used=F("amount_used") + loan.amount,
+                updated_at=dj_tz.now())
+        FLoan.objects.filter(id=loan.id).update(
+            status="PAID", paid_at=dj_tz.now(), modifier_id=d.user_id,
+            updated_at=dj_tz.now())
+        approval.log(d.tenant_id, "LOAN", loan.id, 0, d.user_id, "R-FINANCE", "PAY")
+    loan.refresh_from_db()
+    return ok(request, to_api_loan(loan))
+
+
+def write_off_loan(request: HttpRequest, id: int):
+    """冲销（契约 :1269）：仅 PAID 可冲销；expense 须 APPROVED 且 related_loan_id=本单
+    （违者 40901）；冲销额=报销单金额，累计超 remainingForWriteoff → 40902；
+    write_off_amount 补齐（≥amount）→ CLOSED。防双计：SysApprovalLog 记
+    WRITE_OFF(expense/{id})，重复报销单 40901（无台账表的保守实现，Task 12 可升级）。"""
+    d = domain_from(request)
+    b = read_json(request)
+    expense_id = b.get("expense_id") or b.get("expenseId")
+    if not expense_id:
+        raise ApiError(400, CODE_BAD_REQUEST, "参数错误（expenseId 必填）")
+    with transaction.atomic():
+        loan = FLoan.objects.filter(
+            id=id, tenant_id=d.tenant_id, deleted=0, status="PAID",
+        ).select_for_update().first()
+        if loan is None:
+            raise ApiError(409, CODE_CONFLICT, "仅 PAID 状态可冲销")
+        exp = FExpense.objects.filter(
+            id=expense_id, tenant_id=d.tenant_id, deleted=0).first()
+        if exp is None:
+            raise ApiError(404, CODE_NOT_FOUND, "报销单不存在")
+        if exp.status != "APPROVED" or exp.related_loan_id != loan.id:
+            raise ApiError(409, CODE_CONFLICT, "报销单须 APPROVED 且关联本借款")
+        if any(l.action == "WRITE_OFF" and l.comment == f"expense/{exp.id}"
+               for l in approval.list_logs(d.tenant_id, "LOAN", loan.id)):
+            raise ApiError(409, CODE_CONFLICT, "该报销单已冲销过本借款")
+        if loan.write_off_amount + exp.amount > loan.amount:
+            raise ApiError(409, CODE_CONFLICT_REF, "冲销金额累计超出借款余额")
+        FLoan.objects.filter(id=loan.id).update(
+            write_off_amount=F("write_off_amount") + exp.amount,
+            modifier_id=d.user_id, updated_at=dj_tz.now())
+        approval.log(d.tenant_id, "LOAN", loan.id, 0, d.user_id, "R-FINANCE",
+                     "WRITE_OFF", f"expense/{exp.id}")
+        loan.refresh_from_db()
+        if loan.write_off_amount >= loan.amount:
+            FLoan.objects.filter(id=loan.id).update(
+                status="CLOSED", updated_at=dj_tz.now())
+    loan.refresh_from_db()
+    return ok(request, to_api_loan(loan))
+
+
+def refund_loan(request: HttpRequest, id: int):
+    """退款（契约 :1307）：仅 PAID 可退款；body.amount ≤ remainingForWriteoff
+    （超出 40901，契约明示区别于冲销的 40902）；refunded_amount 补齐 → CLOSED。"""
+    d = domain_from(request)
+    b = read_json(request)
+    amount = _money(b.get("amount"))
+    if amount is None or amount <= 0:
+        raise ApiError(400, CODE_BAD_REQUEST, "参数错误（amount 须为正数金额）")
+    with transaction.atomic():
+        loan = FLoan.objects.filter(
+            id=id, tenant_id=d.tenant_id, deleted=0, status="PAID",
+        ).select_for_update().first()
+        if loan is None:
+            raise ApiError(409, CODE_CONFLICT, "仅 PAID 状态可退款")
+        if amount > loan.remaining_for_writeoff:
+            raise ApiError(409, CODE_CONFLICT, "退款金额超出可退余额")
+        FLoan.objects.filter(id=loan.id).update(
+            refunded_amount=F("refunded_amount") + amount,
+            modifier_id=d.user_id, updated_at=dj_tz.now())
+        approval.log(d.tenant_id, "LOAN", loan.id, 0, d.user_id, "R-FINANCE",
+                     "REFUND", f"amount/{_d2(amount)}")
+        loan.refresh_from_db()
+        if loan.refunded_amount >= loan.amount:
+            FLoan.objects.filter(id=loan.id).update(
+                status="CLOSED", updated_at=dj_tz.now())
+    loan.refresh_from_db()
+    return ok(request, to_api_loan(loan))

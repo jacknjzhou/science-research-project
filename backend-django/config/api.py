@@ -295,6 +295,18 @@ api.put("/invoices/{int:id}", auth=ark_auth, tags=["funding"])(funding_api.updat
 api.post("/invoices/{int:id}/bind", auth=ark_auth, tags=["funding"])(funding_api.bind_invoice)
 api.post("/invoices/{int:id}/void", auth=ark_auth, tags=["funding"])(funding_api.void_invoice)
 
+# 借款全生命周期（Task 9 / 契约 /loans）：注册顺序纪律同发票组——组内如有静态段
+# （如 /loans/ocr）必须先于动态段注册；动态段统一用 ninja 类型化 {int:id}（正则 [0-9]+），
+# 防裸 {id} 的 [^/]+ 吞掉静态段/兄弟路径。
+api.get("/loans", auth=ark_auth, tags=["funding"])(funding_api.list_loans)
+api.post("/loans", auth=ark_auth, tags=["funding"])(funding_api.create_loan)
+api.get("/loans/{int:id}", auth=ark_auth, tags=["funding"])(funding_api.get_loan)
+api.post("/loans/{int:id}/submit", auth=ark_auth, tags=["funding"])(funding_api.submit_loan)
+api.post("/loans/{int:id}/approve", auth=ark_auth, tags=["funding"])(funding_api.approve_loan)
+api.post("/loans/{int:id}/pay", auth=ark_auth, tags=["funding"])(funding_api.pay_loan)
+api.post("/loans/{int:id}/write-off", auth=ark_auth, tags=["funding"])(funding_api.write_off_loan)
+api.post("/loans/{int:id}/refund", auth=ark_auth, tags=["funding"])(funding_api.refund_loan)
+
 # ==================== Phase 3：R/N/V/O/M/D 域 ====================
 from apps.output import api as output_api
 from apps.expertreview import api as expertreview_api
