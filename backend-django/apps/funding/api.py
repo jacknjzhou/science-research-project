@@ -1446,3 +1446,136 @@ def void_invoice(request: HttpRequest, id: int):
             inv.status = "VOID"
             inv.save(update_fields=["status", "updated_at"])
     return ok(request, to_api_invoice(inv))
+
+
+# ---------------------------------------------------------------------------
+# 发票 OCR 三级回落（A1/F-08，Task 7）
+# ---------------------------------------------------------------------------
+OCR_DONE_FLOOR = Decimal("0.85")  # 置信度 ≥0.85 → OCR_DONE（契约规定）
+
+
+def _normalize_ocr_fields(raw: dict) -> dict:
+    """LLM/规则产出 → 契约字段（camelCase、金额两位小数字符串）。只采纳白名单键。"""
+    from core.invoice_ocr import FIELD_WEIGHTS
+
+    allowed = set(FIELD_WEIGHTS) | {"ocrConfidence"}
+    out: dict[str, str] = {}
+    for k, v in (raw or {}).items():
+        if k not in allowed or v in (None, ""):
+            continue
+        s = str(v).strip()
+        if k in ("amountExclTax", "taxAmount", "totalAmount"):
+            try:
+                s = str(Decimal(s.replace(",", "")).quantize(Decimal("0.01")))
+            except Exception:
+                continue
+        elif k == "issueDate" and s:
+            d = _parse_date(s)
+            if d is None:
+                continue
+            s = d.isoformat()
+        out[k] = s
+    return out
+
+
+def _llm_invoice_fields(text: str) -> tuple[dict, list[str]]:
+    """OCR 一级回落：LLM 抽取。返回 (fields, reasons)。未配置/失败 → 空字段+原因。"""
+    from django.conf import settings
+
+    reasons: list[str] = []
+    if not settings.LLM_BASE_URL:
+        return {}, ["ocr-engine-unavailable"] if not text else []
+    system = ('你是发票 OCR 信息抽取助手。只输出一个 JSON 对象，'
+              '格式 {"invoiceType":"GENERAL|SPECIAL|ELECTRONIC|ITINERARY",'
+              '"number":"...","invoiceCode":"...","sellerName":"...","sellerTaxId":"...",'
+              '"buyerName":"...","buyerTaxId":"...","amountExclTax":"0.00",'
+              '"taxAmount":"0.00","totalAmount":"0.00","issueDate":"YYYY-MM-DD"}，'
+              '金额为两位小数字符串，未识别的键输出 null，不要输出其它文字。')
+    try:
+        from core.llm import chat_json
+
+        raw = chat_json(system, text or "")
+        return _normalize_ocr_fields(raw), []
+    except Exception as exc:
+        return {}, [f"llm-failed：{exc}"]
+
+
+def invoice_ocr(request: HttpRequest):
+    """POST /invoices/ocr：LLM → 规则 → 降级 三级回落（HTTP 200 恒定，AI 产出仅建议）。
+
+    - 双不可用（无 LLM 且无 text）→ 降级 DRAFT 骨架，reasons=["ocr-engine-unavailable"]；
+    - 解析成功 conf≥0.85 → OCR_DONE，字段落库；否则 DRAFT；
+    - is_duplicated 同手工新建规则（标记不拦截）。
+    """
+    d = domain_from(request)
+    b = read_json(request)
+    text = (b.get("text") or "").strip()
+    file_url = (b.get("fileUrl") or "").strip()
+    # fileUrl/text 均缺省也降级应答（契约 HTTP 200 恒定；test_contract_full_coverage 以 {} 打本端点）
+
+    with transaction.atomic():
+        inv = FInvoice(tenant_id=d.tenant_id, creator_id=d.user_id, status="DRAFT")
+        reasons: list[str] = []
+        warnings: list[str] = []
+        fields: dict[str, str] = {}
+        confidence = None
+
+        llm_fields, llm_reasons = _llm_invoice_fields(text)
+        reasons.extend(llm_reasons)
+        if llm_fields:
+            fields = llm_fields
+            # LLM 路径无独立自洽告警源，置 TBD 由规则回落补齐，这里直接沿用 LLM 结果
+            confidence = 0.8
+        else:
+            from core.invoice_ocr import parse_invoice_text
+
+            fields, conf_f, warnings = parse_invoice_text(text)
+            confidence = conf_f
+
+        has_fields = bool(fields)
+        if has_fields and confidence >= OCR_DONE_FLOOR:
+            inv.status = "OCR_DONE"
+        inv.number = fields.get("number") or ""
+        inv.invoice_code = fields.get("invoiceCode") or ""
+        it = fields.get("invoiceType")
+        if it in ("GENERAL", "SPECIAL", "ELECTRONIC", "ITINERARY"):
+            inv.invoice_type = it
+        inv.seller_name = fields.get("sellerName") or ""
+        inv.seller_tax_id = fields.get("sellerTaxId") or ""
+        inv.buyer_name = fields.get("buyerName") or ""
+        inv.buyer_tax_id = fields.get("buyerTaxId") or ""
+
+        def _dec_field(key: str) -> Decimal:
+            try:
+                return Decimal(fields[key])
+            except Exception:
+                return Decimal("0")
+
+        inv.amount_excl_tax = _dec_field("amountExclTax")
+        inv.tax_amount = _dec_field("taxAmount")
+        inv.total_amount = _dec_field("totalAmount")
+        if fields.get("issueDate"):
+            inv.issue_date = _parse_date(fields["issueDate"])
+        # 模型无 file_url 列，契约 Invoice 亦无 fileUrl 字段 —— 仅留存审计于 ocr_raw_json
+        inv.ocr_raw_json = {"fields": fields, "warnings": warnings, "reasons": reasons,
+                            "fileUrl": file_url or None}
+        if confidence is not None and confidence > 0:
+            inv.ocr_confidence = Decimal(str(confidence)).quantize(Decimal("0.0001"))
+        if not has_fields:
+            inv.remark = (inv.remark or "OCR 未能识别发票内容，请人工补录")
+        inv.save()
+        inv.code = code_of("INV", inv.id)
+        inv.save(update_fields=["code", "updated_at"])
+        # is_duplicated 同手工新建规则（Task 6 语义）：标记不拦截
+        inv.is_duplicated = _invoice_duplicated(
+            d.tenant_id, inv.number, inv.total_amount, inv.issue_date, exclude_id=inv.id)
+        if inv.is_duplicated:
+            inv.save(update_fields=["is_duplicated", "updated_at"])
+
+    resp = to_api_invoice(inv)
+    # 契约 InvoiceOcrResponse = Invoice + ocrWarnings；降级原因经 reasons 持久化在
+    # ocr_raw_json（模型内），不进响应体（契约无 ocrRawJson 字段）。
+    # ocrWarnings = 引擎侧原因（llm-failed/ocr-engine-unavailable）+ text 存在时的解析告警；
+    # 无 text 时「ocr-text-empty」与引擎原因重复，噪音过滤。
+    resp["ocrWarnings"] = reasons + (warnings if text else [])
+    return ok(request, resp)

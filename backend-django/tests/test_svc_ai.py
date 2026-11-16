@@ -150,3 +150,72 @@ def test_expense_pass_with_mocked_llm(client, monkeypatch):
     body = r.json()
     assert body["verdict"] == "PASS" and body["degraded"] is False
     assert body["confidence"] == 0.92
+
+
+# ---------------------------------------------------------------------------
+# 发票 OCR 网关（A1/F-08）：LLM → 规则 → 降级，HTTP 200 恒定，不写业务库
+# ---------------------------------------------------------------------------
+
+
+VAT_TEXT = (
+    "增值税电子普通发票\n"
+    "发票号码：12500000287102539401\n"
+    "发票代码：125002200281\n"
+    "开票日期：2026年11月01日\n"
+    "购买方名称：某研究院   纳税人识别号：12100000MB0P00888A\n"
+    "销售方名称：某某科技有限公司   纳税人识别号：91110000MA01T00X9B\n"
+    "金额合计￥900.00  税额合计￥100.00\n"
+    "价税合计（大写）壹仟元整（小写）￥1000.00"
+)
+
+
+def test_invoice_ocr_degrades_when_no_llm_no_text(client):
+    """仅 fileUrl、无 LLM → 降级骨架，HTTP 200 恒定（spec OCR 流程 5）。"""
+    r = client.post("/ai/invoice/ocr", json={"fileUrl": "https://f.example/inv.pdf"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["fields"] == {} and body["confidence"] == 0
+    assert "ocr-engine-unavailable" in body["reasons"]
+
+
+def test_invoice_ocr_rule_parse_without_llm(client):
+    """无 LLM、有 text → 规则引擎兜底抽出字段（与 Django 同源实现）。"""
+    r = client.post("/ai/invoice/ocr", json={"text": VAT_TEXT})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["fields"]["number"] == "12500000287102539401"
+    assert body["fields"]["totalAmount"] == "1000.00"
+    assert body["fields"]["issueDate"] == "2026-11-01"
+    assert body["warnings"] == []
+
+
+def test_invoice_ocr_llm_failure_falls_back_to_rules(dead_llm_client):
+    """LLM 已配置但上游不可达 → chat_json None → 回落规则解析。"""
+    r = dead_llm_client.post("/ai/invoice/ocr", json={"text": VAT_TEXT})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["fields"]["number"] == "12500000287102539401"
+    assert body["fields"]["amountExclTax"] == "900.00"
+
+
+def test_invoice_ocr_empty_body_is_200(client):
+    r = client.post("/ai/invoice/ocr", json={})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["fields"] == {} and body["confidence"] == 0
+    assert body["reasons"]
+
+
+def test_invoice_ocr_never_imports_django():
+    """svc_ai/main.py 不得 import Django（AI 微服务边界：不直连业务库）。"""
+    import ast
+    import os
+    src = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "svc_ai", "main.py")
+    tree = ast.parse(open(src, encoding="utf-8").read())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            assert not any(a.name.startswith("django") for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            mod = node.module or ""
+            assert not mod.startswith("django")

@@ -284,6 +284,9 @@ api.delete(
 # —— F 发票（M1-a A1）——（注意：静态路由 /invoices/ocr 由 Task 7 注册，须先于 {id} 动态路由）
 api.get("/invoices", auth=ark_auth, tags=["funding"])(funding_api.list_invoices)
 api.post("/invoices", auth=ark_auth, tags=["funding"])(funding_api.create_invoice)
+# OCR 静态路由必须先于下方 {int:id} 动态路由注册（ninja 按注册顺序匹配，
+# 动态段 {id} 的正则是 [0-9]+，/invoices/ocr 若后注册会被 404/405 吞掉）
+api.post("/invoices/ocr", auth=ark_auth, tags=["funding"])(funding_api.invoice_ocr)
 # 动态段用 ninja 类型化语法 {int:id}（Django 序：converter:name → <int:id>，正则 [0-9]+），
 # 确保 /invoices/ocr（Task 7 注册的静态路由）不会被 {id} 的 [^/]+ 吞掉 —— 被吞会先命中
 # ninja 405（非 JSON），urls.py 的契约 stub 兜底失效。

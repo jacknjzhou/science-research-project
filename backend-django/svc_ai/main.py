@@ -114,6 +114,18 @@ class RagQaRequest(BaseModel):
     topK: int = 5
 
 
+class InvoiceOcrRequest(BaseModel):
+    fileUrl: str | None = Field(default=None, description="发票影像 URL（svc-ai 仅做提示，不下载）")
+    text: str | None = Field(default=None, description="发票 OCR 文本（可选）")
+
+
+class InvoiceOcrResponse(BaseModel):
+    fields: dict = Field(default_factory=dict)
+    confidence: float = 0
+    warnings: list = Field(default_factory=list)
+    reasons: list = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # 确定性规则（规则引擎先行，LLM 仅补充语义判断）
 # ---------------------------------------------------------------------------
@@ -248,3 +260,45 @@ def rag_qa(req: RagQaRequest):
             "degraded": False, "answer": llm.get("answer", ""),
             "citations": llm.get("citations") or [],
             "modelVersion": _cfg()["model"]}
+
+
+@app.post("/ai/invoice/ocr")
+def invoice_ocr(req: InvoiceOcrRequest) -> InvoiceOcrResponse:
+    """发票 OCR 抽取（F-08/A1 网关侧）：LLM → 规则 → 降级，HTTP 200 恒定。
+
+    仅建议不写业务库（Django 落库由 funding invoice_ocr 负责）；规则引擎
+    core/invoice_ocr.py 与 Django 侧同一实现（延迟 import，svc-ai 保持无状态、
+    不依赖 Django —— 同 _pdf_text 的函数内 import 惯例）。
+    """
+    text = (req.text or "").strip()
+    fields: dict = {}
+    warnings: list = []
+    reasons: list = []
+    # 第一级：LLM 抽取（未配置/异常 → None 落规则）
+    if text:
+        llm = chat_json(
+            "你是发票 OCR 信息抽取助手。从发票文本抽取字段，只输出 JSON 对象："
+            '{"invoiceType":"GENERAL|SPECIAL|ELECTRONIC|ITINERARY","number":"...",'
+            '"invoiceCode":"...","sellerName":"...","sellerTaxId":"...","buyerName":"...",'
+            '"buyerTaxId":"...","amountExclTax":"0.00","taxAmount":"0.00","totalAmount":"0.00",'
+            '"issueDate":"YYYY-MM-DD"}，金额为两位小数字符串，未识别的键输出 null。'
+            "不要输出其它文字。",
+            text[:8000])
+        if llm and any(v not in (None, "") for v in llm.values()):
+            fields = {k: v for k, v in llm.items() if v not in (None, "")}
+    # 第二级：规则引擎回落（与 Django 同源实现）
+    if not fields and text:
+        try:
+            from core.invoice_ocr import parse_invoice_text
+
+            fields, _, warnings = parse_invoice_text(text)
+        except Exception as exc:  # 规则引擎自身异常也降级，不抛出
+            reasons.append(f"rule-engine-failed：{exc}")
+    if not text:
+        reasons.append("ocr-text-empty：未提供可解析的发票文本")
+    if not fields and not text:
+        reasons.append("ocr-engine-unavailable")
+    elif not fields:
+        reasons.append("ocr-no-fields")
+    return InvoiceOcrResponse(fields=fields, confidence=float(
+        fields and 0.6 or 0), warnings=warnings, reasons=reasons)
