@@ -707,6 +707,7 @@ COMMENT ON COLUMN F_TRAVEL_STANDARD.accommodation_cap IS '三 cap 合计 total_c
 -- 备注：
 --   0) M1-a 增补（A1-A3）：F_LOAN（F-23 借款）、F_TRAVEL_STANDARD（F-24 差旅标准）两表；
 --      单号前缀 INV/LOAN 需在 00-common.sql `seq_prefix_registry` 补登记（owner=F）。
+--   0a) M1-b 增补：单号前缀 SET/CPL/ACC 需在 00-common.sql seq_prefix_registry 补登记（owner=F，v1.2）。
 --   1) 单号前缀 BUD/EXP/DISB 已在 00-common.sql `seq_prefix_registry` 登记（owner=F），
 --      业务取号一律走 svc-numbering，作废不回收、重试幂等（PRD 2.11）。
 --   2) 跨模块引用（project_id / contract_id / outsource_unit_id / policy_pack_id）

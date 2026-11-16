@@ -397,3 +397,137 @@ class FTravelStandard(models.Model):
 
     class Meta:
         db_table = "f_travel_standard"
+
+
+class FCostPool(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    code = models.CharField(max_length=64, null=True, blank=True)  # POOL-年-序，code_of("POOL", id) 回填
+    tenant_id = models.BigIntegerField()
+    # DRAFT/CALCULATED/LOCKED/REVERSED
+    status = models.CharField(max_length=32, default="DRAFT")
+    deleted = models.SmallIntegerField(default=0)
+    creator_id = models.BigIntegerField()
+    modifier_id = models.BigIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    remark = models.TextField(null=True, blank=True)
+    # 业务列：项目全成本核算与分摊（F-20），全成本=直接费用+Σ间接分摊，联动 A-12 折旧
+    project_id = models.BigIntegerField()  # 逻辑引用 E_PROJECT(id)
+    legal_entity_id = models.BigIntegerField()
+    period = models.CharField(max_length=8)  # 核算期间 YYYYMM
+    direct_cost = models.DecimalField(max_digits=18, decimal_places=2, default=0)  # 直接费用合计（报销/外拨/采购）
+    indirect_alloc_json = models.JSONField(null=True, blank=True)  # 间接分摊明细 [{type,basis,amount}]
+    full_cost = models.DecimalField(max_digits=18, decimal_places=2, default=0)  # 全成本 = direct_cost + Σ间接分摊
+    basis_rule_id = models.BigIntegerField(null=True, blank=True)  # 命中的分摊制度规则（可解释/复算）
+    policy_pack_id = models.BigIntegerField(null=True, blank=True)  # 分摊依据制度包快照
+
+    class Meta:
+        db_table = "f_cost_pool"
+        indexes = [
+            models.Index(fields=["tenant_id", "status"], name="idx_costpool_tenant_status"),
+            models.Index(fields=["project_id"], name="idx_costpool_project"),
+        ]
+
+
+class FAccountingEntry(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    code = models.CharField(max_length=64, null=True, blank=True)  # ACC-年-序，code_of("ACC", id) 回填
+    tenant_id = models.BigIntegerField()
+    # DRAFT/POSTED/SUSPENSE/REVERSED（SUSPENSE=挂账）
+    status = models.CharField(max_length=32, default="DRAFT")
+    deleted = models.SmallIntegerField(default=0)
+    creator_id = models.BigIntegerField()
+    modifier_id = models.BigIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    remark = models.TextField(null=True, blank=True)
+    # 业务列：政府会计制度平行记账（F-21），财务会计权责发生制 + 预算会计收付实现制
+    source_txn_id = models.BigIntegerField()  # 源交易 id（报销/收付/折旧，多态）
+    # EXPENSE/INCOME/DISBURSEMENT/DEPRECIATION/INDIRECT
+    source_txn_type = models.CharField(max_length=16)
+    project_id = models.BigIntegerField(null=True, blank=True)  # 逻辑引用 E_PROJECT(id)
+    legal_entity_id = models.BigIntegerField()
+    period = models.CharField(max_length=8)  # 会计期间 YYYYMM
+    fin_entry_json = models.JSONField(null=True, blank=True)  # 财务会计分录（权责发生制 借/贷科目、金额）
+    bud_entry_json = models.JSONField(null=True, blank=True)  # 预算会计分录（收付实现制 预算支出/资金结存）
+    posted_finance = models.BooleanField(default=False)  # 财务会计过账状态
+    posted_budget = models.BooleanField(default=False)  # 预算会计过账状态
+    # BALANCED/UNRECONCILED/SUSPENSE（两账勾稽结果）
+    reconcile_status = models.CharField(max_length=16, default="UNRECONCILED")
+    voucher_sync_id = models.BigIntegerField(null=True, blank=True)  # 关联 F_VOUCHER_SYNC（凭证同步 F-11）
+    policy_pack_id = models.BigIntegerField(null=True, blank=True)  # 制度包快照（供复算）
+
+    class Meta:
+        db_table = "f_accounting_entry"
+        indexes = [
+            models.Index(fields=["tenant_id", "status"], name="idx_entry_tenant_status"),
+            models.Index(fields=["tenant_id", "reconcile_status"], name="idx_entry_reconcile"),
+            models.Index(fields=["project_id"], name="idx_entry_project"),
+        ]
+
+
+class FSettlement(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    code = models.CharField(max_length=64, null=True, blank=True)  # CPL-年-序，code_of("CPL", id) 回填
+    tenant_id = models.BigIntegerField()
+    # DRAFT/SUBMITTED/AUDITING/APPROVED/REJECTED
+    status = models.CharField(max_length=32, default="DRAFT")
+    deleted = models.SmallIntegerField(default=0)
+    creator_id = models.BigIntegerField()
+    modifier_id = models.BigIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    remark = models.TextField(null=True, blank=True)
+    # 业务列：项目决算与结转结余（F-13），一键生成审计包，E_PROJECT 1:1
+    project_id = models.BigIntegerField()  # 逻辑引用 E_PROJECT(id)
+    legal_entity_id = models.BigIntegerField()
+    closing_date = models.DateField(null=True, blank=True)  # 决算基准日
+    income_total = models.DecimalField(max_digits=18, decimal_places=2, default=0)  # 到账合计
+    expense_total = models.DecimalField(max_digits=18, decimal_places=2, default=0)  # 支出合计
+    remaining = models.DecimalField(max_digits=18, decimal_places=2, default=0)  # 结余
+    # 结转/收回/留用（结余处理方式）
+    treatment = models.CharField(max_length=8, default="结转")
+    audit_report_url = models.CharField(max_length=512, null=True, blank=True)  # 决算审计包（PDF）
+    approved_by = models.BigIntegerField(null=True, blank=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    score_detail = models.JSONField(null=True, blank=True)  # 决算各科目执行明细/审计评分
+
+    class Meta:
+        db_table = "f_settlement"
+        indexes = [
+            models.Index(fields=["tenant_id", "status"], name="idx_settle_tenant_status"),
+            models.Index(fields=["project_id"], name="idx_settle_project"),
+        ]
+
+
+class FVoucherSync(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    code = models.CharField(max_length=64, null=True, blank=True)  # VCH-年-序，code_of("VCH", id) 回填
+    tenant_id = models.BigIntegerField()
+    # PENDING/SYNCING/SUCCESS/FAILED/MANUAL
+    status = models.CharField(max_length=32, default="PENDING")
+    deleted = models.SmallIntegerField(default=0)
+    creator_id = models.BigIntegerField()
+    modifier_id = models.BigIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    remark = models.TextField(null=True, blank=True)
+    # 业务列：凭证同步（F-11），expense.approved 事件驱动下发，回调对账，重试 3 次转人工
+    expense_id = models.BigIntegerField()  # 同模块逻辑引用 F_EXPENSE(id)（1:1；唯一性应用层 get-or-create 保证）
+    # YONYOU=用友/KINGDEE=金蝶/INSPIRE=浪潮
+    finance_system = models.CharField(max_length=16)
+    voucher_no = models.CharField(max_length=64, null=True, blank=True)  # 财务系统凭证号（回调回填）
+    # PENDING/SUCCESS/FAILED
+    sync_status = models.CharField(max_length=16, default="PENDING")
+    retry_count = models.SmallIntegerField(default=0)  # 重试计数（>3 转人工，PRD 11）
+    payload_json = models.JSONField(null=True, blank=True)  # 下发凭证报文
+    callback_json = models.JSONField(null=True, blank=True)  # 财务回调回执
+    sync_at = models.DateTimeField(null=True, blank=True)
+    error_msg = models.TextField(null=True, blank=True)
+
+    class Meta:
+        db_table = "f_voucher_sync"
+        indexes = [
+            models.Index(fields=["tenant_id", "status"], name="idx_voucher_tenant_status"),
+            models.Index(fields=["voucher_no"], name="idx_voucher_voucher_no"),
+        ]
