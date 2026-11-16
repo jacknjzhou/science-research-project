@@ -111,6 +111,8 @@ def to_api_expense(e: FExpense) -> dict[str, Any]:
         "submit_mode": e.submit_mode,
         "ai_verdict": e.ai_verdict,
         "invoice_check": e.invoice_check_status,
+        # M1-a A3/P98：差旅超标提示（warn-only，不拦截提交）
+        "travelOverLimit": bool(e.travel_over_limit),
         "submitted_at": fmt_ts(e.submitted_at),
         "paid_at": fmt_ts(e.paid_at),
         "frozen_at": fmt_ts(e.frozen_at),

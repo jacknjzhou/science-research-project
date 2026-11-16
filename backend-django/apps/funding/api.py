@@ -48,6 +48,7 @@ from apps.funding.models import (
     FIncome,
     FIndirectFee,
     FInvoice,
+    FLoan,
     FOutward,
     FSubject,
     FTravelStandard,
@@ -480,6 +481,15 @@ def create_expense(request: HttpRequest):
     submit_mode = b.get("submit_mode") or "预算制"
     if submit_mode not in ("预算制", "包干制"):
         raise ApiError(400, CODE_BAD_REQUEST, "submit_mode 仅支持 预算制/包干制")
+    # 差旅匹配元数据（M1-a A3/P98，随填单提交；匹配在 submit 时点做，warn-only）
+    travel_staff_category = b.get("travel_staff_category")
+    travel_city_tier = b.get("travel_city_tier")
+    # 关联借款（冲销溯源）：借款须存在于本租户（40401；状态不设限，冲销时点再校验）
+    related_loan_id = b.get("related_loan_id")
+    if related_loan_id is not None:
+        loan = FLoan.objects.filter(id=related_loan_id, tenant_id=d.tenant_id, deleted=0).first()
+        if loan is None:
+            raise ApiError(404, CODE_NOT_FOUND, "关联借款不存在")
     fp_hash = None
     invoice_no = b.get("invoice_no")
     invoice_date = b.get("invoice_date")
@@ -495,6 +505,9 @@ def create_expense(request: HttpRequest):
             fingerprint_invoice_no=invoice_no, fingerprint_amount=amount,
             fingerprint_invoice_date=_parse_date(invoice_date), fingerprint_hash=fp_hash,
             submit_mode=submit_mode,
+            travel_staff_category=travel_staff_category,
+            travel_city_tier=travel_city_tier,
+            related_loan_id=related_loan_id,
         )
     except Exception:
         raise ApiError(409, "40903", "同一发票（号码+金额+日期）已存在在途报销单") from None
@@ -553,6 +566,14 @@ def submit_expense(request: HttpRequest, id: int):
             line.amount_frozen = _d2(line.amount_frozen + e.amount)
             line.save(update_fields=["amount_frozen", "updated_at"])
             e.frozen_at = dj_tz.now()
+        # 差旅超标提示（A3/P98，warn-only）：仅 TRAVEL 且带了匹配元数据才查标准；
+        # 冻结成功后同事务内计算，任何异常不阻断提交（不 raise，不回滚）。
+        e.travel_over_limit = False
+        if e.expense_type == "TRAVEL" and e.travel_staff_category and e.travel_city_tier:
+            # FExpense 无差旅日期字段 → 以提交当日为匹配基准（标准 effective 窗口按今天取）
+            matched = _match_travel_standard(d.tenant_id, e.travel_staff_category, e.travel_city_tier, dj_tz.localdate())
+            if matched is not None and e.amount > matched.total_cap:
+                e.travel_over_limit = True
         e.status = "SUBMITTED"
         e.submitted_at = dj_tz.now()
         e.modifier_id = d.user_id

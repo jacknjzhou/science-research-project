@@ -1,11 +1,12 @@
 """M1-a：差旅标准/开票/借款（A1-A3）"""
 import json
 from datetime import timedelta
+from decimal import Decimal
 
 from django.test import Client
 from django.utils import timezone as dj_tz
 
-from apps.funding.models import FExpense, FInvoice, FTravelStandard
+from apps.funding.models import FBudget, FBudgetLine, FExpense, FInvoice, FLoan, FSubject, FTravelStandard
 from tests.conftest import bearer
 
 
@@ -642,5 +643,124 @@ def test_invoice_list_filters(seed_auth):
     assert r.json()["data"]["total"] == 1
     # GET 不存在 → 40401
     r = c.get("/api/v1/invoices/999999", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 404
+    assert r.json()["code"] == 40401
+
+
+# ---------------------------------------------------------------------------
+# 差旅超标提示接线（A3/P98）：warn-only travelOverLimit
+# ---------------------------------------------------------------------------
+def _budget_line(project_id: int = 1, planned: str = "50000.00"):
+    """预算行：提交报销时的冻结来源（预算制）。"""
+    sub = FSubject.objects.create(tenant_id=1, creator_id=1, name="差旅费", category="DIRECT")
+    bud = FBudget.objects.create(
+        tenant_id=1, creator_id=1, project_id=project_id, legal_entity_id=1,
+        mode="预算制", total_approved=Decimal(planned), status="EXECUTING",
+    )
+    line = FBudgetLine.objects.create(
+        tenant_id=1, creator_id=1, budget_id=bud.id, subject_id=sub.id,
+        amount_planned=Decimal(planned),
+    )
+    return line
+
+
+def _create_expense_via_api(c, **kw):
+    """POST /api/v1/expenses 走 create_expense（payload 键为 snake_case，对齐 Go 契约）。"""
+    body = {
+        "project_id": 1, "legal_entity_id": 1, "amount": "1000.00",
+        "expense_type": "TRAVEL",
+    }
+    body.update(kw)
+    return c.post("/api/v1/expenses", data=json.dumps(body), content_type="application/json",
+                  **bearer(2, ["R-STAFF"]))
+
+
+def test_expense_travel_over_limit_true(seed_auth):
+    """① TRAVEL + 匹配标准 + amount>total_cap → 提交成功、travelOverLimit=true、DB 落 True。"""
+    line = _budget_line()
+    # 建一条 cap 合计 200 的标准（300+100+80 是默认，改小）
+    std = _standard(name="小额标准", accommodation_cap=100, meals_cap=50, transport_cap=50)
+    assert std.total_cap == Decimal("200.00")
+    c = _c()
+    r = _create_expense_via_api(
+        c, budget_line_id=line.id, amount="500.00",
+        travel_staff_category="普通员工", travel_city_tier="一线城市",
+    )
+    assert r.status_code == 200
+    eid = r.json()["data"]["id"]
+    r = c.post(f"/api/v1/expenses/{eid}/submit", **bearer(2, ["R-STAFF"]))
+    # warn-only：超标不拦截，提交成功
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d["status"] == "SUBMITTED"
+    assert d["travelOverLimit"] is True
+    e = FExpense.objects.get(pk=eid)
+    assert e.travel_over_limit is True
+    assert e.travel_staff_category == "普通员工"
+    assert e.travel_city_tier == "一线城市"
+    # 冻结照常发生
+    line.refresh_from_db()
+    assert str(line.amount_frozen) == "500.00"
+
+
+def test_expense_travel_within_limit_false(seed_auth):
+    """② amount ≤ total_cap → travelOverLimit=false。"""
+    line = _budget_line()
+    _standard(name="宽标准", accommodation_cap=300, meals_cap=100, transport_cap=80)
+    c = _c()
+    r = _create_expense_via_api(
+        c, budget_line_id=line.id, amount="400.00",
+        travel_staff_category="普通员工", travel_city_tier="一线城市",
+    )
+    eid = r.json()["data"]["id"]
+    r = c.post(f"/api/v1/expenses/{eid}/submit", **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 200
+    assert r.json()["data"]["travelOverLimit"] is False
+    assert FExpense.objects.get(pk=eid).travel_over_limit is False
+
+
+def test_expense_travel_no_matching_standard_false(seed_auth):
+    """③ 无匹配标准（类别×城市对不上）→ 提交成功且 travelOverLimit=false（不拦截）。"""
+    line = _budget_line(planned="200000.00")
+    _standard(name="仅高管", staff_category="高管", city_tier="二线城市")
+    c = _c()
+    r = _create_expense_via_api(
+        c, budget_line_id=line.id, amount="99999.00",
+        travel_staff_category="普通员工", travel_city_tier="一线城市",
+    )
+    eid = r.json()["data"]["id"]
+    r = c.post(f"/api/v1/expenses/{eid}/submit", **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 200
+    assert r.json()["data"]["travelOverLimit"] is False
+    assert FExpense.objects.get(pk=eid).travel_over_limit is False
+
+
+def test_expense_non_travel_skips_standard_check(seed_auth):
+    """④ 非 TRAVEL 类型 → 不查标准，即使金额巨大也 false。"""
+    line = _budget_line()
+    _standard(name="普通员工标准", accommodation_cap=1, meals_cap=1, transport_cap=1)
+    c = _c()
+    r = _create_expense_via_api(
+        c, budget_line_id=line.id, amount="50000.00", expense_type="EQUIPMENT",
+        travel_staff_category="普通员工", travel_city_tier="一线城市",
+    )
+    eid = r.json()["data"]["id"]
+    r = c.post(f"/api/v1/expenses/{eid}/submit", **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 200
+    assert r.json()["data"]["travelOverLimit"] is False
+    assert FExpense.objects.get(pk=eid).travel_over_limit is False
+
+
+def test_expense_create_related_loan_id(seed_auth):
+    """⑤ payload 带 relatedLoanId → FExpense.related_loan_id 落库；借款不存在 → 40401。"""
+    c = _c()
+    loan = FLoan.objects.create(tenant_id=1, creator_id=1, project_id=1, legal_entity_id=1,
+                                applicant_user_id=1, amount=Decimal("800.00"), status="PAID")
+    r = _create_expense_via_api(c, related_loan_id=loan.id)
+    assert r.status_code == 200
+    eid = r.json()["data"]["id"]
+    assert FExpense.objects.get(pk=eid).related_loan_id == loan.id
+    # 借款不存在（他租/已删/编号错）→ 40401
+    r = _create_expense_via_api(c, related_loan_id=999999)
     assert r.status_code == 404
     assert r.json()["code"] == 40401
