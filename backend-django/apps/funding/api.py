@@ -35,6 +35,7 @@ from apps.funding.mappings import (
     to_api_line,
     to_api_outward,
     to_api_subject,
+    to_api_travel_standard,
     to_api_warn_config,
 )
 from apps.funding.models import (
@@ -47,6 +48,7 @@ from apps.funding.models import (
     FIndirectFee,
     FOutward,
     FSubject,
+    FTravelStandard,
     FWarnConfig,
 )
 from apps.notify.models import SysNotification
@@ -1115,3 +1117,144 @@ def delete_warn_config(request: HttpRequest, id: int):
     if n == 0:
         raise ApiError(404, CODE_NOT_FOUND, "配置不存在")
     return ok(request, {"id": id})
+
+
+# ---------------------------------------------------------------------------
+# 差旅费用标准（A3）
+# ---------------------------------------------------------------------------
+def _ts_conflict_exists(tenant_id: int, staff_category: str, city_tier: str, exclude_id: int | None = None) -> bool:
+    """同 (tenant, staffCategory, cityTier) 是否已存在 ACTIVE 记录（应用层唯一校验）。"""
+    qs = FTravelStandard.objects.filter(
+        tenant_id=tenant_id, staff_category=staff_category, city_tier=city_tier,
+        status="ACTIVE", deleted=0,
+    )
+    if exclude_id is not None:
+        qs = qs.exclude(id=exclude_id)
+    return qs.exists()
+
+
+def _match_travel_standard(tenant_id: int, staff_category: str, city_tier: str, on: date) -> "FTravelStandard | None":
+    """按 (staffCategory, cityTier) 在 on 日生效的 ACTIVE 标准（Task 7 复用）。
+
+    命中规则：ACTIVE 且 effective_from ≤ on ≤ effective_to（effective_to 空=长期有效）。
+    """
+    return (
+        FTravelStandard.objects.filter(
+            tenant_id=tenant_id, staff_category=staff_category, city_tier=city_tier,
+            status="ACTIVE", deleted=0,
+            effective_from__lte=on,
+        )
+        .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=on))
+        .order_by("-effective_from", "-id")
+        .first()
+    )
+
+
+def list_travel_standards(request: HttpRequest):
+    d = domain_from(request)
+    page, size, limit, offset = page_args(request)
+    qs = FTravelStandard.objects.filter(tenant_id=d.tenant_id, deleted=0)
+    if request.GET.get("staffCategory"):
+        qs = qs.filter(staff_category=request.GET["staffCategory"])
+    if request.GET.get("cityTier"):
+        qs = qs.filter(city_tier=request.GET["cityTier"])
+    if request.GET.get("status"):
+        qs = qs.filter(status=request.GET["status"])
+    total = qs.count()
+    rows = qs.order_by("-id")[offset : offset + limit]
+    return ok(request, {"list": [to_api_travel_standard(w) for w in rows], "total": total, "page": page, "size": size})
+
+
+def create_travel_standard(request: HttpRequest):
+    d = domain_from(request)
+    b = read_json(request)
+    staff_category = b.get("staffCategory")
+    city_tier = b.get("cityTier")
+    if not staff_category or not city_tier or not b.get("name"):
+        raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
+    for k in ("accommodationCap", "mealsCap", "transportCap"):
+        if b.get(k) is None:
+            raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
+    effective_from = _parse_date(b.get("effectiveFrom"))
+    if effective_from is None:
+        raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
+    effective_to = _parse_date(b.get("effectiveTo"))
+    if effective_from and effective_to and effective_to < effective_from:
+        raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
+    status = b.get("status") or "ACTIVE"
+    if status not in ("ACTIVE", "DISABLED"):
+        raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
+    with transaction.atomic():
+        if status == "ACTIVE" and _ts_conflict_exists(d.tenant_id, staff_category, city_tier):
+            raise ApiError(409, CODE_CONFLICT, "同员工类别与城市类别已存在生效中的差旅标准")
+        w = FTravelStandard.objects.create(
+            tenant_id=d.tenant_id, creator_id=d.user_id,
+            name=b["name"], staff_category=staff_category, city_tier=city_tier,
+            accommodation_cap=_money(b["accommodationCap"]) or Decimal("0"),
+            meals_cap=_money(b["mealsCap"]) or Decimal("0"),
+            transport_cap=_money(b["transportCap"]) or Decimal("0"),
+            effective_from=effective_from, effective_to=effective_to,
+            status=status, remark=b.get("remark"),
+        )
+    return ok(request, to_api_travel_standard(w))
+
+
+def update_travel_standard(request: HttpRequest, id: int):
+    d = domain_from(request)
+    w = FTravelStandard.objects.filter(id=id, tenant_id=d.tenant_id, deleted=0).first()
+    if w is None:
+        raise ApiError(404, CODE_NOT_FOUND, "差旅标准不存在")
+    b = read_json(request)
+    with transaction.atomic():
+        if b.get("name") is not None:
+            w.name = b["name"]
+        if b.get("staffCategory") is not None:
+            w.staff_category = b["staffCategory"]
+        if b.get("cityTier") is not None:
+            w.city_tier = b["cityTier"]
+        if b.get("accommodationCap") is not None:
+            w.accommodation_cap = _money(b["accommodationCap"]) or Decimal("0")
+        if b.get("mealsCap") is not None:
+            w.meals_cap = _money(b["mealsCap"]) or Decimal("0")
+        if b.get("transportCap") is not None:
+            w.transport_cap = _money(b["transportCap"]) or Decimal("0")
+        if b.get("effectiveFrom") is not None:
+            v = _parse_date(b["effectiveFrom"])
+            if v is None:
+                raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
+            w.effective_from = v
+        if b.get("effectiveTo") is not None:
+            w.effective_to = _parse_date(b["effectiveTo"])
+        if b.get("status") is not None:
+            if b["status"] not in ("ACTIVE", "DISABLED"):
+                raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
+            w.status = b["status"]
+        if b.get("remark") is not None:
+            w.remark = b["remark"]
+        if w.effective_from and w.effective_to and w.effective_to < w.effective_from:
+            raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
+        if w.status == "ACTIVE" and _ts_conflict_exists(d.tenant_id, w.staff_category, w.city_tier, exclude_id=w.id):
+            raise ApiError(409, CODE_CONFLICT, "同员工类别与城市类别已存在生效中的差旅标准")
+        w.save()
+    return ok(request, to_api_travel_standard(w))
+
+
+def delete_travel_standard(request: HttpRequest, id: int):
+    d = domain_from(request)
+    n = FTravelStandard.objects.filter(id=id, tenant_id=d.tenant_id, deleted=0).update(deleted=1, updated_at=dj_tz.now())
+    if n == 0:
+        raise ApiError(404, CODE_NOT_FOUND, "差旅标准不存在")
+    return ok(request, {"id": id})
+
+
+def match_travel_standard(request: HttpRequest):
+    d = domain_from(request)
+    staff_category = request.GET.get("staffCategory")
+    city_tier = request.GET.get("cityTier")
+    if not staff_category or not city_tier:
+        raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
+    on = _parse_date(request.GET.get("date")) or dj_tz.localdate()
+    w = _match_travel_standard(d.tenant_id, staff_category, city_tier, on)
+    if w is None:
+        raise ApiError(404, CODE_NOT_FOUND, "无生效的差旅标准")
+    return ok(request, to_api_travel_standard(w))

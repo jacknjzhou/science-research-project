@@ -270,6 +270,17 @@ api.delete(
     "/funding/warn-configs/{id}", auth=ark_auth, tags=["funding"]
 )(funding_api.delete_warn_config)
 
+# —— F 差旅费用标准 ——（注意：match 静态路由必须先于 {id} 动态路由注册）
+api.get("/travel-standards", auth=ark_auth, tags=["funding"])(funding_api.list_travel_standards)
+api.post("/travel-standards", auth=ark_auth, tags=["funding"])(funding_api.create_travel_standard)
+api.get("/travel-standards/match", auth=ark_auth, tags=["funding"])(funding_api.match_travel_standard)
+api.put(
+    "/travel-standards/{id}", auth=ark_auth, tags=["funding"]
+)(funding_api.update_travel_standard)
+api.delete(
+    "/travel-standards/{id}", auth=ark_auth, tags=["funding"]
+)(funding_api.delete_travel_standard)
+
 # ==================== Phase 3：R/N/V/O/M/D 域 ====================
 from apps.output import api as output_api
 from apps.expertreview import api as expertreview_api
