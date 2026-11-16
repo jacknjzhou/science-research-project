@@ -1131,6 +1131,77 @@ def test_loan_refund(seed_auth):
     assert loan["status"] == "CLOSED"
 
 
+# ⑥b 混合流：冲销+退款共享 remainingForWriteoff，归零即 CLOSED（终审 F-1）
+def test_loan_mixed_writeoff_refund(seed_auth):
+    c = _c()
+
+    def _paid_loan(amount):
+        _create_loan_via_api(c, amount=amount)
+        lid = FLoan.objects.order_by("-id").first().id
+        c.post(f"/api/v1/loans/{lid}/submit", **bearer(2, ["R-MANAGER"]))
+        c.post(f"/api/v1/loans/{lid}/approve", data=json.dumps({"action": "approve"}),
+               content_type="application/json", **bearer(1, ["R-MANAGER"]))
+        c.post(f"/api/v1/loans/{lid}/approve", data=json.dumps({"action": "approve"}),
+               content_type="application/json", **bearer(1, ["R-MANAGER", "R-FINANCE"]))
+        c.post(f"/api/v1/loans/{lid}/pay", **bearer(1, ["R-FINANCE"]))
+        return lid
+
+    # (a) 先冲销 8000 再退款 2000（借款 10000）→ 混合流补齐 → CLOSED，remaining 0
+    la = _paid_loan("10000.00")
+    exp_a = _expense(amount=Decimal("8000.00"), status="APPROVED", related_loan_id=la)
+    r = c.post(f"/api/v1/loans/{la}/write-off", data=json.dumps({"expense_id": exp_a.id}),
+               content_type="application/json", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 200
+    loan = r.json()["data"]
+    assert loan["writeOffAmount"] == "8000.00"
+    assert loan["remainingForWriteoff"] == "2000.00"
+    assert loan["status"] == "PAID"
+    r = c.post(f"/api/v1/loans/{la}/refund", data=json.dumps({"amount": "2000.00"}),
+               content_type="application/json", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 200
+    loan = r.json()["data"]
+    assert loan["writeOffAmount"] == "8000.00"
+    assert loan["refundedAmount"] == "2000.00"
+    assert loan["remainingForWriteoff"] == "0.00"
+    assert loan["status"] == "CLOSED"
+
+    # (b) 先退款 2000 再冲销 8000（借款 10000）→ 同样 CLOSED
+    lb = _paid_loan("10000.00")
+    r = c.post(f"/api/v1/loans/{lb}/refund", data=json.dumps({"amount": "2000.00"}),
+               content_type="application/json", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 200
+    loan = r.json()["data"]
+    assert loan["refundedAmount"] == "2000.00"
+    assert loan["remainingForWriteoff"] == "8000.00"
+    assert loan["status"] == "PAID"
+    exp_b = _expense(amount=Decimal("8000.00"), status="APPROVED", related_loan_id=lb)
+    r = c.post(f"/api/v1/loans/{lb}/write-off", data=json.dumps({"expense_id": exp_b.id}),
+               content_type="application/json", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 200
+    loan = r.json()["data"]
+    assert loan["writeOffAmount"] == "8000.00"
+    assert loan["refundedAmount"] == "2000.00"
+    assert loan["remainingForWriteoff"] == "0.00"
+    assert loan["status"] == "CLOSED"
+
+    # (c) 退款 2000 后冲销 9000（9000 > remaining 8000；旧守卫 0+9000≤10000 会漏放）
+    # → 40902，台账不变、仍 PAID
+    lc = _paid_loan("10000.00")
+    r = c.post(f"/api/v1/loans/{lc}/refund", data=json.dumps({"amount": "2000.00"}),
+               content_type="application/json", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 200
+    exp_c = _expense(amount=Decimal("9000.00"), status="APPROVED", related_loan_id=lc)
+    r = c.post(f"/api/v1/loans/{lc}/write-off", data=json.dumps({"expense_id": exp_c.id}),
+               content_type="application/json", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 409
+    assert r.json()["code"] == 40902
+    row = FLoan.objects.get(pk=lc)
+    assert row.write_off_amount == Decimal("0.00")
+    assert row.refunded_amount == Decimal("2000.00")
+    assert row.remaining_for_writeoff == Decimal("8000.00")
+    assert row.status == "PAID"
+
+
 # 列表：分页 + status/projectId 过滤（camelCase query，对齐契约）
 def test_loan_list_filter(seed_auth):
     c = _c()

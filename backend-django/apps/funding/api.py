@@ -1817,8 +1817,10 @@ def pay_loan(request: HttpRequest, id: int):
 
 def write_off_loan(request: HttpRequest, id: int):
     """冲销（契约 :1269）：仅 PAID 可冲销；expense 须 APPROVED 且 related_loan_id=本单
-    （违者 40901）；冲销额=报销单金额，累计超 remainingForWriteoff → 40902；
-    write_off_amount 补齐（≥amount）→ CLOSED。防双计：SysApprovalLog 记
+    （违者 40901）；冲销额=报销单金额，本次不得超过 remainingForWriteoff
+    （=amount−write_off_amount−refunded_amount，冲销/退款共享，超额 → 40902）；
+    remainingForWriteoff 归零（补齐）→ CLOSED，覆盖纯冲销/纯退款/混合流。
+    防双计：SysApprovalLog 记
     WRITE_OFF(expense/{id})，重复报销单 40901（无台账表的保守实现，Task 12 可升级）。"""
     d = domain_from(request)
     b = read_json(request)
@@ -1840,7 +1842,7 @@ def write_off_loan(request: HttpRequest, id: int):
         if any(l.action == "WRITE_OFF" and l.comment == f"expense/{exp.id}"
                for l in approval.list_logs(d.tenant_id, "LOAN", loan.id)):
             raise ApiError(409, CODE_CONFLICT, "该报销单已冲销过本借款")
-        if loan.write_off_amount + exp.amount > loan.amount:
+        if exp.amount > loan.remaining_for_writeoff:
             raise ApiError(409, CODE_CONFLICT_REF, "冲销金额累计超出借款余额")
         FLoan.objects.filter(id=loan.id).update(
             write_off_amount=F("write_off_amount") + exp.amount,
@@ -1848,7 +1850,7 @@ def write_off_loan(request: HttpRequest, id: int):
         approval.log(d.tenant_id, "LOAN", loan.id, 0, d.user_id, "R-FINANCE",
                      "WRITE_OFF", f"expense/{exp.id}")
         loan.refresh_from_db()
-        if loan.write_off_amount >= loan.amount:
+        if loan.remaining_for_writeoff == 0:
             FLoan.objects.filter(id=loan.id).update(
                 status="CLOSED", updated_at=dj_tz.now())
     loan.refresh_from_db()
@@ -1857,7 +1859,9 @@ def write_off_loan(request: HttpRequest, id: int):
 
 def refund_loan(request: HttpRequest, id: int):
     """退款（契约 :1307）：仅 PAID 可退款；body.amount ≤ remainingForWriteoff
-    （超出 40901，契约明示区别于冲销的 40902）；refunded_amount 补齐 → CLOSED。"""
+    （超出 40901，契约明示区别于冲销的 40902）；remainingForWriteoff
+    （=amount−write_off_amount−refunded_amount，冲销/退款共享）归零（补齐）
+    → CLOSED，覆盖纯冲销/纯退款/混合流。"""
     d = domain_from(request)
     b = read_json(request)
     amount = _money(b.get("amount"))
@@ -1877,7 +1881,7 @@ def refund_loan(request: HttpRequest, id: int):
         approval.log(d.tenant_id, "LOAN", loan.id, 0, d.user_id, "R-FINANCE",
                      "REFUND", f"amount/{_d2(amount)}")
         loan.refresh_from_db()
-        if loan.refunded_amount >= loan.amount:
+        if loan.remaining_for_writeoff == 0:
             FLoan.objects.filter(id=loan.id).update(
                 status="CLOSED", updated_at=dj_tz.now())
     loan.refresh_from_db()
