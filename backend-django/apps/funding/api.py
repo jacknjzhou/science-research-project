@@ -42,6 +42,7 @@ from apps.funding.mappings import (
     to_api_warn_config,
 )
 from apps.funding.models import (
+    FAccountingEntry,
     FBudget,
     FBudgetLine,
     FCarryover,
@@ -419,6 +420,64 @@ def _calc_mgmt_fee(project_id: int, amount: Decimal) -> Decimal | None:
     return _d2(amount * Decimal(str(c.mgmt_fee_pct)) / Decimal("100"))
 
 
+def _post_accounting_entry(
+    tenant_id: int,
+    user_id: int,
+    source_txn_type: str,
+    source_txn_id: int,
+    project_id: int | None,
+    legal_entity_id: int,
+    period: str,
+    fin_lines: list[dict],
+    bud_lines: list[dict],
+) -> FAccountingEntry:
+    """平行记账双分录落库（F-21 / detail 4.5）。
+
+    幂等键：(tenant_id, source_txn_type, source_txn_id, period, deleted=0) ——
+    已存在则原样返回既有行（不重算不重写）。借贷不平先于任何写入抛 42200。
+    分录行格式：{"subject": "<科目码>", "direction": "debit"|"credit", "amount": "1234.00"}。
+    """
+    existing = (
+        FAccountingEntry.objects.filter(
+            tenant_id=tenant_id, source_txn_type=source_txn_type,
+            source_txn_id=source_txn_id, period=period, deleted=0,
+        ).first()
+    )
+    if existing is not None:
+        return existing
+
+    def _sum(lines: list[dict], direction: str) -> Decimal:
+        return sum(
+            (_d2(Decimal(str(x["amount"]))) for x in lines if x["direction"] == direction),
+            Decimal("0"),
+        )
+
+    fin_debit, fin_credit = _sum(fin_lines, "debit"), _sum(fin_lines, "credit")
+    bud_debit, bud_credit = _sum(bud_lines, "debit"), _sum(bud_lines, "credit")
+    if fin_debit != fin_credit or bud_debit != bud_credit:
+        raise ApiError(422, "42200", "借贷不平")
+
+    ae = FAccountingEntry.objects.create(
+        tenant_id=tenant_id,
+        source_txn_type=source_txn_type,
+        source_txn_id=source_txn_id,
+        project_id=project_id,
+        legal_entity_id=legal_entity_id,
+        period=period,
+        fin_entry_json={"lines": fin_lines},
+        bud_entry_json={"lines": bud_lines},
+        status="POSTED",
+        posted_finance=True,
+        posted_budget=True,
+        reconcile_status="BALANCED",
+        creator_id=user_id,
+        modifier_id=user_id,
+    )
+    ae.code = code_of("ACC", ae.id)
+    ae.save(update_fields=["code", "updated_at"])
+    return ae
+
+
 def claim_income(request: HttpRequest, id: int):
     d = domain_from(request)
     b = read_json(request)
@@ -437,6 +496,21 @@ def claim_income(request: HttpRequest, id: int):
         if fee is not None:
             inc.mgmt_fee = fee
         inc.save()
+        # 平行记账（F-21/4.5）：income.claimed → 借 银行存款 / 贷 非同级财政拨款收入
+        _post_accounting_entry(
+            tenant_id=d.tenant_id, user_id=d.user_id,
+            source_txn_type="INCOME", source_txn_id=inc.id,
+            project_id=inc.project_id, legal_entity_id=inc.legal_entity_id,
+            period=dj_tz.localdate().strftime("%Y%m"),
+            fin_lines=[
+                {"subject": "1002", "direction": "debit", "amount": str(inc.amount)},
+                {"subject": "4601", "direction": "credit", "amount": str(inc.amount)},
+            ],
+            bud_lines=[
+                {"subject": "8001", "direction": "debit", "amount": str(inc.amount)},
+                {"subject": "8201", "direction": "credit", "amount": str(inc.amount)},
+            ],
+        )
     return ok(request, to_api_income(inc))
 
 
@@ -630,6 +704,21 @@ def _approve_one(d, expense_id: int, action: str, comment: str):
             FBudgetLine.objects.filter(id=e.budget_line_id, deleted=0).update(
                 amount_frozen=F("amount_frozen") - e.amount,
                 amount_used=F("amount_used") + e.amount, updated_at=dj_tz.now())
+            # 平行记账（F-21/4.5）：expense.approved → 借 业务活动费用 / 贷 银行存款
+            _post_accounting_entry(
+                tenant_id=e.tenant_id, user_id=d.user_id,
+                source_txn_type="EXPENSE", source_txn_id=e.id,
+                project_id=e.project_id, legal_entity_id=e.legal_entity_id,
+                period=dj_tz.localdate().strftime("%Y%m"),
+                fin_lines=[
+                    {"subject": "5001", "direction": "debit", "amount": str(e.amount)},
+                    {"subject": "1002", "direction": "credit", "amount": str(e.amount)},
+                ],
+                bud_lines=[
+                    {"subject": "7201", "direction": "debit", "amount": str(e.amount)},
+                    {"subject": "8001", "direction": "credit", "amount": str(e.amount)},
+                ],
+            )
         if action in ("REJECT", "RETURN") and e.budget_line_id and e.submit_mode == "预算制":
             FBudgetLine.objects.filter(id=e.budget_line_id, deleted=0).update(
                 amount_frozen=F("amount_frozen") - e.amount,
@@ -752,6 +841,26 @@ def outward_action(request: HttpRequest, id: int):
         o.approved_by = d.user_id
         o.approved_at = dj_tz.now()
         o.save()
+        # 平行记账（F-21/4.5）：外拨终审（PAID 语义）→ 借 对外拨付款 / 贷 银行存款
+        # FOutward 无 legal_entity_id 字段：从项目取，缺省 1（对齐 M1-a create_loan 先例）。
+        _out_legal_entity = (
+            EProject.objects.filter(id=o.project_id, deleted=0)
+            .values_list("legal_entity_id", flat=True).first()
+        ) or 1
+        _post_accounting_entry(
+            tenant_id=o.tenant_id, user_id=d.user_id,
+            source_txn_type="DISBURSEMENT", source_txn_id=o.id,
+            project_id=o.project_id, legal_entity_id=_out_legal_entity,
+            period=dj_tz.localdate().strftime("%Y%m"),
+            fin_lines=[
+                {"subject": "7701", "direction": "debit", "amount": str(o.amount)},
+                {"subject": "1002", "direction": "credit", "amount": str(o.amount)},
+            ],
+            bud_lines=[
+                {"subject": "7501", "direction": "debit", "amount": str(o.amount)},
+                {"subject": "8001", "direction": "credit", "amount": str(o.amount)},
+            ],
+        )
     _notify(o.creator_id, "MESSAGE", "外拨已批复",
             f"外拨单 #{o.id} 已终审通过并从预算扣减", f"outward/{o.id}", d.tenant_id)
     return ok(request, to_api_outward(FOutward.objects.get(id=id)))

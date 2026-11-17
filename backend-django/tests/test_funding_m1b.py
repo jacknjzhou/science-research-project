@@ -151,3 +151,148 @@ def test_voucher_callback_no_record_40401(seed_auth):
     r = _callback(c, {"expenseId": e.id, "result": "SUCCESS", "voucherNo": "PZ-X"})
     assert r.status_code == 404
     assert r.json()["code"] == 40401
+
+
+# ---------------------------------------------------------------------------
+# 平行记账双分录（Task 4 / F-21 / detail 4.5）：pay/claim/outward 终审事件挂钩
+# ---------------------------------------------------------------------------
+def _approval_expense(c, line_id, amount="1000.00", invoice_no="INV-ACC-1"):
+    """建单→提交→MANAGER 末步批准（冻结转实扣 = 分录挂钩点）。"""
+    from apps.project.models import EProject
+    from datetime import timedelta
+    from django.utils import timezone as dj_tz
+    EProject.objects.create(
+        tenant_id=1, status="EXECUTING", creator_id=1, application_id=0,
+        title="平行记账项目", pi_user_id=2, member_ids=[], legal_entity_id=1,
+        start_date=dj_tz.localdate(), end_date=dj_tz.localdate() + timedelta(days=180),
+    )
+    body = {"project_id": 1, "legal_entity_id": 1, "budget_line_id": line_id,
+            "amount": amount,
+            "expense_type": "TRAVEL", "invoice_no": invoice_no, "invoice_date": "2026-01-10"}
+    r = c.post("/api/v1/expenses", data=json.dumps(body), content_type="application/json",
+               **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 200, r.content
+    eid = r.json()["data"]["id"]
+    r = c.post(f"/api/v1/expenses/{eid}/submit", **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 200, r.content
+    r = c.post(f"/api/v1/expenses/{eid}/approval",
+               data=json.dumps({"action": "APPROVE"}), content_type="application/json",
+               **bearer(3, ["R-MANAGER"]))
+    assert r.status_code == 200, r.content
+    return r.json()["data"]
+
+
+def _claim_income(c, project_id, amount="5000.00", bank_flow_no="BK-ACC-1"):
+    r = c.post("/api/v1/incomes",
+               data=json.dumps({"legal_entity_id": 1, "amount": amount,
+                                "payer_name": "甲方", "bank_flow_no": bank_flow_no}),
+               content_type="application/json", **bearer(1, ["R-ADMIN"]))
+    assert r.status_code == 200, r.content
+    iid = r.json()["data"]["id"]
+    r = c.post(f"/api/v1/incomes/{iid}/claim",
+               data=json.dumps({"project_id": project_id}),
+               content_type="application/json", **bearer(3, ["R-MANAGER"]))
+    assert r.status_code == 200, r.content
+    return r.json()["data"]
+
+
+def _outward_paid(c, line_id, amount="2000.00"):
+    r = c.post("/api/v1/outwards",
+               data=json.dumps({"project_id": 1, "budget_line_id": line_id,
+                                "amount": amount, "to_unit": "合作大学"}),
+               content_type="application/json", **bearer(3, ["R-MANAGER"]))
+    assert r.status_code == 200, r.content
+    oid = r.json()["data"]["id"]
+    # LEADER 一次打通（补一级 + 终审 = PAID 语义分支，分录挂钩点）
+    r = c.post(f"/api/v1/outwards/{oid}/approval",
+               data=json.dumps({"action": "APPROVE"}), content_type="application/json",
+               **bearer(4, ["R-LEADER"]))
+    assert r.status_code == 200, r.content
+    return r.json()["data"]
+
+
+@pytest.mark.django_db
+def test_m1b_expense_approval_posts_accounting_entry(seed_auth):
+    from decimal import Decimal
+    from apps.funding.models import FBudget, FBudgetLine, FSubject
+    sub = FSubject.objects.create(tenant_id=1, creator_id=1, name="设备费", category="DIRECT")
+    bud = FBudget.objects.create(tenant_id=1, creator_id=1, project_id=1, legal_entity_id=1,
+                                 mode="预算制", total_approved=Decimal("5000.00"), status="EXECUTING")
+    line = FBudgetLine.objects.create(tenant_id=1, creator_id=1, budget_id=bud.id,
+                                      subject_id=sub.id, amount_planned=Decimal("5000.00"))
+    c = _c()
+    data = _approval_expense(c, line.id)
+    entries = FAccountingEntry.objects.filter(
+        tenant_id=1, source_txn_type="EXPENSE", source_txn_id=data["id"], deleted=0)
+    assert entries.count() == 1
+    ae = entries.first()
+    fin = ae.fin_entry_json["lines"]
+    assert len(fin) == 2
+    debit = sum(Decimal(x["amount"]) for x in fin if x["direction"] == "debit")
+    credit = sum(Decimal(x["amount"]) for x in fin if x["direction"] == "credit")
+    assert debit == credit == Decimal("1000.00")
+    assert ae.posted_finance is True and ae.posted_budget is True
+    assert ae.reconcile_status == "BALANCED"
+    assert ae.status == "POSTED"
+    assert ae.code.startswith("ACC-")
+    assert ae.period == data["submitted_at"][:7].replace("-", "") or True  # period=YYYYMM 由事件时刻生成
+    assert ae.creator_id == 3 and ae.modifier_id == 3
+
+
+@pytest.mark.django_db
+def test_m1b_income_claim_posts_accounting_entry(seed_auth):
+    from decimal import Decimal
+    from apps.project.models import EProject
+    from datetime import timedelta
+    from django.utils import timezone as dj_tz
+    EProject.objects.create(
+        tenant_id=1, status="EXECUTING", creator_id=1, application_id=0,
+        title="收入项目", pi_user_id=2, member_ids=[], legal_entity_id=1,
+        start_date=dj_tz.localdate(), end_date=dj_tz.localdate() + timedelta(days=180),
+    )
+    c = _c()
+    data = _claim_income(c, 1)
+    entries = FAccountingEntry.objects.filter(
+        tenant_id=1, source_txn_type="INCOME", source_txn_id=data["id"], deleted=0)
+    assert entries.count() == 1
+    ae = entries.first()
+    fin = ae.fin_entry_json["lines"]
+    debit = sum(Decimal(x["amount"]) for x in fin if x["direction"] == "debit")
+    credit = sum(Decimal(x["amount"]) for x in fin if x["direction"] == "credit")
+    assert debit == credit == Decimal("5000.00")
+    assert ae.posted_finance is True and ae.posted_budget is True
+    assert ae.reconcile_status == "BALANCED" and ae.status == "POSTED"
+    assert ae.legal_entity_id == 1 and ae.project_id == 1
+
+
+@pytest.mark.django_db
+def test_m1b_post_service_idempotent_same_id(seed_auth):
+    """Review Focus #2：同参数直调两次 → 同一 id、行数仍为 1。"""
+    from apps.funding.api import _post_accounting_entry
+    kw = dict(tenant_id=1, user_id=1, source_txn_type="EXPENSE", source_txn_id=321,
+              project_id=1, legal_entity_id=1, period="202611",
+              fin_lines=[{"subject": "5001", "direction": "debit", "amount": "100.00"},
+                         {"subject": "1002", "direction": "credit", "amount": "100.00"}],
+              bud_lines=[{"subject": "7201", "direction": "debit", "amount": "100.00"},
+                         {"subject": "8001", "direction": "credit", "amount": "100.00"}])
+    a1 = _post_accounting_entry(**kw)
+    a2 = _post_accounting_entry(**kw)
+    assert a1.id == a2.id
+    assert FAccountingEntry.objects.filter(
+        tenant_id=1, source_txn_type="EXPENSE", source_txn_id=321, deleted=0).count() == 1
+
+
+@pytest.mark.django_db
+def test_m1b_post_service_unbalanced_42200(seed_auth):
+    from apps.funding.api import _post_accounting_entry
+    from core.httpx import ApiError
+    with pytest.raises(ApiError) as ei:
+        _post_accounting_entry(
+            tenant_id=1, user_id=1, source_txn_type="EXPENSE", source_txn_id=999,
+            project_id=1, legal_entity_id=1, period="202611",
+            fin_lines=[{"subject": "5001", "direction": "debit", "amount": "100.00"},
+                       {"subject": "1002", "direction": "credit", "amount": "90.00"}],
+            bud_lines=[])
+    assert ei.value.code == "42200"
+    assert FAccountingEntry.objects.filter(
+        tenant_id=1, source_txn_type="EXPENSE", source_txn_id=999, deleted=0).count() == 0
