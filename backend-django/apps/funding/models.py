@@ -531,3 +531,47 @@ class FVoucherSync(models.Model):
             models.Index(fields=["tenant_id", "status"], name="idx_voucher_tenant_status"),
             models.Index(fields=["voucher_no"], name="idx_voucher_voucher_no"),
         ]
+
+
+class FDisbursement(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    code = models.CharField(max_length=64, null=True, blank=True)  # DISB-年-序，code_of("DISB", id) 回填
+    tenant_id = models.BigIntegerField()
+    # DRAFT/SUBMITTED/APPROVED/PAID/VOUCHER_SYNCED/REJECTED/RETURNED
+    status = models.CharField(max_length=32, default="DRAFT")
+    deleted = models.SmallIntegerField(default=0)
+    creator_id = models.BigIntegerField()
+    modifier_id = models.BigIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    remark = models.TextField(null=True, blank=True)
+    # 业务列：外拨经费（F-22），联动 G-09 外协合同，超合同金额上限拦截，审计重点
+    contract_id = models.BigIntegerField()  # 逻辑引用 G_CONTRACT(id)→G，跨模块只存 id，一致性走事件（外拨↔合同）
+    outsource_unit_id = models.BigIntegerField()  # 逻辑引用 G_SUPPLIER(id)→G
+    project_id = models.BigIntegerField()  # 逻辑引用 E_PROJECT(id)
+    legal_entity_id = models.BigIntegerField()
+    # PUBLIC/INTERNAL/SECRET/TOP_SECRET（横向/涉密外拨密级，参与读写双重过滤，PRD 2.13）
+    security_level = models.CharField(max_length=16, default="INTERNAL")
+    amount = models.DecimalField(max_digits=18, decimal_places=2)  # 外拨金额
+    # 预付/进度/尾款（拨付阶段）
+    phase = models.CharField(max_length=8, default="进度")
+    approval_chain = models.JSONField(null=True, blank=True)  # 审批链快照
+    invoice_url = models.CharField(max_length=512, null=True, blank=True)  # 对方发票/收据附件
+    # PENDING/SUCCESS/FAILED/MANUAL（→F-11 凭证同步）
+    voucher_status = models.CharField(max_length=16, default="PENDING")
+    contract_amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)  # 合同总额快照（来自 G，判定上限）
+    disbursed_before = models.DecimalField(max_digits=18, decimal_places=2, default=0)  # 本次前已拨累计
+    remain_contract_amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)  # 合同剩余可拨额（超合同额拦截，F-22）
+    compliance_flags = models.JSONField(null=True, blank=True)  # 命中合规规则：整体转包/单一来源未说明/关联外协单位
+    policy_pack_id = models.BigIntegerField(null=True, blank=True)  # 外拨限额/合规判定制度包快照
+
+    class Meta:
+        db_table = "f_disbursement"
+        indexes = [
+            models.Index(fields=["tenant_id", "status"], name="idx_disb_tenant_status"),
+            models.Index(fields=["contract_id"], name="idx_disb_contract"),
+            models.Index(fields=["project_id"], name="idx_disb_project"),
+            models.Index(fields=["outsource_unit_id"], name="idx_disb_unit"),
+        ]
+        # 条件唯一索引 uk_disb_code(tenant_id, code) WHERE deleted=0 不在 Meta 建
+        # （sqlite 测试库不支持部分索引，M1-b Task 1 先例：应用层保证）
