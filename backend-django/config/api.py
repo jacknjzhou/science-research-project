@@ -290,6 +290,11 @@ api.post("/invoices", auth=ark_auth, tags=["funding"])(funding_api.create_invoic
 # OCR 静态路由必须先于下方 {int:id} 动态路由注册（ninja 按注册顺序匹配，
 # 动态段 {id} 的正则是 [0-9]+，/invoices/ocr 若后注册会被 404/405 吞掉）
 api.post("/invoices/ocr", auth=ark_auth, tags=["funding"])(funding_api.invoice_ocr)
+# B1 开题开户（M1-c Task 6）：复数 /projects/* 不与 E 域单数 /project/* 冲突；
+# ninja 类型化 {int:project_id} 静态 POST，无子段动态路由吞并风险。
+api.post(
+    "/projects/{int:project_id}/open-account", auth=ark_auth, tags=["funding"]
+)(funding_api.open_project_account)
 # 动态段用 ninja 类型化语法 {int:id}（Django 序：converter:name → <int:id>，正则 [0-9]+），
 # 确保 /invoices/ocr（Task 7 注册的静态路由）不会被 {id} 的 [^/]+ 吞掉 —— 被吞会先命中
 # ninja 405（非 JSON），urls.py 的契约 stub 兜底失效。

@@ -680,6 +680,60 @@ def ocr_receipt(request: HttpRequest):
 
 
 # ---------------------------------------------------------------------------
+# B1 开题开户（M1-c Task 6，R-8/R-9）
+# ---------------------------------------------------------------------------
+def open_project_account(request: HttpRequest, project_id: int):
+    """POST /projects/{projectId}/open-account：项目开题后一键开通核算账号。
+
+    R-8 幂等：已有非 CLOSED FBudget(tenant, project_id, deleted=0) → 40901 拒绝；
+    CLOSED 可重建（老账号行不动）。预算行 = FSubject(tenant, deleted=0, status=ACTIVE,
+    applies_to JSON 数组含 "F") 逐行 FBudgetLine(amount_planned=0)；无命中 → 只建账号。
+    total_approved 快照 = project.total_budget or Decimal("0.00")；
+    legal_entity_id = project.legal_entity_id or 1（EProject default=1，与 loan 先例一致）。
+    FBudget.status 不显式传 → 落模型 default="DRAFT"（对齐 create_budget :230 先例，
+    create_budget 不传 status）。
+    """
+    d = domain_from(request)
+    project = EProject.objects.filter(
+        id=project_id, tenant_id=d.tenant_id, deleted=0).first()
+    if project is None:
+        raise ApiError(404, CODE_NOT_FOUND, "项目不存在")
+    with transaction.atomic():
+        existing = FBudget.objects.filter(
+            tenant_id=d.tenant_id, project_id=project_id, deleted=0
+        ).exclude(status="CLOSED").first()
+        if existing is not None:
+            raise ApiError(409, CODE_CONFLICT, "该项目已开通核算账号，勿重复开户")
+        bud = FBudget.objects.create(
+            tenant_id=d.tenant_id, creator_id=d.user_id,
+            project_id=project_id,
+            legal_entity_id=project.legal_entity_id or 1,
+            mode="预算制",
+            total_approved=project.total_budget or Decimal("0.00"),
+        )
+        bud.code = code_of("BUD", bud.id)
+        bud.save(update_fields=["code"])
+        subjects = FSubject.objects.filter(
+            tenant_id=d.tenant_id, deleted=0, status="ACTIVE"
+        ).order_by("sort_no", "id")
+        lines_out: list[dict] = []
+        for s in subjects:
+            applies = s.applies_to
+            if not isinstance(applies, list) or "F" not in applies:
+                continue
+            line = FBudgetLine.objects.create(
+                tenant_id=d.tenant_id, creator_id=d.user_id,
+                budget_id=bud.id, subject_id=s.id, amount_planned=Decimal("0.00"),
+            )
+            lines_out.append({
+                "id": line.id, "subjectId": s.id, "subjectName": s.name,
+            })
+    return ok(request, {
+        "budgetId": bud.id, "budgetCode": bud.code, "lines": lines_out,
+    })
+
+
+# ---------------------------------------------------------------------------
 # 报销（F-07/F-09/F-10 + 指纹查重）
 # ---------------------------------------------------------------------------
 def _fingerprint(no: str, amount: str, dt: str) -> str:

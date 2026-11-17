@@ -1978,6 +1978,36 @@ paths:
         "404": { $ref: '#/components/responses/NotFound' }
         "409": { $ref: '#/components/responses/RuleRejected' }
 
+  /projects/{projectId}/open-account:
+    post:
+      tags: [Budget]
+      summary: 项目一键开通核算账号（B1，M1-c Task 6，R-8/R-9）
+      description: >-
+        项目开题后一键开通核算账号：按 F_SUBJECT.applies_to（JSON 数组含 "F" 的 ACTIVE 科目）
+        贯通生成 FBudgetLine(amount_planned=0)。R-8 幂等：已有非 CLOSED FBudget(tenant,
+        project_id, deleted=0) → 40901 拒绝；CLOSED 后可再开户。total_approved =
+        project.total_budget 快照（缺省 0.00）；无命中科目 → 只建账号不建行。
+      operationId: openProjectAccount
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        "200":
+          description: 开户结果（budgetId/budgetCode + 贯通生成的预算行）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/OpenAccountResult' }
+        "404": { $ref: '#/components/responses/NotFound' }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+
   /cost-pools/calculate:
     post:
       tags: [CostPool]
@@ -2804,6 +2834,24 @@ components:
         ruleHits:
           type: array
           items: { $ref: '#/components/schemas/RuleVerdict' }
+
+    OpenAccountResult:
+      type: object
+      description: B1 开题开户结果（M1-c Task 6）
+      properties:
+        budgetId: { type: integer, format: int64 }
+        budgetCode: { type: string, description: 'BUD-年-序' }
+        lines:
+          type: array
+          description: 按 applies_to 含 "F" 的 ACTIVE 科目贯通生成的预算行（无命中为空数组）
+          items: { $ref: '#/components/schemas/OpenAccountLine' }
+
+    OpenAccountLine:
+      type: object
+      properties:
+        id: { type: integer, format: int64, description: FBudgetLine(id) }
+        subjectId: { type: integer, format: int64, description: FSubject(id) 贯通 }
+        subjectName: { type: string }
 
     CostPoolCalcRequest:
       type: object

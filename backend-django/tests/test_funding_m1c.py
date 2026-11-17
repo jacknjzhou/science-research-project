@@ -529,3 +529,167 @@ def test_import_bank_flow_invalid_amount_40001_rollback(seed_auth):
     # 空 flows / 非数组 → 40001
     assert _err_code(_post(IMPORT_URL, {"flows": []}, roles=("R-ADMIN",))) == 40001
     assert _err_code(_post(IMPORT_URL, {"flows": "x"}, roles=("R-ADMIN",))) == 40001
+
+
+# ===========================================================================
+# M1-c Task 6：B1 开题开户——FBudget+科目行贯通（R-8/R-9，POST /projects/{id}/open-account）
+# ===========================================================================
+from decimal import Decimal
+
+from apps.funding.models import FBudget, FBudgetLine, FSubject
+from apps.project.models import EProject
+
+OPEN_URL = "/api/v1/projects/{pid}/open-account"
+
+
+def _make_project(**kw):
+    body = dict(tenant_id=1, creator_id=1, pi_user_id=1, application_id=1,
+                title="开题项目", status="EXECUTING")
+    body.update(kw)
+    return EProject.objects.create(**body)
+
+
+def _subject(name, applies, **kw):
+    body = dict(tenant_id=1, creator_id=1, name=name, category="DIRECT",
+                status="ACTIVE", applies_to=applies)
+    body.update(kw)
+    return FSubject.objects.create(**body)
+
+
+@pytest.mark.django_db
+def test_open_account_40401_unknown_and_cross_tenant(seed_auth):
+    # 不存在
+    r = _post(OPEN_URL.format(pid=999999), {})
+    assert r.status_code == 404 and _err_code(r) == 40401
+    # 跨租户：项目在 tenant 2，调用方 tenant 1 → 同样 40401（不泄露存在性）
+    p2 = _make_project(tenant_id=2)
+    r2 = _post(OPEN_URL.format(pid=p2.id), {})
+    assert r2.status_code == 404 and _err_code(r2) == 40401
+
+
+@pytest.mark.django_db
+def test_open_account_ok_hits_and_result_schema(seed_auth):
+    """applies_to 含 "F" 的 ACTIVE 科目逐行贯通；返回 OpenAccountResult camelCase。"""
+    p = _make_project(total_budget=Decimal("123456.50"), legal_entity_id=7)
+    s1 = _subject("设备费", ["F", "NSFC"])
+    _subject("外拨费", ["E"])          # 不含 F → 不建行
+    _subject("停用科目", ["F"], status="INACTIVE")  # 非 ACTIVE → 不建行
+    r = _post(OPEN_URL.format(pid=p.id), {})
+    assert r.status_code == 200, r.content
+    d = _resp_json(r)["data"]
+    # 契约 OpenAccountResult 全键
+    assert set(d.keys()) == {"budgetId", "budgetCode", "lines"}
+    assert d["budgetCode"].startswith("BUD-")
+    assert len(d["lines"]) == 1
+    line = d["lines"][0]
+    assert set(line.keys()) == {"id", "subjectId", "subjectName"}
+    assert line["subjectId"] == s1.id and line["subjectName"] == "设备费"
+    # 落库快照：total_approved = project.total_budget；legal_entity 贯通；mode=预算制
+    bud = FBudget.objects.get(id=d["budgetId"])
+    assert bud.total_approved == Decimal("123456.50")
+    assert bud.legal_entity_id == 7 and bud.mode == "预算制"
+    assert bud.tenant_id == 1 and bud.project_id == p.id
+    assert bud.code == d["budgetCode"]
+    # 行：amount_planned=0、subject 贯通、租户一致
+    rows = FBudgetLine.objects.filter(budget_id=bud.id, deleted=0)
+    assert rows.count() == 1
+    row = rows.first()
+    assert row.subject_id == s1.id
+    assert row.amount_planned == Decimal("0.00")
+    assert row.amount_planned == 0  # Decimal("0.00") == 0
+    assert row.tenant_id == 1
+
+
+@pytest.mark.django_db
+def test_open_account_no_hits_account_only(seed_auth):
+    """无命中科目（applies_to 不含 F / NULL）→ 只建账号不建行（lines=[]）。"""
+    p = _make_project()
+    _subject("材料费", ["E"])
+    _subject("无效科目", None)
+    r = _post(OPEN_URL.format(pid=p.id), {})
+    assert r.status_code == 200
+    d = _resp_json(r)["data"]
+    assert d["lines"] == []
+    assert FBudget.objects.filter(id=d["budgetId"], project_id=p.id, deleted=0).exists()
+    assert FBudgetLine.objects.filter(budget_id=d["budgetId"]).count() == 0
+
+
+@pytest.mark.django_db
+def test_open_account_total_approved_zero_snapshot(seed_auth):
+    """total_budget 缺省（0）→ 快照 Decimal("0.00")；legal_entity_id 缺省派生 default=1。"""
+    p = _make_project()  # total_budget 默认 0，legal_entity_id 默认 1
+    r = _post(OPEN_URL.format(pid=p.id), {})
+    assert r.status_code == 200
+    bud = FBudget.objects.get(id=_resp_json(r)["data"]["budgetId"])
+    assert bud.total_approved == Decimal("0.00")
+    assert bud.legal_entity_id == 1
+
+
+@pytest.mark.django_db
+def test_open_account_40901_existing_non_closed_and_closed_reopen(seed_auth):
+    """R-8：已有非 CLOSED FBudget → 40901 幂等拒绝；CLOSED 后可再开户。"""
+    p = _make_project()
+    _subject("设备费", ["F"])
+    r1 = _post(OPEN_URL.format(pid=p.id), {})
+    assert r1.status_code == 200
+    first = _resp_json(r1)["data"]
+    n_lines = FBudgetLine.objects.filter(budget_id=first["budgetId"], deleted=0).count()
+    assert n_lines == 1
+    # 重复调用：40901，且不重复建行（Review Focus 4）
+    r2 = _post(OPEN_URL.format(pid=p.id), {})
+    assert r2.status_code == 409 and _err_code(r2) == 40901
+    assert FBudgetLine.objects.filter(budget_id=first["budgetId"], deleted=0).count() == 1
+    assert FBudget.objects.filter(tenant_id=1, project_id=p.id, deleted=0).count() == 1
+    # 状态机各非 CLOSED 值均拦：EXECUTING 也拦
+    FBudget.objects.filter(id=first["budgetId"]).update(status="EXECUTING")
+    r3 = _post(OPEN_URL.format(pid=p.id), {})
+    assert r3.status_code == 409 and _err_code(r3) == 40901
+    # CLOSED → 允许重建新账号（老账号行不动）
+    FBudget.objects.filter(id=first["budgetId"]).update(status="CLOSED")
+    r4 = _post(OPEN_URL.format(pid=p.id), {})
+    assert r4.status_code == 200, r4.content
+    second = _resp_json(r4)["data"]
+    assert second["budgetId"] != first["budgetId"]
+    assert FBudgetLine.objects.filter(budget_id=second["budgetId"], deleted=0).count() == 1
+    assert FBudgetLine.objects.filter(budget_id=first["budgetId"], deleted=0).count() == 1
+
+
+# --- 契约回归守卫：03-F 契约补丁（POST /projects/{projectId}/open-account + OpenAccountResult）---
+from pathlib import Path
+
+_YAML_NAME = "03-科研经费管理-F.openapi.yaml"
+
+
+def _load_f_yaml():
+    repo = Path(__file__).resolve().parents[2]
+    design_yaml = (repo / "design" / _YAML_NAME).read_text(encoding="utf-8")
+    fe_yaml = (repo / "frontend" / "src" / "api" / "schema" / _YAML_NAME).read_text(encoding="utf-8")
+    return design_yaml, fe_yaml
+
+
+@pytest.mark.django_db
+def test_open_account_contract_patch_yaml():
+    import yaml as _yaml
+    design_yaml, fe_yaml = _load_f_yaml()
+    # 双份副本逐字节一致（Task 6 约束 2）
+    assert fe_yaml == design_yaml
+    spec = _yaml.safe_load(design_yaml)
+    path = spec["paths"]["/projects/{projectId}/open-account"]
+    post = path["post"]
+    assert post["operationId"] == "openProjectAccount"
+    # 参数 {projectId} 类型化 integer
+    pid = [pp for pp in post["parameters"] if pp.get("name") == "projectId"]
+    assert pid and pid[0]["in"] == "path" and pid[0]["schema"]["type"] == "integer"
+    # 响应 data → OpenAccountResult
+    resp = post["responses"]["200"]["content"]["application/json"]["schema"]
+    assert resp["allOf"][0]["$ref"] == "#/components/schemas/ApiResponse"
+    assert (resp["allOf"][1]["properties"]["data"]["$ref"]
+            == "#/components/schemas/OpenAccountResult")
+    # schema 结构（camelCase）
+    sch = spec["components"]["schemas"]["OpenAccountResult"]
+    props = sch["properties"]
+    assert set(props.keys()) == {"budgetId", "budgetCode", "lines"}
+    line_items = props["lines"]["items"]
+    assert line_items["$ref"] == "#/components/schemas/OpenAccountLine"
+    line_sch = spec["components"]["schemas"]["OpenAccountLine"]
+    assert set(line_sch["properties"].keys()) == {"id", "subjectId", "subjectName"}
