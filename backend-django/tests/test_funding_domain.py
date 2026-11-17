@@ -211,23 +211,27 @@ def test_income_claim_with_mgmt_fee(seed_auth):
 
 
 def test_import_bank_flow_idempotent(seed_auth):
+    # M1-c Task 5：契约信封入参 {"flows":[...]} + BankFlowImportResult 五键返回（A8/R-7）
     c = _c()
-    rows = [{"bank_flow_no": "BK-X1", "amount": "100.00"},
-            {"bank_flow_no": "BK-X2", "amount": "200.00"}]
+    rows = [{"bankFlowNo": "BK-X1", "amount": "100.00"},
+            {"bankFlowNo": "BK-X2", "amount": "200.00"}]
     r = c.post(
         "/api/v1/incomes/import-bank-flow",
-        data=json.dumps(rows), content_type="application/json",
+        data=json.dumps({"flows": rows}), content_type="application/json",
         **bearer(1, ["R-ADMIN"]),
     )
-    assert r.json()["data"] == {"imported": 2, "skipped": 0}
-    # 重复导入 → 全部跳过
+    assert r.json()["data"] == {"total": 2, "autoMatched": 0, "doubtful": 0,
+                                "unclaimed": 2, "elapsedMs": r.json()["data"]["elapsedMs"]}
+    assert isinstance(r.json()["data"]["elapsedMs"], int)
+    # 重复导入 → 已存在跳过，只计新建
     r = c.post(
         "/api/v1/incomes/import-bank-flow",
-        data=json.dumps(rows + [{"bank_flow_no": "BK-X3", "amount": "300.00"}]),
+        data=json.dumps({"flows": rows + [{"bankFlowNo": "BK-X3", "amount": "300.00"}]}),
         content_type="application/json",
         **bearer(1, ["R-ADMIN"]),
     )
-    assert r.json()["data"] == {"imported": 1, "skipped": 2}
+    assert r.json()["data"]["total"] == 3
+    assert r.json()["data"]["unclaimed"] == 1
 
 
 # ---------------------------------------------------------------------------

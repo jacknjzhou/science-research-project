@@ -452,3 +452,80 @@ def test_ocr_receipt_contract_full_coverage_tolerates_empty_body():
                **bearer(1, ["R-ADMIN"]))
     assert r.status_code == 200
     assert r.json()["data"]["claim_status"] == "UNCLAIMED"
+
+
+# ===========================================================================
+# M1-c Task 5：import-bank-flow 契约对齐（A8/R-7：信封入参 + 五键返回）
+# ===========================================================================
+IMPORT_URL = "/api/v1/incomes/import-bank-flow"
+
+
+def _flow(no, amount, **kw):
+    item = {"bankFlowNo": no, "amount": amount}
+    item.update(kw)
+    return item
+
+
+@pytest.mark.django_db
+def test_import_bank_flow_envelope_and_five_keys(seed_auth):
+    """信封入参 {"flows":[...]} → 五键 BankFlowImportResult；camelCase 字段。"""
+    from apps.funding.models import FIncome
+
+    r = _post(IMPORT_URL, {"flows": [
+        _flow("BK-C1", "100.00", receiptDate="2026-11-01", payerName="某公司",
+              payerBank="工行", purposeText="进度款"),
+        _flow("BK-C2", "200.50"),
+    ]}, roles=("R-ADMIN",))
+    assert r.status_code == 200, r.content
+    data = _resp_json(r)["data"]
+    # 契约五键（03 yaml BankFlowImportResult）
+    assert set(data.keys()) == {"total", "autoMatched", "doubtful", "unclaimed", "elapsedMs"}
+    assert data["total"] == 2
+    assert data["autoMatched"] == 0 and data["doubtful"] == 0  # 规则引擎 M2
+    assert data["unclaimed"] == 2
+    assert isinstance(data["elapsedMs"], int) and data["elapsedMs"] >= 0
+    # 落库：UNCLAIMED + camelCase 字段映射 + Decimal 金额
+    inc = FIncome.objects.get(tenant_id=1, bank_flow_no="BK-C1", deleted=0)
+    assert inc.claim_status == "UNCLAIMED"
+    assert str(inc.amount) == "100.00"
+    assert inc.receipt_date.isoformat() == "2026-11-01"
+    assert inc.payer_name == "某公司" and inc.payer_bank == "工行"
+    assert inc.purpose_text == "进度款"
+
+
+@pytest.mark.django_db
+def test_import_bank_flow_idempotent_skip_counts_unclaimed(seed_auth):
+    """幂等 skip：(tenant,bank_flow_no,deleted=0) 命中 → 跳过不报错，只计新建。"""
+    r1 = _post(IMPORT_URL, {"flows": [
+        _flow("BK-D1", "100.00"), _flow("BK-D2", "200.00"),
+    ]}, roles=("R-ADMIN",))
+    assert _resp_json(r1)["data"]["unclaimed"] == 2
+    # 重复导入：前两条 skip，仅第三条新建
+    r2 = _post(IMPORT_URL, {"flows": [
+        _flow("BK-D1", "100.00"), _flow("BK-D2", "200.00"), _flow("BK-D3", "300.00"),
+    ]}, roles=("R-ADMIN",))
+    assert r2.status_code == 200
+    d = _resp_json(r2)["data"]
+    assert d["total"] == 3 and d["unclaimed"] == 1
+
+
+@pytest.mark.django_db
+def test_import_bank_flow_invalid_amount_40001_rollback(seed_auth):
+    """金额无效（_money 解析失败/缺 amount）→ 40001 整体拒绝、事务回滚，非跳过坏行。"""
+    from apps.funding.models import FIncome
+
+    body = {"flows": [_flow("BK-E1", "100.00"), _flow("BK-E2", "abc")]}
+    r = _post(IMPORT_URL, body, roles=("R-ADMIN",))
+    assert r.status_code == 400
+    assert _err_code(r) == 40001
+    # 整体回滚：有效行也不落库
+    assert FIncome.objects.filter(tenant_id=1, bank_flow_no="BK-E1", deleted=0).count() == 0
+    # 缺 bankFlowNo 同样 40001
+    r2 = _post(IMPORT_URL, {"flows": [{"amount": "1.00"}]}, roles=("R-ADMIN",))
+    assert r2.status_code == 400 and _err_code(r2) == 40001
+    # 金额多余精度（3 位小数）→ _money_strict 口径 40001
+    r3 = _post(IMPORT_URL, {"flows": [_flow("BK-E3", "1.234")]}, roles=("R-ADMIN",))
+    assert r3.status_code == 400 and _err_code(r3) == 40001
+    # 空 flows / 非数组 → 40001
+    assert _err_code(_post(IMPORT_URL, {"flows": []}, roles=("R-ADMIN",))) == 40001
+    assert _err_code(_post(IMPORT_URL, {"flows": "x"}, roles=("R-ADMIN",))) == 40001

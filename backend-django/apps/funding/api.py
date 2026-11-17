@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
@@ -521,28 +522,50 @@ def claim_income(request: HttpRequest, id: int):
 
 
 def import_bank_flow(request: HttpRequest):
-    """F-06 批量导入：bank_flow_no 幂等键，同租户已存在跳过。幂等检查失败必须显式失败。"""
+    """F-06 批量导入（契约信封版，M1-c Task 5/A8-R-7）。
+
+    入参 {"flows":[BankFlowItem]}（required [bankFlowNo, amount]，camelCase）；
+    金额无效（_money_strict 解析失败）→ 40001 整体拒绝（事务回滚，先例优先：整批拒绝，
+    非跳过坏行）；(tenant, bank_flow_no, deleted=0) 命中 → 幂等 skip 不报错；
+    新建 claim_status=UNCLAIMED（autoMatched/doubtful 固定 0，规则引擎 M2）；
+    legal_entity_id=1 维持（历史口径，实体表 M1 后续期次接入后再改取值）。
+    返回 BankFlowImportResult{total, autoMatched, doubtful, unclaimed, elapsedMs}。
+    """
     d = domain_from(request)
-    rows = read_json_any(request)
-    if not isinstance(rows, list) or not rows:
-        raise ApiError(400, CODE_BAD_REQUEST, "参数错误：非空数组必填")
-    imported = skipped = 0
-    for r in rows:
-        flow = r.get("bank_flow_no")
-        amount = _money(r.get("amount"))
-        if not flow or amount is None:
-            raise ApiError(400, CODE_BAD_REQUEST, "bank_flow_no/amount 必填")
-        if FIncome.objects.filter(tenant_id=d.tenant_id, bank_flow_no=flow, deleted=0).exists():
-            skipped += 1
-            continue
-        FIncome.objects.create(
-            tenant_id=d.tenant_id, creator_id=d.user_id, legal_entity_id=1,
-            receipt_no=r.get("receipt_no"), receipt_date=_parse_date(r.get("receipt_date")),
-            amount=amount, payer_name=r.get("payer_name"), purpose_text=r.get("purpose_text"),
-            bank_flow_no=flow,
-        )
-        imported += 1
-    return ok(request, {"imported": imported, "skipped": skipped})
+    b = read_json_any(request)
+    if not isinstance(b, dict):
+        raise ApiError(400, CODE_BAD_REQUEST, "参数错误：{flows:[...]} 信封必填")
+    flows = b.get("flows")
+    if not isinstance(flows, list) or not flows:
+        raise ApiError(400, CODE_BAD_REQUEST, "参数错误：flows 非空数组必填")
+    started = time.monotonic()
+    unclaimed = 0
+    with transaction.atomic():
+        for r in flows:
+            flow = (r.get("bankFlowNo") or "").strip() if isinstance(r, dict) else None
+            # 金额口径：最多 2 位小数，多余精度=无效金额 40001（先例 _money_strict）
+            amount = _money_strict(r.get("amount")) if isinstance(r, dict) else None
+            if not flow or amount is None:
+                # 整体拒绝：抛出即回滚本轮已建行，不跳过坏行
+                raise ApiError(400, CODE_BAD_REQUEST, "bankFlowNo/amount 必填且金额须为最多 2 位小数")
+            if FIncome.objects.filter(tenant_id=d.tenant_id, bank_flow_no=flow, deleted=0).exists():
+                continue  # 幂等 skip：已存在同租户流水号，不计 unclaimed
+            FIncome.objects.create(
+                tenant_id=d.tenant_id, creator_id=d.user_id, legal_entity_id=1,
+                receipt_date=_parse_date(r.get("receiptDate")),
+                amount=amount, payer_name=r.get("payerName"), payer_bank=r.get("payerBank"),
+                purpose_text=r.get("purposeText"),
+                bank_flow_no=flow, claim_status="UNCLAIMED",
+            )
+            unclaimed += 1
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+    return ok(request, {
+        "total": len(flows),
+        "autoMatched": 0,  # 规则引擎 M2 接入
+        "doubtful": 0,     # 规则引擎 M2 接入
+        "unclaimed": unclaimed,
+        "elapsedMs": elapsed_ms,
+    })
 
 
 # ---------------------------------------------------------------------------
