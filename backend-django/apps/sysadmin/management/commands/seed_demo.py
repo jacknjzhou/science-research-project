@@ -96,6 +96,13 @@ PAGE_GRANTS = [
     ("admin-users", "R-ADMIN"), ("admin-roles", "R-ADMIN"), ("admin-roles", "R-AUDITOR"),
     ("admin-dicts", "R-ADMIN"),
     ("funding-config", "R-MANAGER"), ("funding-config", "R-FINANCE"),
+    # M1-b：成本池核算 + 项目决算（镜像 auth.ts PAGE_GRANTS，policy 三角色同口径）
+    ("funding-cost-pool", "R-MANAGER"), ("funding-cost-pool", "R-FINANCE"), ("funding-cost-pool", "R-LEADER"),
+    ("funding-settle", "R-MANAGER"), ("funding-settle", "R-FINANCE"), ("funding-settle", "R-LEADER"),
+    # M1-c：拨款管理 + 到账认领与回单识别（import-bank-flow / incomes claim
+    # 由 R-MANAGER/R-FINANCE 既有 /incomes/* 通配覆盖，R-LEADER 无）
+    ("funding-disburse", "R-MANAGER"), ("funding-disburse", "R-FINANCE"), ("funding-disburse", "R-LEADER"),
+    ("funding-income", "R-MANAGER"), ("funding-income", "R-FINANCE"), ("funding-income", "R-LEADER"),
 ]
 
 
@@ -189,7 +196,7 @@ class Command(BaseCommand):
         )
         from apps.funding.models import (
             FBudget, FBudgetLine, FExpense, FIncome, FInvoice, FLoan, FSubject,
-            FTravelStandard,
+            FTravelStandard, FDisbursement,
         )
         from apps.notify.models import SysImportLog, SysNotification, SysTask
         from apps.output.models import RDataset, RJournalSource, ROutput
@@ -840,5 +847,96 @@ class Command(BaseCommand):
         if st.code is None:
             st.code = code_of("SET", st.id)
             st.save(update_fields=["code"])
+
+        # ---- R. M1-c 演示数据（拨款管理 7.1 / 到账认领与回单识别 7.2 / 核算开户 7.3） ----
+        # 拨款单：外协分包合同 30 万拨 8 万，SUBMITTED→(approve,pay)→PAID，
+        #   approval_chain 完整两步 + DISBURSEMENT 平行记账分录（与 pay handler 同模板：
+        #   fin 7701 借/1002 贷，bud 7501 借/8001 贷），快照三列与 check 口径自洽
+        #   （contract=300000 / before=0 / remain=300000-0-80000=220000）。
+        # 回单识别：OCR 到账流水（UNCLAIMED，待认领），remark 为 ocr_receipt 审计形态
+        #   "ocr:{fields,warnings,reasons,fileUrl}"，match_confidence=0.9000。
+        # 核算开户（B1）：prj2 一键开户演示——科目行（外协费 applies_to=["F"]）+
+        #   预算制 DRAFT 预算 + 零额度科目行（amount_planned=0），不经 handler 直写。
+        import json as _json
+
+        from apps.funding.models import FAccountingEntry
+
+        con_m1c = put(GContract, {"tenant_id": T1, "code": "CON-DEMO-M1C-01"},
+                      {"contract_type": "外协分包", "party_a": ent.name,
+                       "party_b": "华科精密仪器有限公司（演示）", "amount": 300000,
+                       "status": "ACTIVE", "project_id": prj1.id, "supplier": sup1,
+                       "legal_entity_id": ent.id, "outsource": True,
+                       "creator_id": C1}, "procure")
+        disb = put(FDisbursement,
+            {"tenant_id": T1, "contract_id": con_m1c.id, "phase": "进度", "deleted": 0},
+            {"outsource_unit_id": sup1.id, "project_id": prj1.id,
+             "legal_entity_id": ent.id, "amount": 80000, "status": "PAID",
+             "approval_chain": [
+                 {"userId": C1, "action": "approve", "at": now.isoformat()},
+                 {"userId": C1, "action": "pay", "at": now.isoformat()},
+             ],
+             "contract_amount": 300000, "disbursed_before": 0,
+             "remain_contract_amount": 220000, "voucher_status": "PENDING",
+             "creator_id": C1, "remark": "演示拨款单（M1-c 7.1，PAID 已拨付）"},
+            "funding")
+        if disb.code is None:
+            disb.code = code_of("DISB", disb.id)
+            disb.save(update_fields=["code"])
+        ae_disb = put(FAccountingEntry,
+            {"tenant_id": T1, "source_txn_type": "DISBURSEMENT",
+             "source_txn_id": disb.id, "period": period, "deleted": 0},
+            {"project_id": disb.project_id, "legal_entity_id": disb.legal_entity_id,
+             "status": "POSTED", "posted_finance": True, "posted_budget": True,
+             "reconcile_status": "BALANCED",
+             "fin_entry_json": {"lines": [
+                 {"subject": "7701", "direction": "debit", "amount": str(disb.amount)},
+                 {"subject": "1002", "direction": "credit", "amount": str(disb.amount)},
+             ]},
+             "bud_entry_json": {"lines": [
+                 {"subject": "7501", "direction": "debit", "amount": str(disb.amount)},
+                 {"subject": "8001", "direction": "credit", "amount": str(disb.amount)},
+             ]},
+             "creator_id": C1, "remark": "演示平行记账（M1-c 7.1，DISBURSEMENT 双分录）"},
+            "funding")
+        if ae_disb.code is None:
+            ae_disb.code = code_of("ACC", ae_disb.id)
+            ae_disb.save(update_fields=["code"])
+        inc_ocr = put(FIncome, {"tenant_id": T1, "bank_flow_no": "BMFLW-DEMO-M1C-0001"},
+                      {"amount": 50000, "payer_name": "华科精密仪器有限公司（演示）",
+                       "payer_bank": "中国工商银行合肥高新区支行",
+                       "purpose_text": "横向课题协作款（回单识别演示）",
+                       "receipt_date": today, "receipt_no": "",
+                       "claim_status": "UNCLAIMED", "match_confidence": "0.9000",
+                       "remark": "ocr:" + _json.dumps(
+                           {"fields": {"amount": "50000.00", "payerName": "华科精密仪器有限公司（演示）",
+                                       "bankFlowNo": "BMFLW-DEMO-M1C-0001",
+                                       "receiptDate": f"{today:%Y-%m-%d}"},
+                            "warnings": [], "reasons": ["关键字段完整"],
+                            "fileUrl": "/uploads/demo/receipt-m1c.jpg"},
+                           ensure_ascii=False),
+                       "legal_entity_id": 1, "creator_id": C1}, "funding")
+        if inc_ocr.code is None:
+            inc_ocr.code = code_of("INC", inc_ocr.id)
+            inc_ocr.save(update_fields=["code"])
+        sub_wx = put(FSubject, {"tenant_id": T1, "name": "外协费"},
+                     {"category": "DIRECT", "applies_to": ["F"], "sort_no": 4,
+                      "status": "ACTIVE", "creator_id": C1,
+                      "remark": "M1-c 核算开户演示科目（B1）"}, "funding")
+        if sub_wx.code is None:
+            sub_wx.code = f"SJ-{today:%Y}-{sub_wx.id:06d}"
+            sub_wx.save(update_fields=["code"])
+        bud_m1c = put(FBudget, {"tenant_id": T1, "code": "BUD-DEMO-M1C-01"},
+                      {"project_id": prj2.id, "legal_entity_id": ent.id,
+                       "mode": "预算制", "status": "DRAFT", "total_approved": 500000,
+                       "creator_id": C1, "remark": "演示核算开户预算（M1-c B1，DRAFT）"},
+                      "funding")
+        if bud_m1c.code is None:
+            bud_m1c.code = code_of("BUD", bud_m1c.id)
+            bud_m1c.save(update_fields=["code"])
+        put(FBudgetLine, {"tenant_id": T1, "code": "BUDL-DEMO-M1C-01"},
+            {"budget_id": bud_m1c.id, "subject_id": sub_wx.id,
+             "amount_planned": 0, "status": "ACTIVE",
+             "creator_id": C1, "remark": "演示开户科目行（M1-c B1，零额度待分配）"},
+            "funding")
 
         return cnt
