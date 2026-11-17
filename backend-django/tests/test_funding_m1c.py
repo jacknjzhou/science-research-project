@@ -306,6 +306,10 @@ def _remark_json(inc: FIncome) -> dict:
     assert inc.remark and inc.remark.startswith("ocr:")
     return json.loads(inc.remark[len("ocr:"):])
 
+
+def inc_match_conf(income_id: int) -> Decimal:
+    return FIncome.objects.get(id=income_id).match_confidence
+
 @pytest.mark.django_db
 def test_ocr_receipt_degrades_when_no_llm_and_no_text(settings):
     """①无 LLM 无 text → HTTP 200 降级骨架：UNCLAIMED + reasons=["ocr-engine-unavailable"]。"""
@@ -317,6 +321,8 @@ def test_ocr_receipt_degrades_when_no_llm_and_no_text(settings):
     d = r.json()["data"]
     assert d["claim_status"] == "UNCLAIMED"
     assert Decimal(d["amount"]) == Decimal("0")
+    # 降级无置信 → 契约 number nullable → JSON null
+    assert d["match_confidence"] is None
     assert d["ocrWarnings"] == ["ocr-engine-unavailable"]
     inc = FIncome.objects.get(id=d["id"])
     assert inc.claim_status == "UNCLAIMED"
@@ -335,7 +341,10 @@ def test_ocr_receipt_rule_parse_creates_income():
                content_type="application/json", **bearer(1, ["R-FINANCE"]))
     assert r.status_code == 200
     d = r.json()["data"]
-    assert float(d["match_confidence"]) >= 0.85
+    # 契约 Income.matchConfidence: number → 响应为 float（非字符串）
+    assert isinstance(d["match_confidence"], (int, float))
+    assert d["match_confidence"] >= 0.85
+    assert abs(d["match_confidence"] - float(inc_match_conf(d["id"])) ) < 1e-9
     assert d["payer_name"] == "某某科技有限公司"
     assert d["amount"] == "50000.00"
     assert d["receipt_date"] == "2026-11-15"
@@ -410,7 +419,9 @@ def test_ocr_receipt_low_confidence_still_creates():
                content_type="application/json", **bearer(1, ["R-FINANCE"]))
     assert r.status_code == 200
     d = r.json()["data"]
-    assert float(d["match_confidence"]) < 0.85
+    # 契约 Income.matchConfidence: number → 响应为 float（非字符串）
+    assert isinstance(d["match_confidence"], (int, float))
+    assert d["match_confidence"] < 0.85
     inc = FIncome.objects.get(id=d["id"])
     assert inc.claim_status == "UNCLAIMED"
     assert inc.match_confidence < Decimal("0.85")

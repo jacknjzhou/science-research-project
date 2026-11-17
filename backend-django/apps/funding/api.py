@@ -647,8 +647,9 @@ def ocr_receipt(request: HttpRequest):
         inc.save(update_fields=["code"])
 
     resp = to_api_income(inc)
+    # 契约 Income.matchConfidence: number —— 输出 float（非字符串；None → null）
     resp["match_confidence"] = (
-        num4(inc.match_confidence) if inc.match_confidence is not None else None)
+        float(inc.match_confidence) if inc.match_confidence is not None else None)
     # ocrWarnings = 引擎侧原因 + text 存在时的解析告警（无 text 时「receipt-text-empty」
     # 与引擎原因重复，噪音过滤——同 invoice_ocr 先例）。
     resp["ocrWarnings"] = reasons + (warnings if text else [])
