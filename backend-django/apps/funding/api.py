@@ -546,6 +546,116 @@ def import_bank_flow(request: HttpRequest):
 
 
 # ---------------------------------------------------------------------------
+# 回单 OCR（A8/F-15，M1-c Task 4）
+# ---------------------------------------------------------------------------
+def _normalize_receipt_fields(raw: dict) -> dict:
+    """LLM/规则产出 → 回单契约字段（camelCase、金额两位小数字符串）。只采纳白名单键。"""
+    from core.receipt_ocr import FIELD_WEIGHTS
+
+    allowed = set(FIELD_WEIGHTS)
+    out: dict[str, str] = {}
+    for k, v in (raw or {}).items():
+        if k not in allowed or v in (None, ""):
+            continue
+        s = str(v).strip()
+        if k == "amount":
+            try:
+                s = str(Decimal(s.replace(",", "")).quantize(Decimal("0.01")))
+            except Exception:
+                continue
+        elif k == "receiptDate" and s:
+            d = _parse_date(s)
+            if d is None:
+                continue
+            s = d.isoformat()
+        out[k] = s
+    return out
+
+
+def _llm_receipt_fields(text: str) -> tuple[dict, list[str]]:
+    """OCR 一级回落：LLM 抽取。返回 (fields, reasons)。未配置/失败 → 空字段+原因。"""
+    from django.conf import settings
+
+    reasons: list[str] = []
+    if not settings.LLM_BASE_URL:
+        return {}, ["ocr-engine-unavailable"] if not text else []
+    system = ('你是银行回单 OCR 信息抽取助手。只输出一个 JSON 对象，'
+              '格式 {"payerName":"付款人户名","amount":"0.00",'
+              '"receiptDate":"YYYY-MM-DD","bankFlowNo":"交易流水号","purpose":"摘要/用途"}，'
+              '金额为两位小数字符串，未识别的键输出 null，不要输出其它文字。')
+    try:
+        from core.llm import chat_json
+
+        raw = chat_json(system, text or "")
+        return _normalize_receipt_fields(raw), []
+    except Exception as exc:
+        return {}, [f"llm-failed：{exc}"]
+
+
+def ocr_receipt(request: HttpRequest):
+    """POST /incomes/ocr-receipt：LLM → 规则 → 降级 三级回落（HTTP 200 恒定，AI 产出仅建议）。
+
+    - 双不可用（无 LLM 且无 text）→ 降级骨架（amount=0，reasons=["ocr-engine-unavailable"]）；
+    - 置信度仅记录不阻断（R-6）：conf≥0.85 与 <0.85 均创建 FIncome
+      （claim_status=UNCLAIMED、match_confidence=conf）；
+    - 识别 bank_flow_no → 同租户 (tenant, flow_no, deleted=0) 命中 → 40903 硬拦
+      （对齐 uk_f_income_bankflow 逻辑唯一键）；未识别 → 不带 flow_no 创建（可重复提交）；
+    - OCR reasons/warnings 落 remark "ocr:"+JSON（R-6：无新列，remark 兼审计）。
+    """
+    d = domain_from(request)
+    b = read_json(request)
+    text = (b.get("text") or "").strip()
+    file_url = (b.get("fileUrl") or "").strip()
+    # fileUrl/text 均缺省也降级应答（契约 HTTP 200 恒定；test_contract_full_coverage 以 {} 打本端点）
+
+    reasons: list[str] = []
+    warnings: list[str] = []
+    fields: dict[str, str] = {}
+
+    llm_fields, llm_reasons = _llm_receipt_fields(text)
+    reasons.extend(llm_reasons)
+    if llm_fields:
+        fields = llm_fields
+        confidence = 0.8
+    else:
+        from core.receipt_ocr import parse_receipt_text
+
+        fields, confidence, warnings = parse_receipt_text(text)
+
+    has_fields = bool(fields)
+    if has_fields and fields.get("bankFlowNo"):
+        flow = fields["bankFlowNo"]
+        if FIncome.objects.filter(tenant_id=d.tenant_id, bank_flow_no=flow, deleted=0).exists():
+            raise ApiError(409, "40903", f"回单流水号已存在：{flow}")
+
+    with transaction.atomic():
+        inc = FIncome.objects.create(
+            tenant_id=d.tenant_id, creator_id=d.user_id, legal_entity_id=1,
+            receipt_no="", receipt_date=_parse_date(fields.get("receiptDate")),
+            amount=_money(fields.get("amount")) or Decimal("0"),
+            payer_name=fields.get("payerName") or "",
+            purpose_text=fields.get("purpose") or "",
+            bank_flow_no=fields.get("bankFlowNo") or None,
+            claim_status="UNCLAIMED",
+            match_confidence=(Decimal(str(confidence)).quantize(Decimal("0.0001"))
+                              if has_fields else None),
+            remark="ocr:" + json.dumps(
+                {"fields": fields, "warnings": warnings, "reasons": reasons,
+                 "fileUrl": file_url or None}, ensure_ascii=False),
+        )
+        inc.code = code_of("INC", inc.id)
+        inc.save(update_fields=["code"])
+
+    resp = to_api_income(inc)
+    resp["match_confidence"] = (
+        num4(inc.match_confidence) if inc.match_confidence is not None else None)
+    # ocrWarnings = 引擎侧原因 + text 存在时的解析告警（无 text 时「receipt-text-empty」
+    # 与引擎原因重复，噪音过滤——同 invoice_ocr 先例）。
+    resp["ocrWarnings"] = reasons + (warnings if text else [])
+    return ok(request, resp)
+
+
+# ---------------------------------------------------------------------------
 # 报销（F-07/F-09/F-10 + 指纹查重）
 # ---------------------------------------------------------------------------
 def _fingerprint(no: str, amount: str, dt: str) -> str:

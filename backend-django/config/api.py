@@ -225,6 +225,9 @@ api.post("/incomes/{id}/claim", auth=ark_auth, tags=["funding"])(funding_api.cla
 api.post(
     "/incomes/import-bank-flow", auth=ark_auth, tags=["funding"]
 )(funding_api.import_bank_flow)
+api.post(
+    "/incomes/ocr-receipt", auth=ark_auth, tags=["funding"]
+)(funding_api.ocr_receipt)
 
 # —— F 报销（静态 approval-batch 必须先于 {id} 注册，避免 [^/]+ 吞噬 → 405）——
 api.post("/expenses", auth=ark_auth, tags=["funding"])(funding_api.create_expense)

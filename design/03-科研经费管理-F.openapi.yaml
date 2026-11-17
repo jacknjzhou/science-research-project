@@ -848,6 +848,39 @@ paths:
                     properties:
                       data: { $ref: '#/components/schemas/BankFlowImportResult' }
 
+  /incomes/ocr-receipt:
+    post:
+      tags: [Income]
+      summary: 上传银行回单执行 OCR 生成到账草稿（A8/F-15，M1-c；三级回落）
+      description: >-
+        识别链路三级回落：LLM 优先（core/llm.py chat_json）→ 规则引擎（core/receipt_ocr.py
+        parse_receipt_text，标签族：付款人/金额/日期/流水号/用途）→ 双不可用时降级骨架
+        （amount=0，ocrWarnings 含 ocr-engine-unavailable，HTTP 200 恒定）。
+        置信度仅记录不阻断（R-6）：≥0.85 与 <0.85 均创建到账草稿
+        （claim_status=UNCLAIMED、match_confidence=conf，OCR reasons/warnings 落 remark
+        "ocr:"+JSON）。识别出 bankFlowNo → 同租户已存在（deleted=0）→ 40903 硬拦
+        （对齐 uk_f_income_bankflow 逻辑唯一键）；未识别 → 不带 flowNo 创建（可重复提交）。
+      operationId: ocrReceipt
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IncomeOcrRequest' }
+      responses:
+        "200":
+          description: 到账草稿（Income 全字段 + ocrWarnings；恒定 HTTP 200，降级时 amount=0/confidence=null）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/IncomeOcrResponse' }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+
   /incomes/{incomeId}/claim:
     post:
       tags: [Income]
@@ -2485,6 +2518,25 @@ components:
         matchConfidence: { type: number, format: double }
         claimedBy: { type: integer, format: int64, nullable: true }
         claimedAt: { type: string, format: date-time, nullable: true }
+
+    IncomeOcrRequest:
+      type: object
+      required: []
+      description: 回单 OCR 请求（fileUrl/text 至少其一；均缺省 → 降级骨架，HTTP 200 恒定）
+      properties:
+        fileUrl: { type: string, description: 对象存储回单图 URL（LLM 识别入口，与 text 至少其一） }
+        text: { type: string, description: 回单 OCR 原始文本（规则引擎回落入口） }
+
+    IncomeOcrResponse:
+      description: OCR 响应 = Income 全字段 + ocrWarnings（A8/F-15，镜像 InvoiceOcrResponse）
+      allOf:
+        - $ref: '#/components/schemas/Income'
+        - type: object
+          properties:
+            ocrWarnings:
+              type: array
+              description: OCR 告警/降级说明（引擎全不可用降级时含 ocr-engine-unavailable）
+              items: { type: string }
 
     IncomeRegisterRequest:
       type: object
