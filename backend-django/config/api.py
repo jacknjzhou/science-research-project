@@ -307,6 +307,11 @@ api.post("/loans/{int:id}/pay", auth=ark_auth, tags=["funding"])(funding_api.pay
 api.post("/loans/{int:id}/write-off", auth=ark_auth, tags=["funding"])(funding_api.write_off_loan)
 api.post("/loans/{int:id}/refund", auth=ark_auth, tags=["funding"])(funding_api.refund_loan)
 
+# —— F 凭证同步（M1-b Task 3 / F-11）：静态路由 /vouchers/sync 与 /vouchers/sync-callback，
+# 本组无 {id} 动态段，无动态冲突 ——
+api.post("/vouchers/sync", auth=ark_auth, tags=["funding"])(funding_api.push_voucher)
+api.post("/vouchers/sync-callback", auth=ark_auth, tags=["funding"])(funding_api.voucher_callback)
+
 # ==================== Phase 3：R/N/V/O/M/D 域 ====================
 from apps.output import api as output_api
 from apps.expertreview import api as expertreview_api

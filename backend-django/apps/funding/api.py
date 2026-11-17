@@ -54,6 +54,7 @@ from apps.funding.models import (
     FOutward,
     FSubject,
     FTravelStandard,
+    FVoucherSync,
     FWarnConfig,
 )
 from apps.notify.models import SysNotification
@@ -1886,3 +1887,112 @@ def refund_loan(request: HttpRequest, id: int):
                 status="CLOSED", updated_at=dj_tz.now())
     loan.refresh_from_db()
     return ok(request, to_api_loan(loan))
+
+
+# ---------------------------------------------------------------------------
+# 凭证同步（Task 3 / F-11，契约 :1642-1697）：push 下发 + 财务回调回写
+# ---------------------------------------------------------------------------
+def _to_api_voucher_sync(v: FVoucherSync) -> dict:
+    """契约 VoucherSync schema 键（camelCase，无 code 键——schema 未定义不外发）。"""
+    return {
+        "id": v.id, "expenseId": v.expense_id,
+        "financeSystem": v.finance_system,
+        "voucherNo": v.voucher_no, "syncStatus": v.sync_status,
+        "retryCount": v.retry_count, "errorMsg": v.error_msg,
+        "syncAt": fmt_ts(v.sync_at),
+    }
+
+
+def _voucher_sync_of(tenant_id: int, expense_id: int) -> "FVoucherSync | None":
+    """按 (tenant, expense) 取有效凭证同步行（应用层 1:1 约束；Task 5 复用查 voucher_sync_id）。"""
+    return FVoucherSync.objects.filter(
+        tenant_id=tenant_id, expense_id=expense_id, deleted=0).first()
+
+
+def push_voucher(request: HttpRequest):
+    """下发/重推凭证至财务系统（契约 /vouchers/sync）。
+
+    幂等：已有非 MANUAL 记录 → 返回既有行；MANUAL 亦返回既有行（人工介入态不自动重推）。
+    M2 前不做真实外部调用：落 payload 即视为受理（status=SYNCING）。
+    """
+    d = domain_from(request)
+    b = read_json(request)
+    expense_id = b.get("expenseId")
+    if not expense_id:
+        raise ApiError(400, CODE_BAD_REQUEST, "参数错误（expenseId 必填）")
+    finance_system = b.get("financeSystem") or "YONYOU"
+    with transaction.atomic():
+        exp = FExpense.objects.filter(
+            id=expense_id, tenant_id=d.tenant_id, deleted=0).first()
+        if exp is None:
+            raise ApiError(404, CODE_NOT_FOUND, "报销单不存在")
+        existing = _voucher_sync_of(d.tenant_id, expense_id)
+        if existing is not None:
+            return ok(request, _to_api_voucher_sync(existing))
+        vs = FVoucherSync.objects.create(
+            tenant_id=d.tenant_id, creator_id=d.user_id,
+            expense_id=expense_id, finance_system=finance_system,
+            status="SYNCING", sync_status="SYNCING",  # 受理即同步中；schema enum 未列 SYNCING 为契约缺口（CONCERN）
+            payload_json={
+                "expenseId": exp.id,
+                "expenseCode": exp.code,
+                "financeSystem": finance_system,
+                "amount": num2(exp.amount),
+            },
+        )
+        vs.code = code_of("VCH", vs.id)
+        vs.save(update_fields=["code"])
+    return ok(request, _to_api_voucher_sync(vs))
+
+
+def voucher_callback(request: HttpRequest):
+    """财务系统凭证同步回调（契约 /vouchers/sync-callback）。
+
+    幂等：记录已 SUCCESS → 200 返回既有状态摘要，不重复翻转。
+    SUCCESS → sync_status=SUCCESS、voucher_no 回填、sync_at=now、callback_json 落回执；
+      同事务 expense.status: PAID→VOUCHER_SYNCED（其余状态不动）。
+    FAILED → sync_status=FAILED、retry_count+1、error_msg=detail 摘要；
+      第 4 次失败（retry_count 将超 3）→ status=MANUAL；报销状态不动。
+    """
+    d = domain_from(request)
+    b = read_json(request)
+    expense_id = b.get("expenseId")
+    result = b.get("result")
+    if not expense_id or result not in ("SUCCESS", "FAILED"):
+        raise ApiError(400, CODE_BAD_REQUEST, "参数错误（expenseId/result 必填）")
+    with transaction.atomic():
+        vs = FVoucherSync.objects.filter(
+            tenant_id=d.tenant_id, expense_id=expense_id, deleted=0,
+        ).select_for_update().first()
+        if vs is None:
+            raise ApiError(404, CODE_NOT_FOUND, "凭证同步记录不存在")
+        if vs.sync_status == "SUCCESS":
+            return ok(request, _to_api_voucher_sync(vs))  # 幂等：不重复翻转
+        if result == "SUCCESS":
+            vs.sync_status = "SUCCESS"
+            vs.status = "SUCCESS"
+            vs.voucher_no = b.get("voucherNo")
+            vs.sync_at = dj_tz.now()
+            vs.callback_json = {"result": result, "voucherNo": b.get("voucherNo"),
+                                "detail": b.get("detail")}
+            vs.modifier_id = d.user_id
+            vs.save()
+            # 报销回写：仅 PAID → VOUCHER_SYNCED，其余状态不动（models.py:135 状态集）
+            FExpense.objects.filter(
+                id=vs.expense_id, tenant_id=d.tenant_id, deleted=0,
+                status="PAID").update(status="VOUCHER_SYNCED", updated_at=dj_tz.now())
+        else:  # FAILED
+            vs.sync_status = "FAILED"
+            vs.retry_count = vs.retry_count + 1
+            detail = b.get("detail")
+            if isinstance(detail, dict):
+                err_text = detail.get("msg") or json.dumps(detail, ensure_ascii=False)
+            else:
+                err_text = str(detail) if detail else "财务系统回调失败"
+            vs.error_msg = str(err_text)[:500]
+            if vs.retry_count > 3:
+                vs.status = "MANUAL"
+            vs.modifier_id = d.user_id
+            vs.save()
+    vs.refresh_from_db()
+    return ok(request, _to_api_voucher_sync(vs))
