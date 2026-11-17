@@ -321,6 +321,12 @@ api.get("/cost-pools/{int:project_id}", auth=ark_auth, tags=["funding"])(funding
 api.get("/accounting-entries", auth=ark_auth, tags=["funding"])(funding_api.page_accounting_entries)
 api.get("/accounting-entries/{int:id}", auth=ark_auth, tags=["funding"])(funding_api.get_accounting_entry)
 
+# —— F 决算单（M1-b Task 6 / F-13 / A7）：/settlements 无静态子段，动态 {int:project_id}
+# 与 {int:settlementId}/approve 互不冲突；getSettlement 按契约以 projectId 直读 ——
+api.post("/settlements", auth=ark_auth, tags=["funding"])(funding_api.create_settlement)
+api.get("/settlements/{int:project_id}", auth=ark_auth, tags=["funding"])(funding_api.get_settlement)
+api.post("/settlements/{int:settlement_id}/approve", auth=ark_auth, tags=["funding"])(funding_api.approve_settlement)
+
 # ==================== Phase 3：R/N/V/O/M/D 域 ====================
 from apps.output import api as output_api
 from apps.expertreview import api as expertreview_api

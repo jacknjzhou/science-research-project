@@ -55,6 +55,7 @@ from apps.funding.models import (
     FInvoice,
     FLoan,
     FOutward,
+    FSettlement,
     FSubject,
     FTravelStandard,
     FVoucherSync,
@@ -2262,3 +2263,141 @@ def get_cost_pool(request: HttpRequest, project_id: int):
     if cp is None:
         raise ApiError(404, CODE_NOT_FOUND, "成本池不存在")
     return ok(request, _to_api_cost_pool(cp))
+
+
+# ---------------------------------------------------------------------------
+# 决算单 create/get/approve（Task 6 / F-13 / A7）：创建即落快照
+# ---------------------------------------------------------------------------
+def _settlement_totals(tenant_id: int, project_id: int) -> tuple[Decimal, Decimal, Decimal]:
+    """决算快照口径：income=Σ CLAIMED 到账；expense=Σ (APPROVED/PAID/VOUCHER_SYNCED)
+    报销（与 funding_execution 口径一致，FOutward 不计入）；remaining=income−expense。
+    快照只在 create 时计算落库，读取不复算。"""
+    income = _sum_claimed_income(tenant_id, project_id)
+    expense = _sum_expense(tenant_id, project_id, ("APPROVED", "PAID", "VOUCHER_SYNCED"))
+    return income, expense, _d2(income - expense)
+
+
+def _to_api_settlement(s: FSettlement) -> dict:
+    """契约 Settlement schema 键（camelCase，Money=string）。"""
+    return {
+        "id": s.id, "code": s.code,
+        "projectId": s.project_id, "closingDate": (
+            s.closing_date.isoformat() if s.closing_date else None),
+        "incomeTotal": num2(s.income_total),
+        "expenseTotal": num2(s.expense_total),
+        "remaining": num2(s.remaining),
+        "treatment": s.treatment, "auditReportUrl": s.audit_report_url,
+        "status": s.status,
+    }
+
+
+def create_settlement(request: HttpRequest):
+    """契约 POST /settlements：创建决算单（F-13）。
+
+    落地即 AUDITING（契约无 SUBMIT 端点）；幂等键 (tenant, project, deleted=0)：
+    DRAFT/SUBMITTED/AUDITING/REJECTED → update_or_create 重算快照覆盖（REJECTED 重开，
+    Review Focus #4）；APPROVED 终态拒绝复算（40901）。code SET 前缀仅新建时回填。
+    """
+    d = domain_from(request)
+    b = read_json(request)
+    project_id = b.get("projectId")
+    closing_date = _parse_date(b.get("closingDate"))
+    if closing_date is None:
+        raise ApiError(400, CODE_BAD_REQUEST, "closingDate 须为 YYYY-MM-DD")
+    p = EProject.objects.filter(
+        id=project_id, tenant_id=d.tenant_id, deleted=0).first()
+    if p is None:
+        raise ApiError(404, CODE_NOT_FOUND, "项目不存在")
+    treatment = b.get("treatment") or "结转"
+    if treatment not in ("结转", "收回", "留用"):
+        raise ApiError(400, CODE_BAD_REQUEST, "treatment 仅 结转|收回|留用")
+    score_detail = b.get("scoreDetail")
+    if score_detail is not None and not isinstance(score_detail, dict):
+        raise ApiError(400, CODE_BAD_REQUEST, "scoreDetail 须为对象")
+    existing = FSettlement.objects.filter(
+        tenant_id=d.tenant_id, project_id=project_id, deleted=0).first()
+    if existing is not None and existing.status == "APPROVED":
+        raise ApiError(409, CODE_CONFLICT, "决算已 APPROVED，禁止重算")
+    income, expense, remaining = _settlement_totals(d.tenant_id, project_id)
+    snap = {
+        "creator_id": existing.creator_id if existing is not None else d.user_id,
+        "legal_entity_id": p.legal_entity_id or 1,
+        "closing_date": closing_date,
+        "income_total": income, "expense_total": expense, "remaining": remaining,
+        "treatment": treatment, "status": "AUDITING", "modifier_id": d.user_id,
+    }
+    if score_detail is not None:
+        snap["score_detail"] = score_detail
+    else:
+        snap["score_detail"] = {"disbursementTotal": num2(FOutward.objects.filter(
+            tenant_id=d.tenant_id, project_id=project_id,
+            status="APPROVED", deleted=0,
+        ).aggregate(t=Sum("amount"))["t"] or Decimal("0"))}
+    with transaction.atomic():
+        if existing is not None:
+            row = FSettlement.objects.select_for_update().filter(
+                id=existing.id, tenant_id=d.tenant_id, deleted=0).first()
+            for k, v in snap.items():
+                setattr(row, k, v)
+            row.save()
+        else:
+            row = FSettlement.objects.create(**snap, project_id=project_id,
+                                             tenant_id=d.tenant_id)
+        if row.code is None:
+            row.code = code_of("SET", row.id)
+            row.save(update_fields=["code", "updated_at"])
+    approval.log(d.tenant_id, "SETTLEMENT", row.id, 0, d.user_id, "R-FINANCE",
+                 "SUBMIT", None)
+    return ok(request, _to_api_settlement(row))
+
+
+def get_settlement(request: HttpRequest, project_id: int):
+    """契约 GET /settlements/{projectId}：读快照（tenant 隔离，40401 兜底，不复算）。"""
+    d = domain_from(request)
+    s = FSettlement.objects.filter(
+        id__isnull=False, tenant_id=d.tenant_id, project_id=project_id,
+        deleted=0).order_by("-id").first()
+    if s is None:
+        raise ApiError(404, CODE_NOT_FOUND, "决算单不存在")
+    return ok(request, _to_api_settlement(s))
+
+
+def approve_settlement(request: HttpRequest, settlement_id: int):
+    """契约 POST /settlements/{settlementId}/approve：审批（A7 两级审批面）。
+
+    仅 AUDITING 可操作（否则 40901）；APPROVE→APPROVED（treatment 必填校验沿用
+    create 枚举）；REJECT→REJECTED；scoreDetail 可选落 JSONB；终态重放 40901。
+    """
+    d = domain_from(request)
+    b = read_json(request)
+    action = b.get("action")
+    if action not in ("APPROVE", "REJECT"):
+        raise ApiError(400, CODE_BAD_REQUEST, "action 仅 APPROVE|REJECT")
+    with transaction.atomic():
+        s = FSettlement.objects.select_for_update().filter(
+            id=settlement_id, tenant_id=d.tenant_id, deleted=0).first()
+        if s is None:
+            raise ApiError(404, CODE_NOT_FOUND, "决算单不存在")
+        if s.status != "AUDITING":
+            raise ApiError(409, CODE_CONFLICT, "仅 AUDITING 可审批")
+        treatment = b.get("treatment")
+        if treatment is not None and treatment not in ("结转", "收回", "留用"):
+            raise ApiError(400, CODE_BAD_REQUEST, "treatment 仅 结转|收回|留用")
+        score_detail = b.get("scoreDetail")
+        if score_detail is not None and not isinstance(score_detail, dict):
+            raise ApiError(400, CODE_BAD_REQUEST, "scoreDetail 须为对象")
+        if action == "APPROVE":
+            if treatment:
+                s.treatment = treatment
+            s.status = "APPROVED"
+        else:
+            s.status = "REJECTED"
+        if score_detail is not None:
+            s.score_detail = score_detail
+        s.approved_by = d.user_id
+        s.approved_at = dj_tz.now()
+        s.modifier_id = d.user_id
+        s.save()
+        approval.log(d.tenant_id, "SETTLEMENT", s.id, 1, d.user_id, "R-FINANCE",
+                     action, b.get("comment"))
+        return ok(request, _to_api_settlement(s))

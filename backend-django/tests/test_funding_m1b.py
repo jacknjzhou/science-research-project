@@ -460,3 +460,177 @@ def _budget_line():
                                  mode="预算制", total_approved="5000.00", status="EXECUTING")
     return FBudgetLine.objects.create(tenant_id=1, creator_id=1, budget_id=bud.id,
                                       subject_id=sub.id, amount_planned="5000.00")
+
+
+# ---------------------------------------------------------------------------
+# 决算单 create/get/approve（Task 6 / F-13 / A7）：创建即落快照 AUDITING
+# ---------------------------------------------------------------------------
+def _settlement_project(title="决算项目") -> int:
+    from apps.project.models import EProject
+    from datetime import timedelta
+    from django.utils import timezone as dj_tz
+    p = EProject.objects.create(
+        tenant_id=1, status="EXECUTING", creator_id=1, application_id=0,
+        title=title, pi_user_id=2, member_ids=[], legal_entity_id=1,
+        start_date=dj_tz.localdate(), end_date=dj_tz.localdate() + timedelta(days=180),
+    )
+    return p.id
+
+
+def _claimed_income(project_id: int, amount="1000.00"):
+    from apps.funding.models import FIncome
+    return FIncome.objects.create(
+        tenant_id=1, creator_id=1, project_id=project_id, legal_entity_id=1,
+        amount=amount, claim_status="CLAIMED",
+        bank_flow_no=f"BK-ST-{project_id}-{amount}")
+
+
+def _create_settlement(c, body, roles=None):
+    return c.post("/api/v1/settlements", data=json.dumps(body),
+                  content_type="application/json",
+                  **bearer(1, roles or ["R-FINANCE"]))
+
+
+def _approve_settlement(c, sid, body, roles=None):
+    return c.post(f"/api/v1/settlements/{sid}/approve", data=json.dumps(body),
+                  content_type="application/json",
+                  **bearer(1, roles or ["R-FINANCE"]))
+
+
+@pytest.mark.django_db
+def test_m1b_settlement_create_snapshot_auditing(seed_auth):
+    """①create → AUDITING，快照=种子汇总（income/expense/remaining），code SET 前缀。"""
+    pid = _settlement_project()
+    _claimed_income(pid, "1000.00")
+    _paid_expense(project_id=pid, amount=300)
+    c = _c()
+    r = _create_settlement(c, {"projectId": pid, "closingDate": "2026-11-30"})
+    assert r.status_code == 200, r.content
+    data = r.json()["data"]
+    assert data["status"] == "AUDITING"
+    assert data["projectId"] == pid
+    assert data["incomeTotal"] == "1000.00"
+    assert data["expenseTotal"] == "300.00"
+    assert data["remaining"] == "700.00"
+    assert data["code"].startswith("SET-")
+    assert data["treatment"] == "结转"
+    row = FSettlement.objects.get(id=data["id"])
+    assert str(row.income_total) == "1000.00"
+    assert str(row.expense_total) == "300.00"
+    assert str(row.remaining) == "700.00"
+    assert row.score_detail and row.score_detail["disbursementTotal"] == "0.00"
+
+
+@pytest.mark.django_db
+def test_m1b_settlement_create_idempotent_same_id(seed_auth):
+    """②重复 create 同项目 → 同一 id（uk 1:1），覆盖更新快照仍 AUDITING。"""
+    pid = _settlement_project()
+    _claimed_income(pid, "1000.00")
+    _paid_expense(project_id=pid, amount=300)
+    c = _c()
+    d1 = _create_settlement(c, {"projectId": pid, "closingDate": "2026-11-30"}).json()["data"]
+    d2 = _create_settlement(c, {"projectId": pid, "closingDate": "2026-12-31"}).json()["data"]
+    assert d1["id"] == d2["id"]
+    assert FSettlement.objects.filter(tenant_id=1, project_id=pid, deleted=0).count() == 1
+    assert d2["closingDate"] == "2026-12-31"
+    assert d2["status"] == "AUDITING"
+
+
+@pytest.mark.django_db
+def test_m1b_settlement_approve_treatment_persisted(seed_auth):
+    """③approve APPROVE + treatment 留用 → APPROVED，treatment 落库。"""
+    pid = _settlement_project()
+    _claimed_income(pid, "800.00")
+    c = _c()
+    d = _create_settlement(c, {"projectId": pid, "closingDate": "2026-11-30"}).json()["data"]
+    r = _approve_settlement(c, d["id"], {"action": "APPROVE", "treatment": "留用"})
+    assert r.status_code == 200, r.content
+    data = r.json()["data"]
+    assert data["status"] == "APPROVED" and data["treatment"] == "留用"
+    row = FSettlement.objects.get(id=d["id"])
+    assert row.status == "APPROVED" and row.treatment == "留用"
+    assert row.approved_by is not None and row.approved_at is not None
+
+
+@pytest.mark.django_db
+def test_m1b_settlement_approve_terminal_replay_40901(seed_auth):
+    """④APPROVED 行再 approve → 40901（终态重放保守拒绝）。"""
+    pid = _settlement_project()
+    _claimed_income(pid, "800.00")
+    c = _c()
+    d = _create_settlement(c, {"projectId": pid, "closingDate": "2026-11-30"}).json()["data"]
+    _approve_settlement(c, d["id"], {"action": "APPROVE", "treatment": "结转"})
+    r2 = _approve_settlement(c, d["id"], {"action": "APPROVE"})
+    assert r2.status_code == 409
+    assert r2.json()["code"] == 40901
+
+
+@pytest.mark.django_db
+def test_m1b_settlement_reject_then_recreate_reopens(seed_auth):
+    """⑤REJECT → REJECTED；再 create 同行重开（Review Focus #4）→ AUDITING 新快照。"""
+    pid = _settlement_project()
+    _claimed_income(pid, "500.00")
+    _paid_expense(project_id=pid, amount=100)
+    c = _c()
+    d = _create_settlement(c, {"projectId": pid, "closingDate": "2026-11-30"}).json()["data"]
+    r = _approve_settlement(c, d["id"], {"action": "REJECT", "comment": "口径不对"})
+    assert r.status_code == 200, r.content
+    assert r.json()["data"]["status"] == "REJECTED"
+    r2 = _create_settlement(c, {"projectId": pid, "closingDate": "2026-12-15"})
+    assert r2.status_code == 200, r2.content
+    d2 = r2.json()["data"]
+    assert d2["id"] == d["id"]
+    assert d2["status"] == "AUDITING"
+    assert d2["incomeTotal"] == "500.00" and d2["remaining"] == "400.00"
+
+
+@pytest.mark.django_db
+def test_m1b_settlement_approve_unknown_40401(seed_auth):
+    """⑥approve 未知决算单 → 40401。"""
+    c = _c()
+    r = _approve_settlement(c, 999999, {"action": "APPROVE"})
+    assert r.status_code == 404
+    assert r.json()["code"] == 40401
+
+
+@pytest.mark.django_db
+def test_m1b_settlement_approved_recreate_40901(seed_auth):
+    """brief ③：APPROVED 后再 create → 40901 不可重算。"""
+    pid = _settlement_project()
+    _claimed_income(pid, "900.00")
+    c = _c()
+    d = _create_settlement(c, {"projectId": pid, "closingDate": "2026-11-30"}).json()["data"]
+    _approve_settlement(c, d["id"], {"action": "APPROVE", "treatment": "结转"})
+    r = _create_settlement(c, {"projectId": pid, "closingDate": "2026-12-31"})
+    assert r.status_code == 409
+    assert r.json()["code"] == 40901
+
+
+@pytest.mark.django_db
+def test_m1b_settlement_approve_non_auditing_40901(seed_auth):
+    """brief ⑥：DRAFT（重开态/模型默认）下 approve → 40901。"""
+    pid = _settlement_project()
+    row = FSettlement.objects.create(tenant_id=1, creator_id=1, project_id=pid,
+                                     legal_entity_id=1, status="DRAFT")
+    c = _c()
+    r = _approve_settlement(c, row.id, {"action": "APPROVE"})
+    assert r.status_code == 409
+    assert r.json()["code"] == 40901
+
+
+@pytest.mark.django_db
+def test_m1b_settlement_get_and_unknown_40401(seed_auth):
+    """getSettlement：按项目直读快照；未知项目 40401。"""
+    pid = _settlement_project()
+    _claimed_income(pid, "1000.00")
+    _paid_expense(project_id=pid, amount=300)
+    c = _c()
+    d = _create_settlement(c, {"projectId": pid, "closingDate": "2026-11-30"}).json()["data"]
+    r = c.get(f"/api/v1/settlements/{pid}", **bearer(1, ["R-FINANCE"]))
+    assert r.status_code == 200, r.content
+    data = r.json()["data"]
+    assert data["id"] == d["id"] and data["remaining"] == "700.00"
+    assert data["closingDate"] == "2026-11-30"
+    r2 = c.get("/api/v1/settlements/999999", **bearer(1, ["R-FINANCE"]))
+    assert r2.status_code == 404
+    assert r2.json()["code"] == 40401
