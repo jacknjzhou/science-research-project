@@ -764,4 +764,81 @@ class Command(BaseCommand):
              "snapshot": {"failed": ["第 37 行：DOI 重复", "第 88 行：字段缺失"]},
              "undone": False}, "notify")
 
+        # ---- Q. M1-b 演示数据（凭证同步 A5 / 平行记账 4.5 / 成本池 A4 / 决算 A7） ----
+        # 报销凭证同步：关联已 PAID 报销 EXP-DEMO-0001（M1-a 种子），sync_status=SUCCESS
+        #   + voucher_no 回填；报销状态不翻转（保持 PAID，避免污染 M1-a 台账语义）。
+        # 平行记账：同一报销落 EXPENSE 双分录（财务/预算两账各借贷平衡，POSTED/BALANCED）。
+        # 成本池：PRJ-DEMO-001 当期 CALCULATED，direct=120000 + 间接 500 → full=120500。
+        # 决算：PRJ-DEMO-001 APPROVED 结转，快照与 handlers 口径自洽（income=0，
+        #   expense=120000，remaining=-120000）。
+        from apps.funding.api import code_of
+        from apps.funding.models import FAccountingEntry, FCostPool, FSettlement, FVoucherSync
+
+        period = today.strftime("%Y%m")
+        exp_sync = FExpense.objects.filter(
+            tenant_id=T1, deleted=0, status="PAID").order_by("id").first()
+        if exp_sync is None:  # 保守兜底：无 PAID 报销时种一条最小演示行
+            exp_sync = put(FExpense, {"tenant_id": T1, "code": "EXP-DEMO-M1B-01"},
+                           {"project_id": prj1.id, "legal_entity_id": ent.id,
+                            "applicant_user_id": users["staff"].id, "amount": 120000,
+                            "expense_category": "设备费", "expense_type": "EQUIPMENT",
+                            "description": "M1-b 凭证同步演示报销", "status": "PAID",
+                            "creator_id": C1, "paid_at": now}, "funding")
+        vs = put(FVoucherSync, {"tenant_id": T1, "expense_id": exp_sync.id, "deleted": 0},
+                 {"finance_system": "YONYOU", "voucher_no": "PZ-DEMO-2026-0001",
+                  "sync_status": "SUCCESS", "status": "SUCCESS", "retry_count": 0,
+                  "sync_at": now,
+                  "payload_json": {"expenseId": exp_sync.id, "expenseCode": exp_sync.code,
+                                   "financeSystem": "YONYOU",
+                                   "amount": f"{exp_sync.amount:.2f}"},
+                  "callback_json": {"result": "SUCCESS",
+                                    "voucherNo": "PZ-DEMO-2026-0001",
+                                    "detail": "演示回调回执（M1-b）"},
+                  "creator_id": C1, "remark": "演示凭证同步（M1-b A5，SUCCESS）"},
+                 "funding")
+        if vs.code is None:
+            vs.code = code_of("VCH", vs.id)
+            vs.save(update_fields=["code"])
+        ae = put(FAccountingEntry,
+            {"tenant_id": T1, "source_txn_type": "EXPENSE",
+             "source_txn_id": exp_sync.id, "period": period, "deleted": 0},
+            {"project_id": exp_sync.project_id, "legal_entity_id": exp_sync.legal_entity_id,
+             "status": "POSTED", "posted_finance": True, "posted_budget": True,
+             "reconcile_status": "BALANCED", "voucher_sync_id": vs.id,
+             "fin_entry_json": {"lines": [
+                 {"subject": "5001", "direction": "debit", "amount": str(exp_sync.amount)},
+                 {"subject": "1002", "direction": "credit", "amount": str(exp_sync.amount)},
+             ]},
+             "bud_entry_json": {"lines": [
+                 {"subject": "7201", "direction": "debit", "amount": str(exp_sync.amount)},
+                 {"subject": "8001", "direction": "credit", "amount": str(exp_sync.amount)},
+             ]},
+             "creator_id": C1, "remark": "演示平行记账（M1-b 4.5，EXPENSE 双分录）"},
+            "funding")
+        if ae.code is None:
+            ae.code = code_of("ACC", ae.id)
+            ae.save(update_fields=["code"])
+        direct = exp_sync.amount
+        indirect = [{"type": "管理费", "basis": "seed", "amount": "500.00"}]
+        cp = put(FCostPool, {"tenant_id": T1, "project_id": prj1.id,
+                             "period": period, "deleted": 0},
+                 {"legal_entity_id": ent.id, "direct_cost": direct,
+                  "indirect_alloc_json": indirect, "full_cost": direct + 500,
+                  "status": "CALCULATED", "basis_rule_id": None,
+                  "policy_pack_id": None, "creator_id": C1,
+                  "remark": "演示成本池（M1-b A4，CALCULATED）"}, "funding")
+        if cp.code is None:
+            cp.code = code_of("CPL", cp.id)
+            cp.save(update_fields=["code"])
+        st = put(FSettlement, {"tenant_id": T1, "project_id": prj1.id, "deleted": 0},
+                 {"legal_entity_id": ent.id, "closing_date": today,
+                  "income_total": 0, "expense_total": direct, "remaining": -direct,
+                  "treatment": "结转", "status": "APPROVED", "approved_by": C1,
+                  "approved_at": now, "creator_id": C1,
+                  "score_detail": {"disbursementTotal": "0.00"},
+                  "remark": "演示决算单（M1-b A7，APPROVED 结转）"}, "funding")
+        if st.code is None:
+            st.code = code_of("SET", st.id)
+            st.save(update_fields=["code"])
+
         return cnt
