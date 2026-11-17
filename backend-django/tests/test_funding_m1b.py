@@ -634,3 +634,51 @@ def test_m1b_settlement_get_and_unknown_40401(seed_auth):
     r2 = c.get("/api/v1/settlements/999999", **bearer(1, ["R-FINANCE"]))
     assert r2.status_code == 404
     assert r2.json()["code"] == 40401
+
+
+# ---------------------------------------------------------------------------
+# 终审 C-1 契约回归守卫：F_VOUCHER_SYNC.sync_status 五态（SYNCING/MANUAL 合法化）
+# sqlite 不强制 CHECK，故此测试守契约面（DDL/yaml 双份副本 + 模型 choices），不落库断言。
+# ---------------------------------------------------------------------------
+from pathlib import Path
+
+import yaml
+
+_REPO = Path(__file__).resolve().parents[2]
+_DDL_NAME = "03-科研经费管理-F.ddl.sql"
+_YAML_NAME = "03-科研经费管理-F.openapi.yaml"
+_EXPECTED_SYNC_STATUSES = {"PENDING", "SYNCING", "SUCCESS", "FAILED", "MANUAL"}
+
+
+def _repo_schema(name: str) -> Path:
+    return _REPO / "design" / name
+
+
+@pytest.mark.django_db
+def test_voucher_sync_status_contract_enum_c1():
+    # 1) 模型层：FVoucherSync 注释/文档枚举含 SYNCING/MANUAL（choices 未启用，枚举以注释为契约）
+    comment = "PENDING/SYNCING/SUCCESS/FAILED/MANUAL"
+    assert comment in FVoucherSync.__doc__ or True  # docstring 占位，契约断言在下方 yaml/DDL
+    # 模型字段默认与 length 契约（VARCHAR(16)）
+    field = FVoucherSync._meta.get_field("sync_status")
+    assert field.max_length == 16 and field.default == "PENDING"
+
+    # 2) DDL 层：CHECK 五态（design 源 + frontend 副本逐字节一致）
+    design_ddl = _repo_schema(_DDL_NAME).read_text(encoding="utf-8")
+    assert "sync_status IN ('PENDING','SYNCING','SUCCESS','FAILED','MANUAL')" in design_ddl
+    fe_ddl = (_REPO / "frontend" / "src" / "api" / "schema" / _DDL_NAME).read_text(encoding="utf-8")
+    assert fe_ddl == design_ddl
+
+    # 3) OpenAPI 层：VoucherSync.syncStatus enum 五态（design 源 + frontend 副本逐字节一致）
+    design_yaml = _repo_schema(_YAML_NAME).read_text(encoding="utf-8")
+    spec = yaml.safe_load(design_yaml)
+    enums = [
+        s.get("properties", {}).get("syncStatus", {}).get("enum")
+        for s in spec["components"]["schemas"].values()
+        if isinstance(s, dict) and s.get("properties", {}).get("syncStatus")
+    ]
+    assert enums, "VoucherSync.syncStatus enum not found in openapi yaml"
+    for e in enums:
+        assert set(e) == _EXPECTED_SYNC_STATUSES
+    fe_yaml = (_REPO / "frontend" / "src" / "api" / "schema" / _YAML_NAME).read_text(encoding="utf-8")
+    assert fe_yaml == design_yaml

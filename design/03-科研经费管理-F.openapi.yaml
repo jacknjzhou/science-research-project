@@ -2614,7 +2614,7 @@ components:
         expenseId: { type: integer, format: int64 }
         financeSystem: { type: string, enum: [YONYOU, KINGDEE, INSPIRE] }
         voucherNo: { type: string, nullable: true }
-        syncStatus: { type: string, enum: [PENDING, SUCCESS, FAILED] }
+        syncStatus: { type: string, enum: [PENDING, SYNCING, SUCCESS, FAILED, MANUAL] }
         retryCount: { type: integer }
         errorMsg: { type: string, nullable: true }
         syncAt: { type: string, format: date-time, nullable: true }

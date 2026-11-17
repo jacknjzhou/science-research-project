@@ -401,7 +401,7 @@ class FTravelStandard(models.Model):
 
 class FCostPool(models.Model):
     id = models.BigAutoField(primary_key=True)
-    code = models.CharField(max_length=64, null=True, blank=True)  # POOL-年-序，code_of("POOL", id) 回填
+    code = models.CharField(max_length=64, null=True, blank=True)  # CPL-年-序，code_of("CPL", id) 回填
     tenant_id = models.BigIntegerField()
     # DRAFT/CALCULATED/LOCKED/REVERSED
     status = models.CharField(max_length=32, default="DRAFT")
@@ -468,7 +468,7 @@ class FAccountingEntry(models.Model):
 
 class FSettlement(models.Model):
     id = models.BigAutoField(primary_key=True)
-    code = models.CharField(max_length=64, null=True, blank=True)  # CPL-年-序，code_of("CPL", id) 回填
+    code = models.CharField(max_length=64, null=True, blank=True)  # SET-年-序，code_of("SET", id) 回填
     tenant_id = models.BigIntegerField()
     # DRAFT/SUBMITTED/AUDITING/APPROVED/REJECTED
     status = models.CharField(max_length=32, default="DRAFT")
