@@ -340,3 +340,75 @@ def test_m1b_keymatch2_multi_segment_coverage():
     assert ("R-LEADER", "/api/v1/cost-pools/calculate", "POST") not in rows
     assert ("R-LEADER", "/api/v1/vouchers/sync", "POST") not in rows
     assert ("R-LEADER", "/api/v1/settlements", "POST") not in rows
+
+
+# ===========================================================================
+# 5. M1-c：拨款/回单识别/核算开户策略放行（A6/A8/B1）
+# ===========================================================================
+
+def _m1c_expected_rows():
+    """M1-c 新增 14 行（R-FINANCE 6、R-MANAGER 5、R-LEADER 3）。
+
+    keyMatch2 裁决：裸路径 POST 不匹配子段——/disbursements/*/action（两段子路径）
+    与 /disbursements/check-contract（字面静态段）、/incomes/ocr-receipt、
+    /projects/*/open-account 均以显式行放行（同 M1-b cost-pools/calculate 先例）。
+    """
+    rows = [
+        # R-FINANCE：拨款创建+列表+审批/付款动作+合同预检；回单识别；核算开户
+        ("R-FINANCE", "/api/v1/disbursements", "GET"),
+        ("R-FINANCE", "/api/v1/disbursements", "POST"),
+        ("R-FINANCE", "/api/v1/disbursements/*/action", "POST"),
+        ("R-FINANCE", "/api/v1/disbursements/check-contract", "POST"),
+        ("R-FINANCE", "/api/v1/incomes/ocr-receipt", "POST"),
+        ("R-FINANCE", "/api/v1/projects/*/open-account", "POST"),
+        # R-MANAGER：拨款创建+列表+合同预检；回单识别；核算开户（无审批/付款动作）
+        ("R-MANAGER", "/api/v1/disbursements", "GET"),
+        ("R-MANAGER", "/api/v1/disbursements", "POST"),
+        ("R-MANAGER", "/api/v1/disbursements/check-contract", "POST"),
+        ("R-MANAGER", "/api/v1/incomes/ocr-receipt", "POST"),
+        ("R-MANAGER", "/api/v1/projects/*/open-account", "POST"),
+        # R-LEADER：拨款列表只读；回单识别；核算开户
+        ("R-LEADER", "/api/v1/disbursements", "GET"),
+        ("R-LEADER", "/api/v1/incomes/ocr-receipt", "POST"),
+        ("R-LEADER", "/api/v1/projects/*/open-account", "POST"),
+    ]
+    return rows
+
+
+def test_m1c_policy_rows_exist():
+    """M1-c 14 行 (role,path,action) 必须全部存在于 policy.csv。"""
+    rows = _policy_p_rows()
+    missing = [r for r in _m1c_expected_rows() if r not in rows]
+    assert not missing, f"缺少 M1-c 策略行: {missing}"
+
+
+def test_m1c_keymatch2_coverage():
+    """keyMatch2 实测裁决：裸路径 POST 不匹配 /disbursements/{id}/action 与
+    /disbursements/check-contract 子段（显式行放行）；check-contract 为字面静态段
+    不被 {id} 通配歧义误配；/projects/{id}/open-account 由 * 通配覆盖。"""
+    from casbin.util import key_match2
+    rows = _policy_p_rows()
+    # 裁决 1：action 两段子路径不被裸路径匹配 → 显式行（铁律：裸路径永不匹配子路径）
+    assert not key_match2("/api/v1/disbursements/1/action", "/api/v1/disbursements")
+    assert key_match2("/api/v1/disbursements/1/action", "/api/v1/disbursements/*/action")
+    assert ("R-FINANCE", "/api/v1/disbursements/*/action", "POST") in rows
+    # 裁决 2：check-contract 字面静态段，显式行精确覆盖；不被 {id} 段歧义
+    assert not key_match2("/api/v1/disbursements/check-contract", "/api/v1/disbursements")
+    assert key_match2("/api/v1/disbursements/check-contract", "/api/v1/disbursements/check-contract")
+    assert not key_match2("/api/v1/disbursements/check-contract", "/api/v1/disbursements/*/action")
+    assert not key_match2("/api/v1/disbursements/1/action", "/api/v1/disbursements/check-contract")
+    assert ("R-FINANCE", "/api/v1/disbursements/check-contract", "POST") in rows
+    assert ("R-MANAGER", "/api/v1/disbursements/check-contract", "POST") in rows
+    # 裁决 3：open-account 由 {id} 通配匹配任意项目 id
+    assert key_match2("/api/v1/projects/5/open-account", "/api/v1/projects/*/open-account")
+    assert not key_match2("/api/v1/projects/5", "/api/v1/projects/*/open-account")
+    for role in ("R-FINANCE", "R-MANAGER", "R-LEADER"):
+        assert (role, "/api/v1/projects/*/open-account", "POST") in rows
+        assert (role, "/api/v1/incomes/ocr-receipt", "POST") in rows
+    # 裁决 4：ocr-receipt 子段不被 incomes 裸路径匹配（显式行放行）
+    assert not key_match2("/api/v1/incomes/ocr-receipt", "/api/v1/incomes")
+    # 负面：R-LEADER 不得创建/审批拨款；R-MANAGER 不得审批/付款拨款
+    assert ("R-LEADER", "/api/v1/disbursements", "POST") not in rows
+    assert ("R-LEADER", "/api/v1/disbursements/*/action", "POST") not in rows
+    assert ("R-LEADER", "/api/v1/disbursements/check-contract", "POST") not in rows
+    assert ("R-MANAGER", "/api/v1/disbursements/*/action", "POST") not in rows

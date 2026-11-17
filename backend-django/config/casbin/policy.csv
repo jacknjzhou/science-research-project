@@ -439,6 +439,24 @@ p, R-FINANCE, /api/v1/cost-pools/calculate,         POST
 p, R-FINANCE, /api/v1/accounting-entries,           GET
 p, R-FINANCE, /api/v1/accounting-entries/*,         GET
 
+# ---- 拨款/回单识别/核算开户（M1-c A6/A8/B1）----
+# 裁决：keyMatch2 下裸路径 POST 不覆盖子段——/disbursements/*/action 与 /disbursements/check-contract、
+# /incomes/ocr-receipt、/projects/*/open-account 均以显式行放行（同 M1-b cost-pools/calculate 先例）。
+p, R-FINANCE, /api/v1/disbursements,                GET
+p, R-FINANCE, /api/v1/disbursements,                POST
+p, R-FINANCE, /api/v1/disbursements/*/action,       POST
+p, R-FINANCE, /api/v1/disbursements/check-contract, POST
+p, R-FINANCE, /api/v1/incomes/ocr-receipt,          POST
+p, R-FINANCE, /api/v1/projects/*/open-account,      POST
+p, R-MANAGER, /api/v1/disbursements,                GET
+p, R-MANAGER, /api/v1/disbursements,                POST
+p, R-MANAGER, /api/v1/disbursements/check-contract, POST
+p, R-MANAGER, /api/v1/incomes/ocr-receipt,          POST
+p, R-MANAGER, /api/v1/projects/*/open-account,      POST
+p, R-LEADER,  /api/v1/disbursements,                GET
+p, R-LEADER,  /api/v1/incomes/ocr-receipt,          POST
+p, R-LEADER,  /api/v1/projects/*/open-account,      POST
+
 # ---- 通知中心（NF）：全员读写自己的收件箱 ----
 p, R-STAFF,   /api/v1/notifications,              GET
 p, R-STAFF,   /api/v1/notifications/*,            GET
