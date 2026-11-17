@@ -1910,6 +1910,31 @@ paths:
                     properties:
                       data: { $ref: '#/components/schemas/DisbursementCheckResult' }
 
+  /cost-pools/calculate:
+    post:
+      tags: [CostPool]
+      summary: 全成本核算计算（F-20：直接费用汇总 + 间接费分摊 → 全成本，幂等复算）
+      operationId: calculateCostPool
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CostPoolCalcRequest' }
+      responses:
+        "200":
+          description: 计算结果（全成本明细，含间接分摊可复算）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CostPool' }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+
   /cost-pools:
     get:
       tags: [CostPool]
@@ -2686,6 +2711,13 @@ components:
           type: array
           items: { $ref: '#/components/schemas/RuleVerdict' }
 
+    CostPoolCalcRequest:
+      type: object
+      required: [projectId, period]
+      properties:
+        projectId: { type: integer, format: int64 }
+        period: { type: string, description: 'YYYYMM' }
+
     CostPool:
       type: object
       properties:
@@ -2703,6 +2735,7 @@ components:
               basis: { type: string, description: 分摊依据（可复算） }
               amount: { $ref: '#/components/schemas/Money' }
         fullCost: { $ref: '#/components/schemas/Money' }
+        status: { type: string, enum: [DRAFT, CALCULATED, LOCKED, REVERSED] }
         basisRuleId: { type: integer, format: int64, nullable: true }
         policyPackId: { type: integer, format: int64, nullable: true }
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
@@ -46,6 +47,7 @@ from apps.funding.models import (
     FBudget,
     FBudgetLine,
     FCarryover,
+    FCostPool,
     FExpense,
     FExpenseApproval,
     FIncome,
@@ -2105,3 +2107,158 @@ def voucher_callback(request: HttpRequest):
             vs.save()
     vs.refresh_from_db()
     return ok(request, _to_api_voucher_sync(vs))
+
+
+# ---------------------------------------------------------------------------
+# 全成本核算 计算/查询（Task 5 / F-20）+ 平行记账查询（A4 / F-21 查询面）
+# ---------------------------------------------------------------------------
+def _to_api_cost_pool(cp: FCostPool) -> dict:
+    """契约 CostPool schema 键（camelCase，含 Task 5 新增 status）。"""
+    return {
+        "id": cp.id, "code": cp.code,
+        "projectId": cp.project_id, "period": cp.period,
+        "directCost": num2(cp.direct_cost),
+        "indirectAlloc": list(cp.indirect_alloc_json or []),
+        "fullCost": num2(cp.full_cost),
+        "status": cp.status,
+        "basisRuleId": cp.basis_rule_id, "policyPackId": cp.policy_pack_id,
+    }
+
+
+def _to_api_accounting_entry(tenant_id: int, ae: FAccountingEntry) -> dict:
+    """契约 AccountingEntry schema 键（camelCase）；EXPENSE 行回查 voucherSyncId。"""
+    voucher_sync_id = ae.voucher_sync_id
+    if voucher_sync_id is None and ae.source_txn_type == "EXPENSE":
+        vs = _voucher_sync_of(tenant_id, ae.source_txn_id)
+        voucher_sync_id = vs.id if vs is not None else None
+    return {
+        "id": ae.id, "code": ae.code,
+        "sourceTxnId": ae.source_txn_id, "sourceTxnType": ae.source_txn_type,
+        "projectId": ae.project_id, "period": ae.period,
+        "finEntry": ae.fin_entry_json, "budEntry": ae.bud_entry_json,
+        "postedFinance": ae.posted_finance, "postedBudget": ae.posted_budget,
+        "reconcileStatus": ae.reconcile_status,
+        "voucherSyncId": voucher_sync_id, "policyPackId": ae.policy_pack_id,
+    }
+
+
+def page_accounting_entries(request: HttpRequest):
+    """契约 GET /accounting-entries：分录分页（sourceTxnType/reconcileStatus/projectId 过滤）。"""
+    d = domain_from(request)
+    page, size, limit, offset = page_args(request)
+    qs = FAccountingEntry.objects.filter(tenant_id=d.tenant_id, deleted=0)
+    if request.GET.get("sourceTxnType"):
+        qs = qs.filter(source_txn_type=request.GET["sourceTxnType"])
+    if request.GET.get("reconcileStatus"):
+        qs = qs.filter(reconcile_status=request.GET["reconcileStatus"])
+    if request.GET.get("projectId"):
+        qs = qs.filter(project_id=request.GET["projectId"])
+    total = qs.count()
+    rows = qs.order_by("-id")[offset : offset + limit]
+    return ok(request, {"list": [
+        _to_api_accounting_entry(d.tenant_id, ae) for ae in rows
+    ], "total": total, "page": page, "size": size})
+
+
+def get_accounting_entry(request: HttpRequest, id: int):
+    """契约 GET /accounting-entries/{id}：单条分录（租户隔离，40401 兜底）。"""
+    d = domain_from(request)
+    ae = FAccountingEntry.objects.filter(
+        id=id, tenant_id=d.tenant_id, deleted=0).first()
+    if ae is None:
+        raise ApiError(404, CODE_NOT_FOUND, "分录不存在")
+    return ok(request, _to_api_accounting_entry(d.tenant_id, ae))
+
+
+def page_cost_pools(request: HttpRequest):
+    """契约 GET /cost-pools：成本池分页（projectId/period/status 过滤）。"""
+    d = domain_from(request)
+    page, size, limit, offset = page_args(request)
+    qs = FCostPool.objects.filter(tenant_id=d.tenant_id, deleted=0)
+    if request.GET.get("projectId"):
+        qs = qs.filter(project_id=request.GET["projectId"])
+    if request.GET.get("period"):
+        qs = qs.filter(period=request.GET["period"])
+    if request.GET.get("status"):
+        qs = qs.filter(status=request.GET["status"])
+    total = qs.count()
+    rows = qs.order_by("-id")[offset : offset + limit]
+    return ok(request, {"list": [
+        _to_api_cost_pool(cp) for cp in rows
+    ], "total": total, "page": page, "size": size})
+
+
+def calculate_cost_pool(request: HttpRequest):
+    """契约 POST /cost-pools/calculate：全成本核算（F-20）。
+
+    直接费用 = Σ报销(PAID/VOUCHER_SYNCED) + Σ外拨(APPROVED=实付语义)；
+    间接分摊 = 单条管理费行（来源 f_indirect_fee，M1 固定规则，basis 可复算）；
+    全成本 = 直接 + Σ间接。LOCKED 行拒绝复算（40901）；
+    幂等键 (tenant, project, period, deleted=0)：复算 = 更新同一行。
+    """
+    d = domain_from(request)
+    b = read_json(request)
+    project_id = b.get("projectId")
+    period = b.get("period")
+    if not project_id or not isinstance(project_id, int) or project_id <= 0:
+        raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
+    if not period or not isinstance(period, str) or not re.fullmatch(r"\d{6}", period):
+        raise ApiError(400, CODE_BAD_REQUEST, "period 须为 YYYYMM")
+    p = EProject.objects.filter(
+        id=project_id, tenant_id=d.tenant_id, deleted=0).first()
+    if p is None:
+        raise ApiError(404, CODE_NOT_FOUND, "项目不存在")
+    existing = FCostPool.objects.filter(
+        tenant_id=d.tenant_id, project_id=project_id,
+        period=period, deleted=0).first()
+    if existing is not None and existing.status == "LOCKED":
+        raise ApiError(409, CODE_CONFLICT, "LOCKED 成本池禁止复算")
+    outward_sum = FOutward.objects.filter(
+        tenant_id=d.tenant_id, project_id=project_id,
+        status="APPROVED", deleted=0,
+    ).aggregate(t=Sum("amount"))["t"] or Decimal("0")
+    direct = _d2(
+        _sum_expense(d.tenant_id, project_id, ("PAID", "VOUCHER_SYNCED"))
+        + outward_sum
+    )
+    indirect_alloc: list[dict] = []
+    fee = FIndirectFee.objects.filter(
+        tenant_id=d.tenant_id, project_id=project_id,
+        period=period, deleted=0).first()
+    if fee is not None:
+        indirect_alloc.append({
+            "type": "管理费", "basis": f"indirect_fee:{fee.id}",
+            "amount": num2(fee.indirect_amount),
+        })
+    indirect_total = sum(
+        (Decimal(x["amount"]) for x in indirect_alloc), Decimal("0"))
+    full_cost = _d2(direct + indirect_total)
+    cp, created = FCostPool.objects.update_or_create(
+        tenant_id=d.tenant_id, project_id=project_id,
+        period=period, deleted=0,
+        defaults={
+            "creator_id": existing.creator_id if existing is not None else d.user_id,
+            "legal_entity_id": p.legal_entity_id or 1,
+            "direct_cost": direct, "indirect_alloc_json": indirect_alloc,
+            "full_cost": full_cost, "status": "CALCULATED",
+            "basis_rule_id": None, "policy_pack_id": None,
+            "modifier_id": d.user_id,
+        })
+    if created:
+        cp.code = code_of("CPL", cp.id)
+        cp.save(update_fields=["code", "updated_at"])
+    return ok(request, _to_api_cost_pool(cp))
+
+
+def get_cost_pool(request: HttpRequest, project_id: int):
+    """契约 GET /cost-pools/{projectId}：单项目全成本明细（period 必填）。"""
+    d = domain_from(request)
+    period = request.GET.get("period")
+    if not period:
+        raise ApiError(400, CODE_BAD_REQUEST, "period 必填")
+    cp = FCostPool.objects.filter(
+        tenant_id=d.tenant_id, project_id=project_id,
+        period=period, deleted=0).first()
+    if cp is None:
+        raise ApiError(404, CODE_NOT_FOUND, "成本池不存在")
+    return ok(request, _to_api_cost_pool(cp))

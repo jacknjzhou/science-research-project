@@ -296,3 +296,167 @@ def test_m1b_post_service_unbalanced_42200(seed_auth):
     assert ei.value.code == "42200"
     assert FAccountingEntry.objects.filter(
         tenant_id=1, source_txn_type="EXPENSE", source_txn_id=999, deleted=0).count() == 0
+
+
+# ---------------------------------------------------------------------------
+# 全成本核算计算/查询 + 平行记账查询端点（Task 5 / F-20 / A4 / F-21 查询面）
+# ---------------------------------------------------------------------------
+def _calc(c, body, roles=None):
+    return c.post("/api/v1/cost-pools/calculate", data=json.dumps(body),
+                  content_type="application/json",
+                  **bearer(1, roles or ["R-MANAGER"]))
+
+
+def _seed_indirect_fee(project_id, period, amount="120.00"):
+    from apps.funding.models import FIndirectFee
+    return FIndirectFee.objects.create(
+        tenant_id=1, creator_id=1, project_id=project_id,
+        legal_entity_id=1, period=period, indirect_amount=amount,
+    )
+
+
+@pytest.mark.django_db
+def test_m1b_cost_pool_calculate(seed_auth):
+    from apps.project.models import EProject
+    from datetime import timedelta
+    from django.utils import timezone as dj_tz
+    EProject.objects.create(
+        tenant_id=1, status="EXECUTING", creator_id=1, application_id=0,
+        title="全成本项目", pi_user_id=2, member_ids=[], legal_entity_id=1,
+        start_date=dj_tz.localdate(), end_date=dj_tz.localdate() + timedelta(days=180),
+    )
+    e = _paid_expense(amount=1000, status="VOUCHER_SYNCED")
+    _paid_expense(amount=500, status="PAID")
+    fee = _seed_indirect_fee(1, "202611", "120.00")
+    c = _c()
+    r = _calc(c, {"projectId": 1, "period": "202611"})
+    assert r.status_code == 200, r.content
+    v = r.json()["data"]
+    assert v["projectId"] == 1 and v["period"] == "202611"
+    assert v["directCost"] == "1500.00"
+    assert v["indirectAlloc"] == [{
+        "type": "管理费", "basis": f"indirect_fee:{fee.id}", "amount": "120.00",
+    }]
+    assert v["fullCost"] == "1620.00"
+    assert v["status"] == "CALCULATED"
+    assert v["code"].startswith("CPL-")
+    assert v["basisRuleId"] is None and v["policyPackId"] is None
+    row = FCostPool.objects.get(id=v["id"])
+    assert row.status == "CALCULATED"
+
+
+@pytest.mark.django_db
+def test_m1b_cost_pool_calculate_recaculate_same_id(seed_auth):
+    from apps.project.models import EProject
+    from datetime import timedelta
+    from django.utils import timezone as dj_tz
+    EProject.objects.create(
+        tenant_id=1, status="EXECUTING", creator_id=1, application_id=0,
+        title="复算项目", pi_user_id=2, member_ids=[], legal_entity_id=1,
+        start_date=dj_tz.localdate(), end_date=dj_tz.localdate() + timedelta(days=180),
+    )
+    _paid_expense(amount=800, status="VOUCHER_SYNCED")
+    c = _c()
+    r1 = _calc(c, {"projectId": 1, "period": "202611"})
+    assert r1.status_code == 200, r1.content
+    id1 = r1.json()["data"]["id"]
+    _paid_expense(amount=200, status="PAID")
+    r2 = _calc(c, {"projectId": 1, "period": "202611"})
+    assert r2.status_code == 200, r2.content
+    v2 = r2.json()["data"]
+    assert v2["id"] == id1  # 同 (project, period) 复算 = 更新同一行
+    assert v2["directCost"] == "1000.00"  # 800 + 200 重算生效
+    assert FCostPool.objects.filter(tenant_id=1, project_id=1, period="202611", deleted=0).count() == 1
+
+
+@pytest.mark.django_db
+def test_m1b_cost_pool_calculate_locked_40901(seed_auth):
+    from apps.project.models import EProject
+    from datetime import timedelta
+    from django.utils import timezone as dj_tz
+    EProject.objects.create(
+        tenant_id=1, status="EXECUTING", creator_id=1, application_id=0,
+        title="锁定项目", pi_user_id=2, member_ids=[], legal_entity_id=1,
+        start_date=dj_tz.localdate(), end_date=dj_tz.localdate() + timedelta(days=180),
+    )
+    FCostPool.objects.create(
+        tenant_id=1, creator_id=1, project_id=1, legal_entity_id=1,
+        period="202611", status="LOCKED", direct_cost="0", full_cost="0")
+    c = _c()
+    r = _calc(c, {"projectId": 1, "period": "202611"})
+    assert r.status_code == 409
+    assert r.json()["code"] == 40901
+
+
+@pytest.mark.django_db
+def test_m1b_cost_pool_get_validation(seed_auth):
+    c = _c()
+    r = c.get("/api/v1/cost-pools/1", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 400
+    assert r.json()["code"] == 40001  # 缺 period
+    r2 = c.get("/api/v1/cost-pools/1?period=209912", **bearer(1, ["R-MANAGER"]))
+    assert r2.status_code == 404
+    assert r2.json()["code"] == 40401  # 无行
+    # 正常路径：calculate 后可查
+    from apps.project.models import EProject
+    from datetime import timedelta
+    from django.utils import timezone as dj_tz
+    EProject.objects.create(
+        tenant_id=1, status="EXECUTING", creator_id=1, application_id=0,
+        title="查询项目", pi_user_id=2, member_ids=[], legal_entity_id=1,
+        start_date=dj_tz.localdate(), end_date=dj_tz.localdate() + timedelta(days=180),
+    )
+    _paid_expense(amount=300, status="VOUCHER_SYNCED")
+    r3 = _calc(_c(), {"projectId": 1, "period": "202611"})
+    assert r3.status_code == 200
+    r4 = c.get("/api/v1/cost-pools/1?period=202611", **bearer(1, ["R-MANAGER"]))
+    assert r4.status_code == 200, r4.content
+    v = r4.json()["data"]
+    assert v["projectId"] == 1 and v["period"] == "202611"
+    assert v["directCost"] == "300.00" and v["fullCost"] == "300.00"
+    assert v["indirectAlloc"] == [] and v["status"] == "CALCULATED"
+
+
+@pytest.mark.django_db
+def test_m1b_page_accounting_entries_filter_and_voucher_sync_id(seed_auth):
+    from apps.project.models import EProject
+    from datetime import timedelta
+    from django.utils import timezone as dj_tz
+    EProject.objects.create(
+        tenant_id=1, status="EXECUTING", creator_id=1, application_id=0,
+        title="分录查询项目", pi_user_id=2, member_ids=[], legal_entity_id=1,
+        start_date=dj_tz.localdate(), end_date=dj_tz.localdate() + timedelta(days=180),
+    )
+    c = _c()
+    _approval_expense(c, _budget_line().id)
+    r = c.get("/api/v1/accounting-entries?sourceTxnType=EXPENSE",
+              **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 200, r.content
+    data = r.json()["data"]
+    assert data["total"] >= 1
+    row = data["list"][0]
+    for k in ("id", "code", "sourceTxnId", "sourceTxnType", "projectId", "period",
+              "finEntry", "budEntry", "postedFinance", "postedBudget",
+              "reconcileStatus", "voucherSyncId", "policyPackId"):
+        assert k in row, k
+    assert row["sourceTxnType"] == "EXPENSE"
+    assert row["voucherSyncId"] is None  # 未推送凭证 → null
+    assert row["postedFinance"] is True and row["postedBudget"] is True
+    assert row["reconcileStatus"] == "BALANCED"
+
+
+@pytest.mark.django_db
+def test_m1b_get_accounting_entry_40401(seed_auth):
+    c = _c()
+    r = c.get("/api/v1/accounting-entries/999999", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 404
+    assert r.json()["code"] == 40401
+
+
+def _budget_line():
+    from apps.funding.models import FBudget, FBudgetLine, FSubject
+    sub = FSubject.objects.create(tenant_id=1, creator_id=1, name="查询科目", category="DIRECT")
+    bud = FBudget.objects.create(tenant_id=1, creator_id=1, project_id=1, legal_entity_id=1,
+                                 mode="预算制", total_approved="5000.00", status="EXECUTING")
+    return FBudgetLine.objects.create(tenant_id=1, creator_id=1, budget_id=bud.id,
+                                      subject_id=sub.id, amount_planned="5000.00")

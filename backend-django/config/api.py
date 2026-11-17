@@ -312,6 +312,15 @@ api.post("/loans/{int:id}/refund", auth=ark_auth, tags=["funding"])(funding_api.
 api.post("/vouchers/sync", auth=ark_auth, tags=["funding"])(funding_api.push_voucher)
 api.post("/vouchers/sync-callback", auth=ark_auth, tags=["funding"])(funding_api.voucher_callback)
 
+# —— F 全成本核算/平行记账查询（M1-b Task 5 / F-20 / A4 / F-21 查询面）——
+# 静态路由先于动态段注册（防 {int:projectId} 吞掉 /cost-pools/calculate）；
+# accounting-entries 同理：裸 GET 先于 {int:id}。
+api.get("/cost-pools", auth=ark_auth, tags=["funding"])(funding_api.page_cost_pools)
+api.post("/cost-pools/calculate", auth=ark_auth, tags=["funding"])(funding_api.calculate_cost_pool)
+api.get("/cost-pools/{int:project_id}", auth=ark_auth, tags=["funding"])(funding_api.get_cost_pool)
+api.get("/accounting-entries", auth=ark_auth, tags=["funding"])(funding_api.page_accounting_entries)
+api.get("/accounting-entries/{int:id}", auth=ark_auth, tags=["funding"])(funding_api.get_accounting_entry)
+
 # ==================== Phase 3：R/N/V/O/M/D 域 ====================
 from apps.output import api as output_api
 from apps.expertreview import api as expertreview_api
