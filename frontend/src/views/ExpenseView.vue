@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { api, list } from '@/api/client'
+import { auth } from '@/api/auth'
 import { toNum } from '@/utils/money'
 
 // —— F 模块真后端契约（snake_case，见 backend funding/mapper.go）——
@@ -188,6 +189,55 @@ async function bindInvoice(inv: OcrInvoice) {
   }
 }
 
+// —— 凭证同步面板（M1-b A2）：POST /vouchers/sync 推送到财务系统，契约 VoucherSync（design/03 :2585）——
+// camelCase：syncStatus（后端推送返回 SYNCING；回调 SUCCESS/FAILED；第 4 次失败转 MANUAL 人工介入）/retryCount/voucherNo。
+interface VoucherSync {
+  id?: number; expenseId?: number
+  financeSystem?: 'YONYOU' | 'KINGDEE' | 'INSPIRE' | string
+  voucherNo?: string | null
+  syncStatus?: 'SYNCING' | 'SUCCESS' | 'FAILED' | 'PENDING' | 'MANUAL' | string
+  retryCount?: number
+  errorMsg?: string | null
+  syncAt?: string | null
+}
+const VOUCHER_STATUS_META: Record<string, { tag: string; cls: string }> = {
+  SYNCING: { tag: '同步中', cls: 'info' }, SUCCESS: { tag: '已同步', cls: 'ok' },
+  FAILED: { tag: '失败', cls: 'bad' }, PENDING: { tag: '待同步', cls: 'warn' },
+  MANUAL: { tag: '人工介入', cls: 'warn' },
+}
+const vMeta = (s?: string | null) => VOUCHER_STATUS_META[s || ''] || { tag: s || '—', cls: 'muted' }
+
+const canSyncVoucher = auth.can('/vouchers/sync POST')
+const syncTargetId = ref<number | null>(null)
+const syncing = ref(false)
+const lastSync = ref<VoucherSync | null>(null)
+const syncError = ref('')
+// MANUAL 横幅：显式 MANUAL，或 FAILED 且重试超 3 次（展示语义）
+const manualNeeded = computed(() =>
+  lastSync.value?.syncStatus === 'MANUAL' ||
+  (lastSync.value?.syncStatus === 'FAILED' && (lastSync.value?.retryCount ?? 0) > 3))
+
+async function pushVoucher() {
+  if (syncing.value) return
+  const eid = syncTargetId.value
+  if (!eid) { toast('请先选择要同步的报销单'); return }
+  syncing.value = true
+  syncError.value = ''
+  try {
+    lastSync.value = await api.post<VoucherSync>('/vouchers/sync', { expenseId: eid })
+    const s = lastSync.value
+    toast(s?.syncStatus === 'SUCCESS'
+      ? `凭证 ${s.voucherNo || ''} 已同步到 ${s.financeSystem || '财务系统'}`
+      : s?.syncStatus === 'SYNCING' ? '推送已受理，等待财务系统回调…'
+      : '凭证推送已受理（' + (s?.syncStatus || '?') + '）')
+  } catch (e: any) {
+    syncError.value = e?.message || String(e)
+    toast('凭证推送失败：' + syncError.value)
+  } finally {
+    syncing.value = false
+  }
+}
+
 async function load() {
   loading.value = true
   try {
@@ -211,6 +261,8 @@ async function load() {
     recent.value = rec.rows ?? []
     // bind 下拉默认目标：首张近单（Promise.all 并发下 loadInvoices 先于 recent 落值）
     if (!bindTargetId.value && recent.value.length) bindTargetId.value = recent.value[0].id
+    // 凭证同步目标默认与 bind 目标一致
+    if (!syncTargetId.value && recent.value.length) syncTargetId.value = recent.value[0].id
   } catch (e: any) {
     toast('数据加载失败：' + (e?.message || e))
   } finally {
@@ -469,6 +521,32 @@ async function saveDraft() {
             <button v-if="v.status !== 'BOUND' && v.status !== 'VOID'" class="btn ghost" style="padding:3px 8px;font-size:11px" @click="bindInvoice(v)">绑定</button>
           </div>
           <div v-if="!invLoading && !invoices.length" style="font-size:12px;color:var(--ink-mute);text-align:center;margin-top:6px">暂无发票；OCR 识别成功后自动进入此列表。</div>
+
+          <!-- 凭证同步面板（M1-b A2）：推送报销单生成财务凭证（POST /vouchers/sync）-->
+          <div class="divider-double"></div>
+          <b style="font-size:13px">凭证同步（财务系统）</b>
+          <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-mute);margin-top:6px">
+            <span>同步目标</span>
+            <select v-model.number="syncTargetId" style="flex:1;font-size:11px;padding:4px 6px;border:1px solid var(--line);border-radius:4px;background:#fff;color:var(--ink)">
+              <option :value="null">选择报销单…</option>
+              <option v-for="r in recent" :key="r.id" :value="r.id">{{ r.code || '报销单 #' + r.id }}（{{ STATUS_META[r.status]?.tag || r.status }}）</option>
+            </select>
+            <button v-if="canSyncVoucher" class="btn seal" style="padding:5px 12px;font-size:12px" :disabled="syncing || !syncTargetId" @click="pushVoucher">
+              {{ syncing ? '推送中…' : '⇥ 推送凭证' }}
+            </button>
+          </div>
+          <div v-if="!canSyncVoucher" style="font-size:11px;color:var(--ink-mute);margin-top:4px">推送需财务权限（R-FINANCE）。</div>
+          <div v-if="lastSync" style="display:flex;align-items:center;gap:8px;font-size:12px;margin-top:8px;flex-wrap:wrap">
+            <span class="tag" :class="vMeta(lastSync.syncStatus).cls">{{ vMeta(lastSync.syncStatus).tag }}</span>
+            <span v-if="lastSync.voucherNo" class="mono">凭证号 {{ lastSync.voucherNo }}</span>
+            <span v-if="lastSync.financeSystem" style="color:var(--ink-mute)">{{ lastSync.financeSystem }}</span>
+            <span style="color:var(--ink-mute)">重试 {{ lastSync.retryCount ?? 0 }} 次</span>
+            <span v-if="lastSync.errorMsg" style="color:var(--bad)">{{ lastSync.errorMsg }}</span>
+          </div>
+          <div v-if="manualNeeded" class="voucher-manual">
+            ⚠ 该报销单凭证多次推送失败（重试 {{ lastSync?.retryCount ?? 0 }} 次 > 3），已转人工介入：请到财务系统核对后手工录入凭证。
+          </div>
+          <div v-if="syncError && !lastSync" style="font-size:12px;color:var(--bad);margin-top:6px">{{ syncError }}</div>
         </div>
       </div>
     </div>
@@ -478,4 +556,5 @@ async function saveDraft() {
 <style scoped>
 .inv-card select,.inv-card input{font-family:var(--sans);color:var(--ink);outline:none}
 .btn:disabled{opacity:.6;cursor:not-allowed}
+.voucher-manual{margin-top:8px;padding:8px 10px;border:1px solid #f0d47a;background:#fdf6e3;border-radius:6px;font-size:12px;color:#8a6d1a;line-height:1.6}
 </style>

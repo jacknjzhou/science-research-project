@@ -37,10 +37,17 @@ const ROLE_CAPS: Record<string, string[]> = {
     '/api/v1/loans POST', '/api/v1/loans/* POST',
     '/api/v1/travel-standards POST', '/api/v1/travel-standards PUT', '/api/v1/travel-standards DELETE',
     '/api/v1/invoices POST', '/api/v1/invoices/* POST', '/api/v1/invoices/* PUT',
+    // M1-b（policy.csv:414-440）：凭证推送、成本池核算发起、决算生成与审批
+    '/api/v1/vouchers/sync POST', '/api/v1/vouchers/sync-callback POST',
+    '/api/v1/cost-pools POST', '/api/v1/cost-pools/* POST',
+    '/api/v1/settlements POST', '/api/v1/settlements/* POST',
   ], // 只读为主 + M1-a 经费写（与 policy.csv 同口径）
   'R-ETHICS': W(['GET']),
   'R-EXPERT': [...W(['GET']), '/api/v1/review* POST', '/api/v1/review* PUT'],
-  'R-LEADER': [...W(['GET']), '/api/v1/apply/* PUT'],
+  'R-LEADER': [...W(['GET']), '/api/v1/apply/* PUT',
+    // M1-b（policy.csv:414-440）：领导可审批决算（approve 由 /settlements/* 通配覆盖）
+    '/api/v1/settlements/* POST',
+  ],
   'R-MANAGER': [
     ...W(['GET']),
     '/api/v1/apply/* POST', '/api/v1/apply/* PUT',
@@ -51,6 +58,8 @@ const ROLE_CAPS: Record<string, string[]> = {
     '/api/v1/loans POST', '/api/v1/loans/* POST',
     '/api/v1/travel-standards POST', '/api/v1/travel-standards PUT',
     '/api/v1/invoices POST', '/api/v1/invoices/* POST', '/api/v1/invoices/* PUT',
+    // M1-b（policy.csv:414-440）：成本池核算发起（calculate 由 /cost-pools/* 通配覆盖）
+    '/api/v1/cost-pools POST', '/api/v1/cost-pools/* POST',
   ],
   'R-STAFF': [
     ...W(['GET']),
@@ -83,6 +92,9 @@ const PAGE_GRANTS: Array<[string, string]> = [
   ['admin-users', 'R-ADMIN'], ['admin-roles', 'R-ADMIN'], ['admin-roles', 'R-AUDITOR'],
   ['admin-dicts', 'R-ADMIN'],
   ['funding-config', 'R-MANAGER'], ['funding-config', 'R-FINANCE'],
+  // M1-b：成本池核算 + 项目决算（policy.csv:414-440 三角色同口径）
+  ['funding-cost-pool', 'R-MANAGER'], ['funding-cost-pool', 'R-FINANCE'], ['funding-cost-pool', 'R-LEADER'],
+  ['funding-settle', 'R-MANAGER'], ['funding-settle', 'R-FINANCE'], ['funding-settle', 'R-LEADER'],
 ]
 
 function usernameFromToken(token: string): string {
