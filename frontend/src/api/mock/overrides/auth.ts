@@ -41,12 +41,20 @@ const ROLE_CAPS: Record<string, string[]> = {
     '/api/v1/vouchers/sync POST', '/api/v1/vouchers/sync-callback POST',
     '/api/v1/cost-pools POST', '/api/v1/cost-pools/* POST',
     '/api/v1/settlements POST', '/api/v1/settlements/* POST',
+    // M1-c（policy.csv:443-458）：拨款管理、合同预检、回单识别、核算开户
+    '/api/v1/disbursements POST', '/api/v1/disbursements/*/action POST',
+    '/api/v1/disbursements/check-contract POST',
+    '/api/v1/incomes/ocr-receipt POST',
+    '/api/v1/projects/*/open-account POST',
   ], // 只读为主 + M1-a 经费写（与 policy.csv 同口径）
   'R-ETHICS': W(['GET']),
   'R-EXPERT': [...W(['GET']), '/api/v1/review* POST', '/api/v1/review* PUT'],
   'R-LEADER': [...W(['GET']), '/api/v1/apply/* PUT',
     // M1-b（policy.csv:414-440）：领导可审批决算（approve 由 /settlements/* 通配覆盖）
     '/api/v1/settlements/* POST',
+    // M1-c（policy.csv:443-458）：领导只读拨款 + 回单识别 + 核算开户
+    '/api/v1/incomes/ocr-receipt POST',
+    '/api/v1/projects/*/open-account POST',
   ],
   'R-MANAGER': [
     ...W(['GET']),
@@ -60,6 +68,10 @@ const ROLE_CAPS: Record<string, string[]> = {
     '/api/v1/invoices POST', '/api/v1/invoices/* POST', '/api/v1/invoices/* PUT',
     // M1-b（policy.csv:414-440）：成本池核算发起（calculate 由 /cost-pools/* 通配覆盖）
     '/api/v1/cost-pools POST', '/api/v1/cost-pools/* POST',
+    // M1-c（policy.csv:443-458）：拨款创建/预检、回单识别、核算开户（action 由 R-FINANCE 专属，无行）
+    '/api/v1/disbursements POST', '/api/v1/disbursements/check-contract POST',
+    '/api/v1/incomes/ocr-receipt POST',
+    '/api/v1/projects/*/open-account POST',
   ],
   'R-STAFF': [
     ...W(['GET']),
@@ -95,6 +107,10 @@ const PAGE_GRANTS: Array<[string, string]> = [
   // M1-b：成本池核算 + 项目决算（policy.csv:414-440 三角色同口径）
   ['funding-cost-pool', 'R-MANAGER'], ['funding-cost-pool', 'R-FINANCE'], ['funding-cost-pool', 'R-LEADER'],
   ['funding-settle', 'R-MANAGER'], ['funding-settle', 'R-FINANCE'], ['funding-settle', 'R-LEADER'],
+  // M1-c：拨款管理 + 到账认领与回单识别（policy.csv:443-458 三角色同口径；
+  // import-bank-flow / incomes claim 由 R-MANAGER/R-FINANCE 既有 /incomes/* 通配覆盖，R-LEADER 无）
+  ['funding-disburse', 'R-MANAGER'], ['funding-disburse', 'R-FINANCE'], ['funding-disburse', 'R-LEADER'],
+  ['funding-income', 'R-MANAGER'], ['funding-income', 'R-FINANCE'], ['funding-income', 'R-LEADER'],
 ]
 
 function usernameFromToken(token: string): string {

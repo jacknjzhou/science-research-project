@@ -30,6 +30,9 @@ const routes: RouteRecordRaw[] = [
   // —— M1-b：成本池核算（A4/F-20）与项目决算（F-17），policy.csv :414-440 → 三角色可见 ——
   { path: '/funding/cost-pool', name: 'funding-cost-pool', meta: { zh: '成本池核算', en: 'COST POOL', roles: ['R-MANAGER', 'R-FINANCE', 'R-LEADER'] }, component: () => import('@/views/FundingCostPoolView.vue') },
   { path: '/funding/settle', name: 'funding-settle', meta: { zh: '项目决算', en: 'SETTLEMENT', roles: ['R-MANAGER', 'R-FINANCE', 'R-LEADER'] }, component: () => import('@/views/FundingSettleView.vue') },
+  // —— M1-c：拨款管理（A7/F-11/F-13）与到账认领（A8/F-05/F-06/F-15），policy.csv :443-458 → 三角色可见 ——
+  { path: '/funding/disburse', name: 'funding-disburse', meta: { zh: '拨款管理', en: 'DISBURSEMENT', roles: ['R-MANAGER', 'R-FINANCE', 'R-LEADER'] }, component: () => import('@/views/FundingDisburseView.vue') },
+  { path: '/funding/income', name: 'funding-income', meta: { zh: '到账认领', en: 'INCOME CLAIM', roles: ['R-MANAGER', 'R-FINANCE', 'R-LEADER'] }, component: () => import('@/views/FundingIncomeView.vue') },
   { path: '/claim', name: 'claim', meta: { zh: '成果认领', en: 'OUTPUT CLAIM', roles: ['R-STAFF', 'R-MANAGER', 'R-LEADER'] }, component: () => import('@/views/ClaimView.vue') },
   { path: '/output', name: 'output', meta: { zh: '成果台账', en: 'OUTPUT LEDGER', roles: ['R-STAFF', 'R-MANAGER', 'R-LEADER'] }, component: () => import('@/views/OutputView.vue') },
   { path: '/transfer', name: 'transfer', meta: { zh: '转化看板', en: 'TECH TRANSFER', roles: ['R-MANAGER', 'R-LEADER', 'R-ADMIN'] }, component: () => import('@/views/TransferView.vue') },

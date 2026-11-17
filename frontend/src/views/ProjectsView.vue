@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { list } from '@/api/client'
+import { list, api } from '@/api/client'
 import { auth } from '@/api/auth'
 import { toNum, toWan } from '@/utils/money'
 
@@ -118,6 +118,32 @@ function pick(v: 'card' | 'list' | 'gantt') {
   viewMode.value = v
 }
 
+// —— M1-c B1 核算开户（POST /projects/{projectId}/open-account，无 body；R-8 幂等）——
+interface OpenAccountResult {
+  budgetId: number
+  budgetCode: string
+  lines: { id: number; subjectId: number; subjectName: string }[]
+}
+const canOpenAccount = computed(() => auth.can('/projects/open-account POST') || auth.can('/projects/*/open-account POST') || auth.roles.includes('R-MANAGER') || auth.roles.includes('R-FINANCE') || auth.roles.includes('R-LEADER'))
+const openingId = ref<number | null>(null)
+const openedMap = ref<Record<number, OpenAccountResult>>({})
+
+async function openAccount(p: EProject) {
+  if (openingId.value !== null) return
+  if (p.status === 'CLOSED') { toast('已结题项目不可开户'); return }
+  openingId.value = p.id
+  try {
+    const r = await api.post<OpenAccountResult>(`/projects/${p.id}/open-account`)
+    openedMap.value = { ...openedMap.value, [p.id]: r }
+    toast(`项目已开通核算账号 ${r?.budgetCode || ''}（贯通 ${r?.lines?.length ?? 0} 条科目预算行；重复开户返回既有账号）`)
+  } catch (e: any) {
+    // 40901 已开户（CLOSED 后可重开）/ 40401 项目不存在 —— 后端文案直接透出
+    toast('开户失败：' + (e?.message || e))
+  } finally {
+    openingId.value = null
+  }
+}
+
 // —— 列表视图 ——
 const STATUS_ZH: Record<string, string> = {
   EXECUTING: '在研', MID_CHECK: '中检', CHANGING: '变更中', CLOSED: '已结题', APPROVED: '已立项',
@@ -166,6 +192,7 @@ const gantt = computed(() => {
       <input class="sel" style="min-width:180px" v-model="kw" placeholder="搜索项目名称 / 编号" @keyup.enter="reload" />
       <span class="chip" v-for="s in STATUS_FILTERS" :key="s.v" :class="{ on: status === s.v }" @click="setStatus(s.v)">{{ s.t }}</span>
       <button class="btn ghost sm" @click="reload">查询</button>
+      <span v-if="canOpenAccount" style="font-size:11.5px;color:var(--ink-mute)">· 开题后可一键「开通核算账号」（B1，按 F 科目贯通预算行）</span>
     </div>
 
     <div v-if="loading" class="card"><div class="card-b" style="color:var(--ink-mute)">项目加载中…</div></div>
@@ -186,6 +213,7 @@ const gantt = computed(() => {
             <th style="width:16%" class="num">经费执行</th>
             <th style="width:12%">起止</th>
             <th style="width:8%">风险</th>
+            <th v-if="canOpenAccount" style="width:12%">核算账号</th>
           </tr>
         </thead>
         <tbody>
@@ -197,6 +225,16 @@ const gantt = computed(() => {
             <td class="mono num">{{ wan(p.spent_amount) }}万 / {{ wan(p.received_amount) }}万 · {{ execPct(p) }}%</td>
             <td class="mono" style="font-size:12px">{{ ym(p.start_date) }}–{{ ym(p.end_date) }}</td>
             <td>{{ p.risk_level }}</td>
+            <td v-if="canOpenAccount" @click.stop>
+              <button
+                v-if="p.status !== 'CLOSED'"
+                class="btn ghost sm" style="font-size:11px"
+                :disabled="openingId !== null"
+                @click="openAccount(p)"
+              >{{ openingId === p.id ? '开户中…' : '开通核算账号' }}</button>
+              <span v-else style="color:var(--ink-mute);font-size:11px">—</span>
+              <div v-if="openedMap[p.id]" class="mono" style="font-size:10.5px;color:var(--ink-mute);margin-top:3px">{{ openedMap[p.id].budgetCode }} · {{ openedMap[p.id].lines.length }} 行</div>
+            </td>
           </tr>
         </tbody>
       </table>
@@ -254,6 +292,13 @@ const gantt = computed(() => {
             </template>
             <template v-else>
               <div class="r" style="margin-top:8px"><span>状态 / 风险</span><span class="mono">{{ p.status }} · {{ p.risk_level }}</span></div>
+              <div v-if="canOpenAccount" @click.stop>
+                <button
+                  class="btn ghost sm" style="font-size:11px;margin-top:8px;width:100%"
+                  :disabled="openingId !== null"
+                  @click="openAccount(p)"
+                >{{ openedMap[p.id] ? '✓ ' + openedMap[p.id].budgetCode : openingId === p.id ? '开户中…' : '开通核算账号' }}</button>
+              </div>
             </template>
           </div>
 

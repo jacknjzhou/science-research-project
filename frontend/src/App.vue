@@ -174,6 +174,8 @@ const groups: NavGroup[] = [
     { v: 'funding-config', ic: '⚗', label: '经费配置', roles: ['R-MANAGER', 'R-FINANCE'] },
     { v: 'funding-cost-pool', ic: '∑', label: '成本池核算', roles: ['R-MANAGER', 'R-FINANCE', 'R-LEADER'] },
     { v: 'funding-settle', ic: '⚖', label: '项目决算', roles: ['R-MANAGER', 'R-FINANCE', 'R-LEADER'] },
+   { v: 'funding-disburse', ic: '₴', label: '拨款管理', roles: ['R-MANAGER', 'R-FINANCE', 'R-LEADER'] },
+   { v: 'funding-income', ic: '⇄', label: '到账认领', roles: ['R-MANAGER', 'R-FINANCE', 'R-LEADER'] },
     { v: 'claim', ic: '✧', label: '成果认领', roles: ['R-STAFF', 'R-MANAGER', 'R-LEADER'] },
     { v: 'output', ic: '▧', label: '成果台账', roles: ['R-STAFF', 'R-MANAGER', 'R-LEADER'] },
     { v: 'transfer', ic: '⇄', label: '转化看板', roles: ['R-MANAGER', 'R-LEADER', 'R-ADMIN'] },
