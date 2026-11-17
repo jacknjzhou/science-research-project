@@ -1910,6 +1910,41 @@ paths:
                     properties:
                       data: { $ref: '#/components/schemas/DisbursementCheckResult' }
 
+
+  /disbursements/{id}/action:
+    post:
+      tags: [Disbursement]
+      summary: 拨款审批动作（approve=审批 / pay=付款，R-FINANCE 专属，M1-c Task 3）
+      description: >-
+        approve：仅 SUBMITTED→APPROVED；pay：仅 APPROVED→PAID 并落 DISBURSEMENT 平行记账分录
+        （财务 7701 借/1002 贷，预算 7501 借/8001 贷，period=当月）。非对应状态 409；审批人须持
+        R-FINANCE 角色（R-ADMIN 不代行）。paid 时间语义由 approval_chain append 记录承载。
+      operationId: disbursementAction
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DisbursementActionRequest' }
+      responses:
+        "200":
+          description: 动作后的拨款单（APPROVED / PAID）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Disbursement' }
+        "404": { $ref: '#/components/responses/NotFound' }
+        "409": { $ref: '#/components/responses/RuleRejected' }
+
   /cost-pools/calculate:
     post:
       tags: [CostPool]
@@ -2697,6 +2732,13 @@ components:
         amount: { $ref: '#/components/schemas/Money' }
         phase: { type: string, enum: ['预付', '进度', '尾款'] }
         invoiceUrl: { type: string }
+
+    DisbursementActionRequest:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string, enum: [approve, pay], description: 审批动作（小写；approve=审批，pay=付款） }
+        comment: { type: string, description: 审批意见 }
 
     DisbursementCheckResult:
       type: object

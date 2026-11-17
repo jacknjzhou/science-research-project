@@ -13,6 +13,7 @@ from apps.funding.models import (
     FBudget,
     FBudgetLine,
     FCarryover,
+    FDisbursement,
     FExpense,
     FExpenseApproval,
     FIncome,
@@ -210,4 +211,19 @@ def to_api_travel_standard(t: FTravelStandard) -> dict[str, Any]:
         "effectiveFrom": fmt_date(t.effective_from),
         "effectiveTo": fmt_date(t.effective_to),
         "status": t.status, "remark": t.remark,
+    }
+
+
+def to_api_disbursement(x: FDisbursement) -> dict[str, Any]:
+    # M1-c A6 Task 3：键名对齐契约 Disbursement schema（camelCase，03-F.openapi.yaml:2671）
+    return {
+        "id": x.id, "code": x.code,
+        "contractId": x.contract_id, "outsourceUnitId": x.outsource_unit_id,
+        "projectId": x.project_id, "securityLevel": x.security_level,
+        "amount": num2(x.amount), "phase": x.phase,
+        "voucherStatus": x.voucher_status,
+        "contractAmount": num2(x.contract_amount),
+        "remainContractAmount": num2(x.remain_contract_amount),
+        "complianceFlags": x.compliance_flags or [],
+        "status": x.status, "policyPackId": x.policy_pack_id,
     }

@@ -307,6 +307,14 @@ api.post("/loans/{int:id}/pay", auth=ark_auth, tags=["funding"])(funding_api.pay
 api.post("/loans/{int:id}/write-off", auth=ark_auth, tags=["funding"])(funding_api.write_off_loan)
 api.post("/loans/{int:id}/refund", auth=ark_auth, tags=["funding"])(funding_api.refund_loan)
 
+# 合同级拨款（M1-c Task 3 / F-22 / 契约 /disbursements）：注册顺序纪律——静态段
+# /disbursements/check-contract 必须先于动态段 /disbursements/{int:id}/action 注册
+# （防 {int:id} 吞掉静态段）；动态段用 ninja 类型化 {int:id}。
+api.post("/disbursements", auth=ark_auth, tags=["funding"])(funding_api.create_disbursement)
+api.get("/disbursements", auth=ark_auth, tags=["funding"])(funding_api.list_disbursements)
+api.post("/disbursements/check-contract", auth=ark_auth, tags=["funding"])(funding_api.check_disbursement_contract)
+api.post("/disbursements/{int:id}/action", auth=ark_auth, tags=["funding"])(funding_api.disbursement_action)
+
 # —— F 凭证同步（M1-b Task 3 / F-11）：静态路由 /vouchers/sync 与 /vouchers/sync-callback，
 # 本组无 {id} 动态段，无动态冲突 ——
 api.post("/vouchers/sync", auth=ark_auth, tags=["funding"])(funding_api.push_voucher)

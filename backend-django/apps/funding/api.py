@@ -37,6 +37,7 @@ from apps.funding.mappings import (
     to_api_invoice,
     to_api_loan,
     to_api_line,
+    to_api_disbursement,
     to_api_outward,
     to_api_subject,
     to_api_travel_standard,
@@ -44,6 +45,7 @@ from apps.funding.mappings import (
 )
 from apps.funding.models import (
     FAccountingEntry,
+    FDisbursement,
     FBudget,
     FBudgetLine,
     FCarryover,
@@ -62,6 +64,7 @@ from apps.funding.models import (
     FWarnConfig,
 )
 from apps.notify.models import SysNotification
+from apps.procure.models import GContract
 from apps.project.models import EProject, EProjectCategory
 from core import approval
 from core.auth.deps import domain_from
@@ -867,6 +870,192 @@ def outward_action(request: HttpRequest, id: int):
     _notify(o.creator_id, "MESSAGE", "外拨已批复",
             f"外拨单 #{o.id} 已终审通过并从预算扣减", f"outward/{o.id}", d.tenant_id)
     return ok(request, to_api_outward(FOutward.objects.get(id=id)))
+
+
+# ---------------------------------------------------------------------------
+# 合同级拨款（F-22 / A6，M1-c Task 3）：预检 + 创建（SUBMITTED）+ 审批付款。
+# 语义：disbursed_before = Σ amount ∈ {APPROVED, PAID, VOUCHER_SYNCED}
+# （REJECTED/RETURNED/DRAFT/SUBMITTED 不占用合同额度）；R-4 裁定不实扣
+# FBudgetLine，合同额余额即闸门；action handler 内 R-FINANCE 强制
+# （R-ADMIN 不代行，R-5）；Idempotency-Key 经 core.idempotency 中间件（R-10）。
+# ---------------------------------------------------------------------------
+_DISB_COUNTED_STATUS = ("APPROVED", "PAID", "VOUCHER_SYNCED")
+
+
+def _money_strict(v) -> Decimal | None:
+    """金额解析（金额口径：最多 2 位小数，多余精度=无效金额 40001，禁静默进位）。"""
+    if v is None:
+        return None
+    try:
+        raw = Decimal(str(v))
+        q = raw.quantize(Decimal("0.01"))
+    except Exception:
+        return None
+    return None if q != raw else q
+
+
+def _disbursed_before(tenant_id: int, contract_id: int) -> Decimal:
+    """合同已拨累计：仅计入占用额度的状态（快照三列复算基准）。"""
+    agg = FDisbursement.objects.filter(
+        tenant_id=tenant_id, contract_id=contract_id, deleted=0,
+        status__in=_DISB_COUNTED_STATUS,
+    ).aggregate(total=Sum("amount"))
+    return _d2(agg["total"] or Decimal("0"))
+
+
+def _check_disbursement(contract, amount: Decimal) -> dict:
+    """合同预检（check-contract 与 create 预检内联共用）。
+
+    canDisburse = amount ≤ contract_amount − disbursed_before；
+    complianceFlags/ruleHits 本期 []（svc-policy 制度包后续期次）。
+    """
+    disbursed_before = _disbursed_before(contract.tenant_id, contract.id)
+    remain = _d2(_d2(contract.amount) - disbursed_before)
+    return {
+        "contractId": contract.id,
+        "contractAmount": num2(_d2(contract.amount)),
+        "disbursedBefore": num2(disbursed_before),
+        "remainContractAmount": num2(remain),
+        "canDisburse": amount <= remain,
+        "complianceFlags": [],
+        "ruleHits": [],
+    }
+
+
+def _disb_finance_gate(d) -> None:
+    """R-FINANCE 强制闸（handler 内第二道，R-ADMIN 不代行——R-5）。"""
+    if not approval.has_role(d.roles, "R-FINANCE"):
+        raise ApiError(403, CODE_FORBIDDEN, "仅财务（R-FINANCE）可执行拨款审批/付款")
+
+
+def check_disbursement_contract(request: HttpRequest):
+    """外拨合同剩余可拨额与合规预检（契约 :1886，创建前调用）。"""
+    d = domain_from(request)
+    b = read_json(request)
+    amount = _money_strict(b.get("amount"))
+    if not b.get("contractId") or amount is None or amount <= 0:
+        raise ApiError(400, CODE_BAD_REQUEST, "参数错误（金额须为正数）")
+    contract = GContract.objects.filter(
+        id=b["contractId"], tenant_id=d.tenant_id, deleted=0).first()
+    if contract is None:
+        raise ApiError(404, CODE_NOT_FOUND, "合同不存在")
+    return ok(request, _check_disbursement(contract, amount))
+
+
+def create_disbursement(request: HttpRequest):
+    """创建外拨经费（契约 :1826）：预检内联 + 快照三列 + 落 SUBMITTED（R-3）。"""
+    d = domain_from(request)
+    b = read_json(request)
+    amount = _money_strict(b.get("amount"))
+    if (not b.get("contractId") or not b.get("outsourceUnitId")
+            or not b.get("projectId") or not b.get("phase")
+            or amount is None or amount <= 0):
+        raise ApiError(400, CODE_BAD_REQUEST, "参数错误（金额须为正数）")
+    contract = GContract.objects.filter(
+        id=b["contractId"], tenant_id=d.tenant_id, deleted=0).first()
+    if contract is None:
+        raise ApiError(404, CODE_NOT_FOUND, "合同不存在")
+    check = _check_disbursement(contract, amount)
+    if not check["canDisburse"]:
+        # 422 族新码 42201：超合同剩余可拨额硬拦截（契约 422=RuleRejected 无固定码）
+        raise ApiError(422, "42201", "外拨金额超出合同剩余可拨额")
+    # 幂等防重：同 (tenant, contract, phase) 已有非 REJECTED/RETURNED 单 → 40901
+    dup = FDisbursement.objects.filter(
+        tenant_id=d.tenant_id, contract_id=b["contractId"], phase=b["phase"],
+        deleted=0,
+    ).exclude(status__in=("REJECTED", "RETURNED")).first()
+    if dup is not None:
+        raise ApiError(409, CODE_CONFLICT, "该合同同阶段已存在拨款单")
+    x = FDisbursement.objects.create(
+        tenant_id=d.tenant_id, creator_id=d.user_id,
+        contract_id=b["contractId"], outsource_unit_id=b["outsourceUnitId"],
+        project_id=b["projectId"],
+        legal_entity_id=contract.legal_entity_id or 1,
+        security_level=b.get("securityLevel") or "INTERNAL",
+        amount=_d2(amount), phase=b["phase"],
+        contract_amount=_d2(contract.amount),
+        disbursed_before=_money(check["disbursedBefore"]),
+        # 快照语义：remain = 合同额 − 已拨 − 本单金额（拨后剩余，响应可自洽对账）
+        remain_contract_amount=_d2(
+            _d2(contract.amount) - _money(check["disbursedBefore"]) - amount),
+        invoice_url=b.get("invoiceUrl"),
+        status="SUBMITTED",  # R-3：无草稿端点，create 直落 SUBMITTED
+    )
+    x.code = code_of("DISB", x.id)
+    x.save(update_fields=["code", "updated_at"])
+    return ok(request, to_api_disbursement(x))
+
+
+def list_disbursements(request: HttpRequest):
+    """分页查询外拨经费（契约 :1849）：contractId/projectId/status 过滤。"""
+    d = domain_from(request)
+    page, size, limit, offset = page_args(request)
+    qs = FDisbursement.objects.filter(tenant_id=d.tenant_id, deleted=0)
+    if request.GET.get("contractId"):
+        qs = qs.filter(contract_id=request.GET["contractId"])
+    if request.GET.get("projectId"):
+        qs = qs.filter(project_id=request.GET["projectId"])
+    if request.GET.get("status"):
+        qs = qs.filter(status=request.GET["status"])
+    total = qs.count()
+    rows = qs.order_by("-id")[offset : offset + limit]
+    return ok(request, {"list": [to_api_disbursement(x) for x in rows],
+                        "total": total, "page": page, "size": size})
+
+
+def disbursement_action(request: HttpRequest, id: int):
+    """审批动作（契约补丁 POST /disbursements/{id}/action）。
+
+    approve：仅 SUBMITTED→APPROVED；pay：仅 APPROVED→PAID 并落 DISBURSEMENT
+    平行记账分录（period=当月）；非对应状态 40901；paid_at 语义由 approval_chain
+    append {userId, action, at} 承载（模型无 paid_at 列）。
+    """
+    d = domain_from(request)
+    b = read_json(request)
+    action = b.get("action")
+    if action not in ("approve", "pay"):
+        raise ApiError(400, CODE_BAD_REQUEST, "action 仅 approve|pay")
+    _disb_finance_gate(d)
+    with transaction.atomic():
+        x = FDisbursement.objects.select_for_update().filter(
+            id=id, tenant_id=d.tenant_id, deleted=0).first()
+        if x is None:
+            raise ApiError(404, CODE_NOT_FOUND, "拨款单不存在")
+        chain = list(x.approval_chain or [])
+        now_iso = dj_tz.localtime(dj_tz.now()).isoformat()
+        if action == "approve":
+            if x.status != "SUBMITTED":
+                raise ApiError(409, CODE_CONFLICT, "仅 SUBMITTED 单可审批")
+            x.status = "APPROVED"
+        else:  # pay
+            if x.status != "APPROVED":
+                raise ApiError(409, CODE_CONFLICT, "仅 APPROVED 单可付款")
+            x.status = "PAID"
+            x.voucher_status = "PENDING"
+        chain.append({"userId": d.user_id, "action": action, "at": now_iso})
+        x.approval_chain = chain
+        x.modifier_id = d.user_id
+        x.save()
+        if action == "pay":
+            _post_accounting_entry(
+                tenant_id=x.tenant_id, user_id=d.user_id,
+                source_txn_type="DISBURSEMENT", source_txn_id=x.id,
+                project_id=x.project_id, legal_entity_id=x.legal_entity_id,
+                period=dj_tz.localdate().strftime("%Y%m"),
+                fin_lines=[
+                    {"subject": "7701", "direction": "debit", "amount": str(x.amount)},
+                    {"subject": "1002", "direction": "credit", "amount": str(x.amount)},
+                ],
+                bud_lines=[
+                    {"subject": "7501", "direction": "debit", "amount": str(x.amount)},
+                    {"subject": "8001", "direction": "credit", "amount": str(x.amount)},
+                ],
+            )
+    approval.log(d.tenant_id, "DISBURSEMENT", x.id, 0, d.user_id,
+                 "R-FINANCE", action.upper())
+    _notify(x.creator_id, "MESSAGE", f"拨款单已{('审批' if action == 'approve' else '付款')}",
+            f"拨款单 #{x.id} 状态：{x.status}", f"disbursement/{x.id}", d.tenant_id)
+    return ok(request, to_api_disbursement(FDisbursement.objects.get(id=id)))
 
 
 # ---------------------------------------------------------------------------
