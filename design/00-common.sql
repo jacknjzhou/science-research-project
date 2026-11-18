@@ -33,6 +33,9 @@ CREATE TABLE sys_user (
   password_hash   VARCHAR(100),                -- bcrypt($2a$10$…) 定长60留裕度；NULL=无口令账号(dev/外联身份)，一律拒登
   tenant_id       BIGINT       NOT NULL,
   legal_entity_id BIGINT,
+  org_id          BIGINT,                      -- M2-a：外部机构 sys_partner_org.id（内部用户为 NULL）
+  user_source     VARCHAR(16)  NOT NULL DEFAULT 'INTERNAL'
+                  CHECK (user_source IN ('INTERNAL','EXTERNAL')),
   deleted         SMALLINT     NOT NULL DEFAULT 0,
   creator_id      BIGINT       NOT NULL,
   modifier_id     BIGINT,
@@ -330,4 +333,43 @@ INSERT INTO seq_prefix_registry (prefix, biz_object, owner_module, introduced_ve
   ('BORROW','借阅','O','v1.0',TRUE),
   ('RVW','评审任务','N','v1.0',TRUE),
   ('RPT','评估批文','E','v1.2',TRUE),
-  ('CHG','项目变更','E','v1.2',TRUE);
+  ('CHG','项目变更','E','v1.2',TRUE),
+  ('PTN','外部合作机构','U','v1.2',TRUE);
+
+-- =============================================================================
+-- M2-a 增补：外部合作机构（sysadmin 域，与 sys_user 同域）
+-- 隔离维度＝org_id（tenant 仍为主办方）；外部用户经 sys_user.org_id 归属本表。
+-- =============================================================================
+CREATE TABLE sys_partner_org (
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  code             VARCHAR(64)  NOT NULL,       -- PTN-年-序
+  tenant_id        BIGINT       NOT NULL,
+  name             VARCHAR(256) NOT NULL,
+  short_name       VARCHAR(128),
+  credit_code      VARCHAR(64)  NOT NULL,       -- 统一社会信用代码（同租户内唯一）
+  org_type         VARCHAR(16)  NOT NULL DEFAULT 'COLLAB'
+                   CHECK (org_type IN ('COLLAB','SUPPLIER','UNIVERSITY','INSTITUTE')),
+  contact_name     VARCHAR(64)  NOT NULL,
+  contact_phone    VARCHAR(32)  NOT NULL,
+  contact_email    VARCHAR(128) NOT NULL,
+  address          VARCHAR(256),
+  qualification_json JSONB      NOT NULL DEFAULT '[]'::jsonb,  -- [{name,url,expireAt}]
+  status           VARCHAR(32)  NOT NULL DEFAULT 'PENDING'
+                   CHECK (status IN ('PENDING','APPROVED','REJECTED','SUSPENDED')),
+  audit_user_id    BIGINT,
+  audited_at       TIMESTAMPTZ,
+  reject_reason    VARCHAR(512),
+  remark           TEXT,
+  deleted          SMALLINT     NOT NULL DEFAULT 0,
+  creator_id       BIGINT       NOT NULL,
+  modifier_id      BIGINT,
+  created_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_ptn_tenant_status ON sys_partner_org(tenant_id, status);
+CREATE UNIQUE INDEX uk_ptn_credit ON sys_partner_org(tenant_id, credit_code) WHERE deleted = 0;
+
+-- 既有库升级（doc-only，Django 迁移 0008 已含）：
+--   ALTER TABLE sys_user ADD COLUMN org_id BIGINT;
+--   ALTER TABLE sys_user ADD COLUMN user_source VARCHAR(16) NOT NULL DEFAULT 'INTERNAL'
+--     CHECK (user_source IN ('INTERNAL','EXTERNAL'));

@@ -59,6 +59,9 @@ class SysUser(models.Model):
     password_hash = models.CharField(max_length=100, null=True, blank=True)
     tenant_id = models.BigIntegerField()
     legal_entity_id = models.BigIntegerField(null=True, blank=True)
+    # M2-a：外部机构用户归属（内部用户为 NULL）；INTERNAL/EXTERNAL 区分身份域
+    org_id = models.BigIntegerField(null=True, blank=True)
+    user_source = models.CharField(max_length=16, default="INTERNAL")
     deleted = models.SmallIntegerField(default=0)
     creator_id = models.BigIntegerField()
     modifier_id = models.BigIntegerField(null=True, blank=True)
@@ -211,4 +214,42 @@ class SysRolePermission(models.Model):
             models.UniqueConstraint(
                 fields=["role", "permission"], name="uk_role_permission"
             )
+        ]
+
+
+class SysPartnerOrg(models.Model):
+    """M2-a 外部合作机构（协作单位/供应商/高校/院所）。
+
+    与内部 SysLegalEntity 无关：这是「外部机构」实体，外部用户经
+    SysUser.org_id 归属本表；数据隔离维度是 org_id（tenant 仍为主办方）。
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    code = models.CharField(max_length=64)
+    tenant_id = models.BigIntegerField()
+    name = models.CharField(max_length=256)
+    short_name = models.CharField(max_length=128, null=True, blank=True)
+    credit_code = models.CharField(max_length=64)
+    org_type = models.CharField(max_length=16, default="COLLAB")  # COLLAB/SUPPLIER/UNIVERSITY/INSTITUTE
+    contact_name = models.CharField(max_length=64)
+    contact_phone = models.CharField(max_length=32)
+    contact_email = models.CharField(max_length=128)
+    address = models.CharField(max_length=256, null=True, blank=True)
+    qualification_json = models.JSONField(default=list)  # [{name,url,expireAt}]
+    status = models.CharField(max_length=32, default="PENDING")  # PENDING/APPROVED/REJECTED/SUSPENDED
+    audit_user_id = models.BigIntegerField(null=True, blank=True)
+    audited_at = models.DateTimeField(null=True, blank=True)
+    reject_reason = models.CharField(max_length=512, null=True, blank=True)
+    remark = models.TextField(null=True, blank=True)
+    deleted = models.SmallIntegerField(default=0)
+    creator_id = models.BigIntegerField()
+    modifier_id = models.BigIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "sys_partner_org"
+        indexes = [
+            models.Index(fields=["tenant_id", "status"], name="idx_ptn_tenant_status"),
+            models.Index(fields=["tenant_id", "credit_code"], name="idx_ptn_credit"),
         ]
