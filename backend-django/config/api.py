@@ -166,6 +166,9 @@ api.put(
 api.post(
     "/project/{id}/progress-report", auth=ark_auth, tags=["project"]
 )(project_api.create_progress_report)
+api.get(
+    "/project/{id}/progress-report", auth=ark_auth, tags=["project"]
+)(project_api.list_progress_reports)
 api.post(
     "/project/{id}/mid-check", auth=ark_auth, tags=["project"]
 )(project_api.create_mid_check)

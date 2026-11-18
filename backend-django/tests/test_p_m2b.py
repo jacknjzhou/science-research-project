@@ -299,3 +299,48 @@ def test_task_book_sign_role_validation(seed_auth):
     dup = _post(f"/api/v1/apply/task-books/{tb['id']}:sign", {"role": "PI"},
                 roles=("R-PARTNER",), uid=ua.id)
     assert dup.status_code == 409 and json.loads(dup.content)["code"] == 40901
+
+
+# ===========================================================================
+# Task 6：阶段汇报外部化
+# ===========================================================================
+def _manager_user(seed, username="mgr"):
+    """建一个 R-MANAGER 账号（通知广播的接收方）。"""
+    from apps.sysadmin.models import SysUser, SysUserRole
+
+    u = SysUser.objects.create(
+        username=username, real_name="管理岗", password_hash="x", status="ACTIVE",
+        tenant_id=1, creator_id=1)
+    SysUserRole.objects.create(user=u, role=seed["roles"]["R-MANAGER"], tenant_id=1)
+    return u
+
+
+def _ext_project(org, pi_uid, title="A 课题"):
+    from apps.project.models import EProject
+
+    return EProject.objects.create(
+        tenant_id=1, creator_id=1, application_id=1, title=title,
+        pi_user_id=pi_uid, ext_org_id=org.id, total_budget="100000.00")
+
+
+def test_partner_submits_progress_report_within_own_org(seed_auth):
+    from apps.notify.models import SysNotification
+
+    org_a, _org_b, ua, ub, _make = _party(seed_auth)
+    _manager_user(seed_auth)
+    proj = _ext_project(org_a, ua.id)
+    r = _post(f"/api/v1/project/{proj.id}/progress-report",
+              {"period": "2026Q1", "report_type": "QUARTERLY", "progress_percent": 40},
+              roles=("R-PARTNER",), uid=ua.id)
+    assert r.status_code == 200, r.content
+    assert _data(r)["period"] == "2026Q1"
+    assert SysNotification.objects.filter(tenant_id=1, typ="TODO").exists()
+    lst = _data(_get(f"/api/v1/project/{proj.id}/progress-report",
+                     roles=("R-PARTNER",), uid=ua.id))
+    assert lst["total"] == 1
+    # 机构 B 提交/查看均 404
+    assert _post(f"/api/v1/project/{proj.id}/progress-report",
+                 {"period": "2026Q1", "report_type": "QUARTERLY"},
+                 roles=("R-PARTNER",), uid=ub.id).status_code == 404
+    assert _get(f"/api/v1/project/{proj.id}/progress-report",
+                roles=("R-PARTNER",), uid=ub.id).status_code == 404

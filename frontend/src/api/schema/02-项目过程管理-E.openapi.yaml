@@ -244,6 +244,34 @@ paths:
                     properties:
                       data: { $ref: '#/components/schemas/EProgressReport' }
         '422': { $ref: '#/components/responses/ValidationFailed' }
+    get:
+      tags: [Progress]
+      summary: 阶段汇报列表（M2-b）
+      description: 分页返回项目下的阶段汇报；外部机构用户（仅持 R-PARTNER）只能读本机构项目，跨机构/跨租户一律 404。
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdPath'
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+      responses:
+        '200':
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/EProgressReport' }
+                          total: { type: integer }
+                          page: { type: integer }
+                          size: { type: integer }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /project/{id}/mid-check:
     post:

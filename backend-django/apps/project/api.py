@@ -282,6 +282,9 @@ def create_progress_report(request: HttpRequest, id: int):
     report_type = body.get("report_type")
     if not period or not report_type:
         raise ApiError(400, CODE_BAD_REQUEST, "请求参数错误")
+    project = EProject.objects.filter(
+        id=id, tenant_id=d.tenant_id, deleted=0
+    ).first()
     r = EProgressReport.objects.create(
         tenant_id=d.tenant_id, creator_id=d.user_id, project_id=id,
         period=period, report_type=report_type,
@@ -289,8 +292,39 @@ def create_progress_report(request: HttpRequest, id: int):
         progress_percent=body.get("progress_percent") or 0,
         issues_text=body.get("issues_text"), next_plan=body.get("next_plan"),
         attachment_ids=body.get("attachment_ids") or [],
+        submitted_at=dj_tz.now(),
     )
+    # 外部机构 PI 的汇报要能让管理端看到（best-effort，不阻断业务）
+    try:
+        _notify_role(
+            d.tenant_id, "R-MANAGER", "TODO", "阶段汇报已提交",
+            f"{(project.title if project else '')} · {period}",
+            f"progress-report:{r.id}",
+        )
+    except Exception:  # noqa: BLE001 - 通知失败不影响汇报落库
+        pass
     return ok(request, to_api_progress_report(r))
+
+
+def list_progress_reports(request: HttpRequest, id: int):
+    """GET /project/{id}/progress-report —— 阶段汇报列表（外部机构仅本机构项目）。"""
+    d = domain_from(request)
+    if is_external_only(d):
+        _partner_project_or_404(d, id)
+    else:
+        _get_project_or_404_tenant(id, d.tenant_id)
+    page, size, limit, offset = page_args(request)
+    qs = EProgressReport.objects.filter(
+        tenant_id=d.tenant_id, project_id=id, deleted=0
+    )
+    total = qs.count()
+    rows = qs.order_by("-id")[offset:offset + limit]
+    return ok(request, {
+        "list": [to_api_progress_report(r) for r in rows],
+        "total": total,
+        "page": page,
+        "size": size,
+    })
 
 
 def create_mid_check(request: HttpRequest, id: int):
