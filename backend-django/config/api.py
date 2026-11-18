@@ -184,6 +184,9 @@ api.post(
 api.post(
     "/project/{id}/final-accept", auth=ark_auth, tags=["project"]
 )(project_api.create_final_accept)
+api.get(
+    "/project/{id}/final-accept", auth=ark_auth, tags=["project"]
+)(project_api.get_final_accept)
 # —— E 风险预警/归档清单（ProjectView 契约；深路径不与 {id} 吞噬冲突）——
 api.get(
     "/project/{id}/risk-warnings", auth=ark_auth, tags=["project"]

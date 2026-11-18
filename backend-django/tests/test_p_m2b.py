@@ -344,3 +344,36 @@ def test_partner_submits_progress_report_within_own_org(seed_auth):
                  roles=("R-PARTNER",), uid=ub.id).status_code == 404
     assert _get(f"/api/v1/project/{proj.id}/progress-report",
                 roles=("R-PARTNER",), uid=ub.id).status_code == 404
+
+
+# ===========================================================================
+# Task 7：验收结题外部化（申请 / 查看 / 结题通知 + 机构邮件）
+# ===========================================================================
+def test_partner_applies_final_accept_and_gets_notified(seed_auth, mailoutbox):
+    from apps.notify.models import SysNotification
+    from apps.project.api import conclude_final_accept
+
+    org_a, _org_b, ua, ub, _make = _party(seed_auth)
+    _manager_user(seed_auth)
+    org_a.contact_email = "org-a@example.com"
+    org_a.save(update_fields=["contact_email"])
+    proj = _ext_project(org_a, ua.id)
+
+    r = _post(f"/api/v1/project/{proj.id}/final-accept",
+              {"outputSummary": "完成 3 篇论文"}, roles=("R-PARTNER",), uid=ua.id)
+    assert r.status_code == 200, r.content
+    fa = _data(r)
+    got = _data(_get(f"/api/v1/project/{proj.id}/final-accept",
+                     roles=("R-PARTNER",), uid=ua.id))
+    assert got["id"] == fa["id"]
+    # 机构 B 读不到
+    assert _get(f"/api/v1/project/{proj.id}/final-accept",
+                roles=("R-PARTNER",), uid=ub.id).status_code == 404
+    # 机构 B 也不能代提验收
+    assert _post(f"/api/v1/project/{proj.id}/final-accept", {},
+                 roles=("R-PARTNER",), uid=ub.id).status_code == 404
+
+    conclude_final_accept(fa["id"], "APPROVED")
+    assert SysNotification.objects.filter(user_id=ua.id).exists()
+    assert mailoutbox and "结题" in mailoutbox[-1].subject
+    assert mailoutbox[-1].to == ["org-a@example.com"]

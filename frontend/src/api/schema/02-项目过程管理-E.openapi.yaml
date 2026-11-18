@@ -412,6 +412,24 @@ paths:
                     properties:
                       data: { $ref: '#/components/schemas/EFinalAccept' }
         '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [FinalAccept]
+      summary: 结题验收详情（M2-b）
+      description: 返回该项目最近一次验收申请；外部机构用户只能访问本机构项目，跨机构/跨租户 404。
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdPath'
+      responses:
+        '200':
+          description: 验收申请
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/EFinalAccept' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /project/{id}/health-score:
     get:

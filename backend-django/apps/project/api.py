@@ -718,7 +718,10 @@ def approve_change_batch(request: HttpRequest):
 
 def create_final_accept(request: HttpRequest, id: int):
     d = domain_from(request)
-    _get_project_or_404_tenant(id, d.tenant_id)
+    if is_external_only(d):
+        project = _partner_project_or_404(d, id)
+    else:
+        project = _get_project_or_404_tenant(id, d.tenant_id)
     body = read_json(request)
     template_id = _resolve_template_id(d.tenant_id, body, "FINAL_ACCEPT")
     snapshot, _ = _template_bundle(d.tenant_id, template_id)
@@ -730,6 +733,30 @@ def create_final_accept(request: HttpRequest, id: int):
         output_summary=body.get("outputSummary", body.get("output_summary")),
         apply_at=dj_tz.now(),
     )
+    try:  # 外部机构提交的验收申请要让管理端看到（best-effort）
+        _notify_role(
+            d.tenant_id, "R-MANAGER", "TODO", "结题验收申请已提交",
+            project.title, f"final-accept:{r.id}",
+        )
+    except Exception:  # noqa: BLE001 - 通知失败不影响受理
+        pass
+    return ok(request, to_api_final_accept(r))
+
+
+def get_final_accept(request: HttpRequest, id: int):
+    """GET /project/{id}/final-accept —— 该项目最近一次验收申请（外部机构仅本机构）。"""
+    d = domain_from(request)
+    if is_external_only(d):
+        _partner_project_or_404(d, id)
+    else:
+        _get_project_or_404_tenant(id, d.tenant_id)
+    r = (
+        EFinalAccept.objects.filter(tenant_id=d.tenant_id, project_id=id, deleted=0)
+        .order_by("-id")
+        .first()
+    )
+    if r is None:
+        raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
     return ok(request, to_api_final_accept(r))
 
 
@@ -1347,6 +1374,43 @@ def conclude_final_accept(final_accept_id: int, status: str) -> None:
         _notify_role(fa.tenant_id, "R-MANAGER", "FINAL_ACCEPT", title,
                      "结题验收通过，批文已生成", f"final-accept:{fa.id}")
     except Exception:
+        pass
+    _notify_pi_final_accept(fa, title)
+
+
+def _notify_pi_final_accept(fa: EFinalAccept, report_title: str) -> None:
+    """结题通过后通知 PI（站内信）并给其机构联系邮箱发邮件（best-effort）。
+
+    放在 single-writer 的 best-effort 段而非 HTTP handler：任何调用方（N 域 conclude、
+    未来管理端点）都会触发，不会漏发；且此处已持有 fa/tenant/project，无需 HTTP 上下文。
+    """
+    try:
+        p = EProject.objects.filter(
+            id=fa.project_id, tenant_id=fa.tenant_id, deleted=0
+        ).first()
+        if p is None:
+            return
+        _notify(
+            p.pi_user_id, "ANNOUNCE", "结题验收已通过",
+            f"{p.title} 结题验收通过，批文《{report_title}》已生成。",
+            f"final-accept:{fa.id}", fa.tenant_id,
+        )
+        if not p.ext_org_id:
+            return
+        from apps.notify.email import send_mail_best_effort
+        from apps.sysadmin.models import SysPartnerOrg
+
+        org = SysPartnerOrg.objects.filter(
+            id=p.ext_org_id, tenant_id=fa.tenant_id, deleted=0
+        ).first()
+        if org is not None and org.contact_email:
+            send_mail_best_effort(
+                org.contact_email, f"{p.title} 结题验收通过",
+                f"您好，{org.name} 参与的课题《{p.title}》结题验收已通过，"
+                f"批文《{report_title}》已生成，可在门户查看。",
+                tenant_id=fa.tenant_id, biz_ref=f"final-accept:{fa.id}",
+            )
+    except Exception:  # noqa: BLE001 - 通知/邮件绝不阻断结题
         pass
 
 
