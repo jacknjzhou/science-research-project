@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from django.db import models
+from django.db.models import Q
 
 
 class SysLegalEntity(models.Model):
@@ -252,4 +253,12 @@ class SysPartnerOrg(models.Model):
         indexes = [
             models.Index(fields=["tenant_id", "status"], name="idx_ptn_tenant_status"),
             models.Index(fields=["tenant_id", "credit_code"], name="idx_ptn_credit"),
+        ]
+        # 与 DDL uk_ptn_credit 对齐：同租户信用代码唯一（软删行不占槽）
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant_id", "credit_code"],
+                name="uk_ptn_credit",
+                condition=Q(deleted=0),
+            )
         ]

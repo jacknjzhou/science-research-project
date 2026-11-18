@@ -131,3 +131,6 @@ EMAIL_HOST_USER = os.environ.get("ARK_EMAIL_USER", "")
 EMAIL_HOST_PASSWORD = os.environ.get("ARK_EMAIL_PASSWORD", "")
 EMAIL_USE_TLS = os.environ.get("ARK_EMAIL_TLS", "") == "1"
 DEFAULT_FROM_EMAIL = os.environ.get("ARK_EMAIL_FROM", "noreply@ark.local")
+
+# ---- M2-a：外部机构自助注册落库租户（公开端点，不接受请求体指定）----
+PARTNER_SIGNUP_TENANT_ID = int(os.environ.get("ARK_PARTNER_SIGNUP_TENANT", "1"))

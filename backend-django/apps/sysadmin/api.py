@@ -13,8 +13,10 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
+import re
+
 import bcrypt
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.http import HttpRequest
 from django.utils import timezone as dj_tz
@@ -556,6 +558,8 @@ def update_role_permissions(request: HttpRequest, role_code: str):
 # ===========================================================================
 
 _ORG_TYPES = ("COLLAB", "SUPPLIER", "UNIVERSITY", "INSTITUTE")
+#: 统一社会信用代码：18 位数字/大写字母（含中文或小写一律拒，避免宽松校验）
+_CREDIT_CODE_RE = re.compile(r"^[0-9A-Z]{18}$")
 
 
 def _notify_role_inapp(
@@ -628,15 +632,15 @@ def register_partner(request: HttpRequest) -> object:
     无 domain 上下文（无登录态），tenant 取 body.tenant_id 或 1。
     """
     body = read_json(request)
-    try:
-        tenant_id = int(body.get("tenant_id") or 1)
-    except (TypeError, ValueError):
-        raise ApiError(400, CODE_BAD_REQUEST, "tenant_id 非法") from None
+    # 公开端点无登录态：租户由部署配置决定，**不接受**请求体指定（否则可跨租户灌数据）
+    from django.conf import settings as dj_settings
+
+    tenant_id = int(getattr(dj_settings, "PARTNER_SIGNUP_TENANT_ID", 1))
 
     org_name = _str_field(body, "org_name", "机构名称", max_len=256)
-    credit_code = _str_field(body, "credit_code", "统一社会信用代码", max_len=64)
-    if len(credit_code) != 18 or not credit_code[0].isalnum():
-        raise ApiError(400, CODE_BAD_REQUEST, "统一社会信用代码须为 18 位")
+    credit_code = _str_field(body, "credit_code", "统一社会信用代码", max_len=64).upper()
+    if not _CREDIT_CODE_RE.match(credit_code):
+        raise ApiError(400, CODE_BAD_REQUEST, "统一社会信用代码须为 18 位大写字母或数字")
     org_type = (body.get("org_type") or "COLLAB")
     if org_type not in _ORG_TYPES:
         raise ApiError(400, CODE_BAD_REQUEST, f"机构类型须为 {list(_ORG_TYPES)} 之一")
@@ -664,6 +668,33 @@ def register_partner(request: HttpRequest) -> object:
     ).exists():
         raise ApiError(409, CODE_CONFLICT, "机构或用户名已注册")
 
+    try:
+        org = _create_partner_org_and_user(
+            tenant_id=tenant_id, org_name=org_name, credit_code=credit_code,
+            org_type=org_type, contact_name=contact_name, contact_phone=contact_phone,
+            contact_email=contact_email, address=address, username=username,
+            password=password, real_name=real_name,
+        )
+    except IntegrityError:
+        # 并发下唯一约束兜底（uk_ptn_credit / 用户名唯一）
+        raise ApiError(409, CODE_CONFLICT, "机构或用户名已注册") from None
+    _notify_role_inapp(
+        tenant_id,
+        "R-MANAGER",
+        "TODO",
+        "外部机构待审核",
+        f"{org.name}（{org.credit_code}）提交了机构注册申请，请审核资质。",
+        f"partner-org:{org.id}",
+    )
+    return ok(request, to_api_partner_org(org))
+
+
+def _create_partner_org_and_user(
+    *, tenant_id: int, org_name: str, credit_code: str, org_type: str,
+    contact_name: str, contact_phone: str, contact_email: str, address: str | None,
+    username: str, password: str, real_name: str,
+) -> SysPartnerOrg:
+    """建 PENDING 机构 + LOCKED 账号（同事务；code 建行后回填 PTN-年-序）。"""
     with transaction.atomic():
         org = SysPartnerOrg.objects.create(
             code="",  # 建行后按 id 回填 PTN-年-序
@@ -694,15 +725,7 @@ def register_partner(request: HttpRequest) -> object:
             creator_id=1,
             remark="self-register",
         )
-    _notify_role_inapp(
-        tenant_id,
-        "R-MANAGER",
-        "TODO",
-        "外部机构待审核",
-        f"{org.name}（{org.credit_code}）提交了机构注册申请，请审核资质。",
-        f"partner-org:{org.id}",
-    )
-    return ok(request, to_api_partner_org(org))
+    return org
 
 
 def list_partner_orgs(request: HttpRequest) -> object:
@@ -737,16 +760,22 @@ def audit_partner_org(request: HttpRequest, id: int) -> object:
     if action not in ("APPROVE", "REJECT"):
         raise ApiError(400, CODE_BAD_REQUEST, "action 须为 APPROVE 或 REJECT")
 
+    if action == "REJECT":
+        reason = _str_field(body, "reason", "驳回理由", max_len=512)
+    else:
+        reason = None
+
     with transaction.atomic():
         org = _partner_org_or_404(d.tenant_id, id)
-        if action == "APPROVE":
-            if org.status == "APPROVED":  # 幂等：不重复授角色/重复通知
-                return ok(request, to_api_partner_org(org))
-            reason = None
-        else:
-            reason = _str_field(body, "reason", "驳回理由", max_len=512)
-            if org.status == "REJECTED":
-                return ok(request, to_api_partner_org(org))
+        # 行锁：并发双审只让第一个改变状态（sqlite 忽略，PG 生效）
+        org = SysPartnerOrg.objects.select_for_update().get(id=org.id)
+        if action == "APPROVE" and org.status == "APPROVED":
+            return ok(request, to_api_partner_org(org))  # 幂等：不重复授角色/通知
+        if action == "REJECT" and org.status == "REJECTED":
+            return ok(request, to_api_partner_org(org))
+        if org.status != "PENDING":
+            # APPROVED→REJECT / REJECTED→APPROVE 等状态迁移一律拒绝
+            raise ApiError(409, CODE_CONFLICT, "该机构已审核完成，不可再次审核")
 
         org.status = "APPROVED" if action == "APPROVE" else "REJECTED"
         org.audit_user_id = d.user_id
@@ -768,11 +797,14 @@ def audit_partner_org(request: HttpRequest, id: int) -> object:
             user.modifier_id = d.user_id
             user.save(update_fields=["status", "modifier_id", "updated_at"])
             role = SysRole.objects.filter(code="R-PARTNER", tenant_id=d.tenant_id).first()
-            if role is not None:
-                SysUserRole.objects.get_or_create(
-                    user_id=user.id, role_id=role.id,
-                    defaults={"tenant_id": d.tenant_id},
-                )
+            if role is None:
+                # 没有 R-PARTNER 就静默通过会让账号拿不到门户权限（是环境未初始化，不是业务错误）
+                raise ApiError(400, CODE_BAD_REQUEST, "角色未初始化，请先执行 seed_demo")
+            SysUserRole.objects.get_or_create(
+                user_id=user.id,
+                role_id=role.id,
+                defaults={"tenant_id": d.tenant_id},
+            )
 
     # 通知（事务外，best-effort，绝不阻断审核）
     if user is not None:
@@ -787,9 +819,14 @@ def audit_partner_org(request: HttpRequest, id: int) -> object:
                     tenant_id=d.tenant_id, biz_ref=f"partner-org:{org.id}",
                 )
             else:
-                notify_inapp(d.tenant_id, user.id, "ANNOUNCE", "机构资质审核未通过",
-                             f"{org.name} 的注册申请未通过：{reason}",
-                             f"partner-org:{org.id}")
+                title = "机构资质审核未通过"
+                content = f"{org.name} 的注册申请未通过：{reason}"
+                notify_inapp(d.tenant_id, user.id, "ANNOUNCE", title, content,
+                             f"partner-org:{org.id}", channel="BOTH")
+                send_mail_best_effort(
+                    org.contact_email, title, content,
+                    tenant_id=d.tenant_id, biz_ref=f"partner-org:{org.id}",
+                )
         except Exception:  # pragma: no cover - 通知永不阻断
             pass
     return ok(request, to_api_partner_org(org))

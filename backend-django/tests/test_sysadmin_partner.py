@@ -295,3 +295,109 @@ def test_seed_partner_account_can_browse_portal(db):
     # 涉密域默认全拒（验收：外部身份进不了经费/项目/采购）
     for path in ("/api/v1/expenses", "/api/v1/partner-orgs"):
         assert c.get(path, HTTP_AUTHORIZATION="Bearer " + tok).status_code == 403
+
+
+# ===========================================================================
+# 终审 C-1/C-2/I-1..I-6 回归
+# ===========================================================================
+def test_register_accepts_contract_shaped_payload(seed_auth):
+    """契约 required 9 键原样提交必须成功（前端表单同形；C-1）。"""
+    body = {
+        "org_name": "契约形状大学", "credit_code": "91310000MA1K3XY99Z",
+        "org_type": "UNIVERSITY", "contact_name": "李经办",
+        "contact_phone": "13700000001", "contact_email": "c@example.edu.cn",
+        "username": "c_partner", "password": "Partner@2026", "real_name": "李经办",
+    }
+    r = _post(REGISTER_URL, body)
+    assert r.status_code == 200, r.content
+    assert _data(r)["status"] == "PENDING"
+
+
+def test_register_ignores_body_tenant(seed_auth):
+    """公开注册不接受请求体 tenant_id（I-4：防跨租户灌数据）。"""
+    r = _post(REGISTER_URL, _register_body(tenant_id=2))
+    assert r.status_code == 200
+    assert SysPartnerOrg.objects.get(id=_data(r)["id"]).tenant_id == 1
+
+
+def test_register_rejects_bad_credit_code(seed_auth):
+    for bad in ("91310000MA1K3XY12", "91310000MA1K3XY12AB", "91310000MA1K3XY1中文"):
+        r = _post(REGISTER_URL, _register_body(credit_code=bad))
+        assert r.status_code == 400, (bad, r.content)
+
+
+def test_register_normalizes_credit_code_case(seed_auth):
+    """小写按规范归一为大写存库（USCC 唯一性不受大小写影响）。"""
+    r = _post(REGISTER_URL, _register_body(credit_code="91310000ma1k3xy12a"))
+    assert r.status_code == 200, r.content
+    assert SysPartnerOrg.objects.get(id=_data(r)["id"]).credit_code == "91310000MA1K3XY12A"
+
+
+def test_register_duplicate_credit_code_conflicts(seed_auth):
+    assert _post(REGISTER_URL, _register_body()).status_code == 200
+    r = _post(REGISTER_URL, _register_body(username="another_user"))
+    assert r.status_code == 409 and json.loads(r.content)["code"] == 40901
+
+
+def test_credit_code_unique_at_db_level(seed_auth):
+    """I-5：DDL uk_ptn_credit 在库层生效（软删行不占槽）。"""
+    import pytest as _pytest
+    from django.db import IntegrityError, transaction
+
+    _org(credit_code="91310000MA1K3XY12A")
+    with _pytest.raises(IntegrityError):
+        with transaction.atomic():
+            _org(code="PTN-2026-000002", credit_code="91310000MA1K3XY12A")
+    _org(code="PTN-2026-000003", credit_code="91310000MA1K3XY12A", deleted=1)  # 软删不占槽
+
+
+def test_cannot_reject_after_approve(seed_auth):
+    """I-1：已通过不可再驳回，账号保持可用且不丢角色。"""
+    oid, _ = _register_then_approve()
+    r = _post(AUDIT_URL.format(id=oid), {"action": "REJECT", "reason": "后悔了"},
+              roles=("R-MANAGER",))
+    assert r.status_code == 409 and json.loads(r.content)["code"] == 40901
+    assert SysPartnerOrg.objects.get(id=oid).status == "APPROVED"
+    u = SysUser.objects.get(username="p_example")
+    assert u.status == "ACTIVE"
+    from apps.sysadmin.models import SysUserRole
+
+    assert SysUserRole.objects.filter(user_id=u.id, role__code="R-PARTNER").count() == 1
+
+
+def test_reject_sends_email_with_reason(seed_auth):
+    """I-2：驳回也要发邮件（账号被锁，站内信到不了）。"""
+    from django.core import mail
+
+    mail.outbox.clear()
+    _register_then_approve(action="REJECT", reason="资质证书过期")
+    assert len(mail.outbox) == 1
+    assert "资质证书过期" in mail.outbox[0].body
+
+
+def test_audit_without_partner_role_is_400(seed_auth):
+    """I-3：R-PARTNER 角色未初始化时不得静默通过。"""
+    from apps.sysadmin.models import SysRole
+
+    oid = _data(_post(REGISTER_URL, _register_body()))["id"]
+    SysRole.objects.filter(code="R-PARTNER").delete()
+    r = _post(AUDIT_URL.format(id=oid), {"action": "APPROVE"}, roles=("R-MANAGER",))
+    assert r.status_code == 400 and "角色未初始化" in json.loads(r.content)["message"]
+    assert SysPartnerOrg.objects.get(id=oid).status == "PENDING"
+    assert SysUser.objects.get(username="p_example").status == "LOCKED"
+
+
+def test_audit_is_tenant_scoped(seed_auth):
+    """跨租户审核一律 404（不泄露他租户机构存在性）。"""
+    other = SysPartnerOrg.objects.create(
+        code="PTN-2026-000900", tenant_id=2, name="他租户机构",
+        credit_code="91310000MA9K9XY00B", org_type="COLLAB",
+        contact_name="赵", contact_phone="13600000000",
+        contact_email="o@example.com", creator_id=1,
+    )
+    r = _post(AUDIT_URL.format(id=other.id), {"action": "APPROVE"}, roles=("R-MANAGER",))
+    assert r.status_code == 404
+    assert SysPartnerOrg.objects.get(id=other.id).status == "PENDING"
+    # 列表也看不到他租户机构
+    lst = _data(_get("/api/v1/partner-orgs?size=100", ("R-MANAGER",), 1))
+    assert all(o["tenant_id"] == 1 for o in lst["list"])

@@ -1064,7 +1064,7 @@ class Command(BaseCommand):
             username="partner", tenant_id=T1,
             defaults={
                 "real_name": "合作单位联系人", "email": "partner@example.edu.cn",
-                "security_level": "INTERNAL", "status": "ACTIVE",
+                "security_level": "PUBLIC", "status": "ACTIVE",  # 外部机构账号：最低密级
                 "password_hash": bcrypt.hashpw(b"Partner@123456", bcrypt.gensalt()).decode(),
                 "org_id": ptn_a.id, "user_source": "EXTERNAL", "creator_id": C1,
             },
