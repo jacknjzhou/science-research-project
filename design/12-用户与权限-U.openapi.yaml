@@ -756,6 +756,152 @@ paths:
                                 type: array
                                 items: { $ref: '#/components/schemas/Notification' }
 
+  # —— M2-a 外部机构：自助注册 / 机构门户 / 审核台 ——
+  /portal/register:
+    post:
+      tags: [portal]
+      summary: 外部机构自助注册（公开）——建待审机构 + 锁定账号
+      operationId: registerPartner
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PartnerOrgRegisterRequest' }
+      responses:
+        "200":
+          description: 注册成功（status=PENDING，账号需审核后激活）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PartnerOrg' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "409": { $ref: '#/components/responses/Conflict' }
+  /portal/org:
+    get:
+      tags: [portal]
+      summary: 当前外部用户所属机构（R-PARTNER；无机构 404）
+      operationId: getPortalOrg
+      responses:
+        "200":
+          description: 机构信息
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PartnerOrg' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "404": { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [portal]
+      summary: 机构自助维护联系方式（仅联系人与地址，其余字段忽略）
+      operationId: updatePortalOrg
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PartnerOrgUpdateRequest' }
+      responses:
+        "200":
+          description: 更新后的机构信息
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PartnerOrg' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "404": { $ref: '#/components/responses/NotFound' }
+  /portal/home:
+    get:
+      tags: [portal]
+      summary: 机构门户首页——机构卡 + 公告 + 已发布指南 + 待办计数
+      operationId: getPortalHome
+      responses:
+        "200":
+          description: 门户首页聚合
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PortalHome' }
+        "404": { $ref: '#/components/responses/NotFound' }
+  /partner-orgs:
+    get:
+      tags: [portal]
+      summary: 机构注册审核台列表（R-MANAGER；status/keyword 过滤）
+      operationId: listPartnerOrgs
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: status
+          in: query
+          description: PENDING/APPROVED/REJECTED/SUSPENDED
+          schema: { type: string }
+        - name: keyword
+          in: query
+          description: 机构名称或统一社会信用代码模糊匹配
+          schema: { type: string }
+      responses:
+        "200":
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PageResult'
+                          - type: object
+                            properties:
+                              list:
+                                type: array
+                                items: { $ref: '#/components/schemas/PartnerOrg' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /partner-orgs/{id}/audit:
+    post:
+      tags: [portal]
+      summary: 机构资质审核——通过即激活账号并授 R-PARTNER（幂等）
+      operationId: auditPartnerOrg
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PartnerOrgAuditRequest' }
+      responses:
+        "200":
+          description: 审核后的机构信息
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PartnerOrg' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "404": { $ref: '#/components/responses/NotFound' }
+
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
@@ -790,6 +936,103 @@ components:
         data:      { nullable: true }
         traceId:   { type: string }
         timestamp: { type: integer, format: int64 }
+    PartnerOrg:
+      type: object
+      description: 外部合作机构（sys_partner_org；隔离维度 org_id，tenant 为主办方）
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string, description: 'PTN-年-序号' }
+        tenant_id: { type: integer, format: int64 }
+        name: { type: string }
+        short_name: { type: string, nullable: true }
+        credit_code: { type: string, description: 统一社会信用代码（同租户唯一） }
+        org_type:
+          type: string
+          enum: [COLLAB, SUPPLIER, UNIVERSITY, INSTITUTE]
+        contact_name: { type: string }
+        contact_phone: { type: string }
+        contact_email: { type: string }
+        address: { type: string, nullable: true }
+        qualification_json:
+          type: array
+          description: '[{name,url,expireAt}] 资质附件'
+          items: { type: object }
+        status:
+          type: string
+          enum: [PENDING, APPROVED, REJECTED, SUSPENDED]
+        audit_user_id: { type: integer, format: int64, nullable: true }
+        audited_at: { type: string, format: date-time, nullable: true }
+        reject_reason: { type: string, nullable: true }
+        deleted: { type: integer }
+        creator_id: { type: integer, format: int64 }
+        remark: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    PartnerOrgRegisterRequest:
+      type: object
+      required: [org_name, credit_code, org_type, contact_name, contact_phone, contact_email, username, password, real_name]
+      properties:
+        tenant_id: { type: integer, format: int64, description: 缺省 1（公开端点无登录态） }
+        org_name: { type: string, maxLength: 256 }
+        credit_code: { type: string, description: 18 位统一社会信用代码 }
+        org_type:
+          type: string
+          enum: [COLLAB, SUPPLIER, UNIVERSITY, INSTITUTE]
+          default: COLLAB
+        contact_name: { type: string, maxLength: 64 }
+        contact_phone: { type: string, maxLength: 32 }
+        contact_email: { type: string, maxLength: 128 }
+        address: { type: string, maxLength: 256 }
+        username: { type: string, description: 登录名，≥3 位，同租户唯一 }
+        password: { type: string, description: '口令：≥8 位且含字母，不得纯数字' }
+        real_name: { type: string, maxLength: 64 }
+    PartnerOrgUpdateRequest:
+      type: object
+      description: 仅这四个键可改，其余键服务端忽略
+      properties:
+        contact_name: { type: string, maxLength: 64 }
+        contact_phone: { type: string, maxLength: 32 }
+        contact_email: { type: string, maxLength: 128 }
+        address: { type: string, maxLength: 256 }
+    PartnerOrgAuditRequest:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [APPROVE, REJECT]
+        reason: { type: string, description: 'REJECT 必填，驳回理由', maxLength: 512 }
+    PortalHome:
+      type: object
+      description: 机构门户首页聚合（指南仅 PUBLISHED）
+      properties:
+        org: { $ref: '#/components/schemas/PartnerOrg' }
+        announcements:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer, format: int64 }
+              title: { type: string }
+              content: { type: string, nullable: true }
+              created_at: { type: string, format: date-time }
+        guidelines:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer, format: int64 }
+              code: { type: string, nullable: true }
+              title: { type: string }
+              project_type: { type: string }
+              apply_start_at: { type: string, format: date-time, nullable: true }
+              apply_end_at: { type: string, format: date-time, nullable: true }
+              publish_at: { type: string, format: date-time, nullable: true }
+        todos:
+          type: object
+          properties:
+            unread_notifications: { type: integer }
+            pending_applications: { type: integer }
     PageResult:
       type: object
       properties:
