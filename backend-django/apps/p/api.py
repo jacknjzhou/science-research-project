@@ -15,6 +15,7 @@ from apps.p.mappings import num2, to_api_application, to_api_guideline
 from apps.p.models import PApplication, PApplicationDoc, PGuideline
 from core.approval import has_role
 from core.auth.deps import domain_from
+from core.org_scope import current_org_id, is_external_only
 from core.httpx import (
     ApiError,
     CODE_BAD_REQUEST,
@@ -249,9 +250,11 @@ def list_applications(request: HttpRequest):
 
 
 def get_application(request: HttpRequest, id: int):
-    a = PApplication.objects.filter(id=id, deleted=0).first()
-    if a is None:
-        raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
+    d = domain_from(request)
+    if is_external_only(d):
+        a = _partner_app_or_404(d, id)
+    else:
+        a = _get_app_or_404(d.tenant_id, id)
     return ok(request, to_api_application(a))
 
 
@@ -290,9 +293,18 @@ _WITHDRAWABLE = {"DRAFT", "SUBMITTED", "FORMAL_CHECK", "RECOMMENDED"}
 _TERMINABLE = {"UNDER_REVIEW", "INTERVIEWING", "DECIDED", "PUBLISHED", "SIGNED", "EXECUTING"}
 
 
-def _get_app_or_404(app_id: int) -> PApplication:
-    a = PApplication.objects.filter(id=app_id, deleted=0).first()
+def _get_app_or_404(tenant_id: int, app_id: int) -> PApplication:
+    a = PApplication.objects.filter(id=app_id, tenant_id=tenant_id, deleted=0).first()
     if a is None:
+        raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
+    return a
+
+
+def _partner_app_or_404(d, app_id: int) -> PApplication:
+    """外部机构身份读申报：跨租户或跨机构一律 404（不泄露存在性）。"""
+    a = _get_app_or_404(d.tenant_id, app_id)
+    org = current_org_id(d)
+    if a.applicant_org_id is None or org is None or a.applicant_org_id != org:
         raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
     return a
 
@@ -311,7 +323,7 @@ def withdraw_application(request: HttpRequest, id: int):
     d = domain_from(request)
     body = read_json(request)
     reason = _require_reason(body)
-    a = _get_app_or_404(id)
+    a = _get_app_or_404(d.tenant_id, id)
     if a.status not in _WITHDRAWABLE:
         raise ApiError(409, CODE_CONFLICT, "当前状态不可撤回，已进入评审的申报只能终止")
     a.status = "WITHDRAWN"
@@ -327,7 +339,7 @@ def terminate_application(request: HttpRequest, id: int):
     d = domain_from(request)
     body = read_json(request)
     reason = _require_reason(body)
-    a = _get_app_or_404(id)
+    a = _get_app_or_404(d.tenant_id, id)
     if a.status not in _TERMINABLE:
         raise ApiError(409, CODE_CONFLICT, "当前状态不可终止，未进入评审的申报应使用撤回")
     a.status = "REJECTED"
@@ -383,14 +395,16 @@ def _doc_shape(a: PApplication, section_code: str, doc: PApplicationDoc | None) 
 
 def list_application_documents(request: HttpRequest, id: int):
     """GET /apply/applications/{id}/documents —— 9 节 Doc[]（doc 行 ∪ 旧字段）。"""
-    a = _get_app_or_404(id)
+    d = domain_from(request)
+    a = _get_app_or_404(d.tenant_id, id)
     docs = {d.section_code: d for d in PApplicationDoc.objects.filter(application=a)}
     return ok(request, [_doc_shape(a, code, docs.get(code)) for code in SECTION_CODES])
 
 
 def get_application_budget(request: HttpRequest, id: int):
     """GET /apply/applications/{id}/budget —— 按 total_budget 确定性拆分 BudgetRow[]。"""
-    a = _get_app_or_404(id)
+    d = domain_from(request)
+    a = _get_app_or_404(d.tenant_id, id)
     total = float(a.total_budget or 0)
     if total <= 0:
         return ok(request, [])
@@ -412,7 +426,8 @@ def upsert_budget_line(request: HttpRequest, id: int):
 
     确定性合规预检：单科目金额不得超过 total_budget；返回保存后的行。
     """
-    a = _get_app_or_404(id)
+    d = domain_from(request)
+    a = _get_app_or_404(d.tenant_id, id)
     body = read_json(request)
     subject_code = body.get("subject_code")
     amount = body.get("amount")
@@ -440,7 +455,7 @@ def upsert_budget_line(request: HttpRequest, id: int):
 def save_application_section(request: HttpRequest, id: int, code: str):
     """PUT /apply/applications/{id}/sections/{code} —— 分节 upsert，版本自增。"""
     d = domain_from(request)
-    a = _get_app_or_404(id)
+    a = _get_app_or_404(d.tenant_id, id)
     if code not in SECTION_CODES:
         raise ApiError(400, CODE_UNKNOWN_PARAM, f"未知分节码：{code}")
     body = read_json(request)
@@ -467,7 +482,7 @@ def submit_application(request: HttpRequest, id: int):
     """
     d = domain_from(request)
     body = read_json(request)
-    a = _get_app_or_404(id)
+    a = _get_app_or_404(d.tenant_id, id)
     if a.status != "DRAFT":
         raise ApiError(409, CODE_CONFLICT, "仅草稿状态可提交")
     if a.ai_draft_marked and not body.get("confirm_ai_watermark"):
@@ -502,7 +517,7 @@ def ai_draft(request: HttpRequest):
     section_code = body.get("section_code")
     if not app_id or not section_code:
         raise ApiError(400, CODE_BAD_REQUEST, "application_id 与 section_code 必填")
-    a = _get_app_or_404(int(app_id))
+    a = _get_app_or_404(d.tenant_id, int(app_id))
     if section_code not in SECTION_CODES:
         raise ApiError(400, CODE_UNKNOWN_PARAM, f"未知分节码：{section_code}")
     keywords = body.get("keywords") or ""

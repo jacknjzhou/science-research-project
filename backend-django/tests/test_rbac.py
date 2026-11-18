@@ -516,3 +516,31 @@ def test_m2a_partner_keymatch2_guideline_detail_covered():
     assert key_match2("/api/v1/apply/guidelines/12", "/api/v1/apply/guidelines/*")
     assert ("R-PARTNER", "/api/v1/apply/guidelines", "POST") not in rows
     assert ("R-PARTNER", "/api/v1/apply/guidelines/*", "POST") not in rows
+
+
+# ===========================================================================
+# M2-b：外部机构业务域策略
+# ===========================================================================
+
+
+def test_m2b_partner_business_rows_exist():
+    rows = _policy_p_rows()
+    expected = {
+        ("R-PARTNER", "/api/v1/apply/guide-suggestions", "POST"),
+        ("R-PARTNER", "/api/v1/apply/applications", "POST"),
+        ("R-PARTNER", "/api/v1/apply/task-books/*:sign", "POST"),
+        ("R-PARTNER", "/api/v1/project/*/final-accept", "POST"),
+        ("R-MANAGER", "/api/v1/apply/guide-suggestions/*:accept", "POST"),
+    }
+    assert expected <= rows
+
+
+def test_m2b_partner_denied_admin_and_secret_domains():
+    from casbin.util import key_match2
+
+    rows = _policy_p_rows()
+    partner = [(p, a) for (r, p, a) in rows if r == "R-PARTNER"]
+    for path in ("/api/v1/x/projects", "/api/v1/users", "/api/v1/partner-orgs",
+                 "/api/v1/project/1/board", "/api/v1/funding/expenses"):
+        for (pth, _act) in partner:
+            assert not key_match2(path, pth), f"{path} 不应被 {pth} 匹配"

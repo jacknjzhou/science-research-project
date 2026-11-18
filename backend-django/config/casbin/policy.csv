@@ -874,3 +874,28 @@ p, R-PARTNER, /api/v1/dicts/*,                       GET
 # —— M2-a 机构审核台（R-MANAGER）：列表 + 审核动作 ——
 p, R-MANAGER, /api/v1/partner-orgs,                  GET
 p, R-MANAGER, /api/v1/partner-orgs/*/audit,          POST
+# —— M2-b 开放课题全流程（外部机构业务域 + 管理端审核）——
+p, R-PARTNER, /api/v1/apply/guide-suggestions,       GET
+p, R-PARTNER, /api/v1/apply/guide-suggestions,       POST
+p, R-PARTNER, /api/v1/apply/guide-suggestions/*,     GET
+p, R-PARTNER, /api/v1/apply/applications,            GET
+p, R-PARTNER, /api/v1/apply/applications,            POST
+p, R-PARTNER, /api/v1/apply/applications/*,          GET
+p, R-PARTNER, /api/v1/apply/applications/*,          PUT
+p, R-PARTNER, /api/v1/apply/applications/*/submit,   POST
+p, R-PARTNER, /api/v1/apply/applications/*/sections/*,POST
+p, R-PARTNER, /api/v1/apply/applications/*/budget,   GET
+p, R-PARTNER, /api/v1/apply/applications/*/budget,   POST
+p, R-PARTNER, /api/v1/apply/applications/*/documents,GET
+p, R-PARTNER, /api/v1/apply/task-books/*,            GET
+p, R-PARTNER, /api/v1/apply/task-books/*:sign,       POST
+p, R-PARTNER, /api/v1/project/*/progress-report,     GET
+p, R-PARTNER, /api/v1/project/*/progress-report,     POST
+p, R-PARTNER, /api/v1/project/*/final-accept,        GET
+p, R-PARTNER, /api/v1/project/*/final-accept,        POST
+p, R-MANAGER, /api/v1/apply/guide-suggestions,       GET
+p, R-MANAGER, /api/v1/apply/guide-suggestions/*,     GET
+p, R-MANAGER, /api/v1/apply/guide-suggestions/*:accept,POST
+p, R-MANAGER, /api/v1/apply/guide-suggestions/*:reject,POST
+p, R-MANAGER, /api/v1/apply/task-books,              POST
+p, R-MANAGER, /api/v1/apply/task-books/*,            GET

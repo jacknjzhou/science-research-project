@@ -52,6 +52,7 @@ from apps.funding.mappings import code_of
 from apps.sysadmin.mappings import fmt_ts
 from core import approval
 from core.auth.deps import domain_from
+from core.org_scope import current_org_id, is_external_only
 from core.httpx import (
     ApiError,
     CODE_BAD_REQUEST,
@@ -261,9 +262,21 @@ def update_task(request: HttpRequest, id: int, task_id: int):
 # ---------------------------------------------------------------------------
 # 过程动作端点
 # ---------------------------------------------------------------------------
+def _partner_project_or_404(d, project_id: int) -> EProject:
+    """外部机构身份读项目：跨租户或跨机构一律 404（不泄露存在性）。"""
+    p = EProject.objects.filter(id=project_id, tenant_id=d.tenant_id, deleted=0).first()
+    org = current_org_id(d)
+    if p is None or p.ext_org_id is None or org is None or p.ext_org_id != org:
+        raise ApiError(404, CODE_NOT_FOUND, "项目不存在")
+    return p
+
+
 def create_progress_report(request: HttpRequest, id: int):
     d = domain_from(request)
-    _get_project_or_404(id)
+    if is_external_only(d):
+        _partner_project_or_404(d, id)
+    else:
+        _get_project_or_404_tenant(id, d.tenant_id)
     body = read_json(request)
     period = body.get("period")
     report_type = body.get("report_type")
