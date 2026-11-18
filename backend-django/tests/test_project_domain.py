@@ -977,6 +977,7 @@ def test_m1d_eval_template_prefill_and_snapshot(seed_auth):
     # I-2：契约键是 camelCase（02-E EvalTemplateSchema/EMidCheck），snake_case 键为过渡保留
     assert r.json()["data"]["templateId"] == tpl.id
     assert r.json()["data"]["template_id"] == tpl.id
+    assert r.json()["data"]["approvalDocId"] is None  # 签批文前为空，键必须存在
 
     # 模板随后被改，已建中检的快照不变
     tpl.sections = [{"key": "only", "weight": 1.0}]
@@ -997,6 +998,7 @@ def test_m1d_eval_template_prefill_and_snapshot(seed_auth):
     # I-2：验收响应带 templateId（camelCase 为契约口径）
     assert r.json()["data"]["templateId"] == tplf.id
     assert r.json()["data"]["template_id"] == tplf.id
+    assert r.json()["data"]["approvalDocId"] is None
 
 
 def test_m1d_eval_template_status_validated(seed_auth):
@@ -1009,11 +1011,14 @@ def test_m1d_eval_template_status_validated(seed_auth):
     assert r.json()["code"] == 40001
 
 
-def test_m1d_conclude_works_without_caller_transaction(seed_auth, monkeypatch):
+# transaction=True：不套 pytest-django 的测试级 atomic，否则 in_atomic_block 恒 True，
+# 这个用例就退化成恒真（r4 实测）。非事务包裹下才能区分「有没有 atomic」。
+@pytest.mark.django_db(transaction=True)
+def test_m1d_conclude_works_without_caller_transaction(monkeypatch):
     """N-1 回归：批文签发必须在事务内（PG 下 select_for_update 在 autocommit 会抛）。
 
-    sqlite 的 has_select_for_update=False 会静默降级，光看能否跑通抓不到缺陷，
-    所以直接 spy 签发时的 connection.in_atomic_block——修复前（无 atomic）为 False。
+    sqlite 的 has_select_for_update=False 会静默降级，看「能不能跑通」抓不到缺陷，
+    所以 spy 签发时的 connection.in_atomic_block——去掉 atomic 时这里变成 False。
     """
     from django.db import connection
     from apps.project.models import EFinalAccept, EReport
@@ -1037,6 +1042,8 @@ def test_m1d_conclude_works_without_caller_transaction(seed_auth, monkeypatch):
     assert fa.status == "APPROVED"
     assert fa.accept_at is not None
     assert fa.approval_doc_id is not None
+    from apps.project.mappings import to_api_final_accept
+    assert to_api_final_accept(fa)["approvalDocId"] == fa.approval_doc_id
     assert EReport.objects.filter(final_accept_id=fa.id).count() == 1
 
     project_api.conclude_final_accept(fa.id, "APPROVED")  # 幂等
