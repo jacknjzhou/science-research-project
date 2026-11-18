@@ -271,6 +271,9 @@ def _partner_project_or_404(d, project_id: int) -> EProject:
     return p
 
 
+_REPORT_TYPES = ("SELF", "MID_CHECK", "ANNUAL")  # 对齐契约 EProgressReportCreate
+
+
 def create_progress_report(request: HttpRequest, id: int):
     d = domain_from(request)
     if is_external_only(d):
@@ -282,19 +285,34 @@ def create_progress_report(request: HttpRequest, id: int):
     # snake_case，导致按契约形状提交必 400。出参已在 I3 补了 camelCase 别名。
     def _pick(camel: str, snake: str, default=None):
         v = body.get(camel)
-        if v is None:
+        if v is None or v == "":  # 空串视为未传，避免"空串遮蔽 snake 键"（终审 r3 N-7）
             v = body.get(snake)
-        return default if v is None else v
+        return default if v is None or v == "" else v
 
     period = _pick("period", "period")
     report_type = _pick("reportType", "report_type")
     if not period or not report_type:
         raise ApiError(400, CODE_BAD_REQUEST, "请求参数错误")
+    # 类型/枚举/范围校验（终审 r3 N-3）：原先 "abc" 会 ValueError→500、150 直接落库
+    period = str(period).strip()
+    if len(period) > 32:
+        raise ApiError(400, CODE_BAD_REQUEST, "period 长度不能超过32")
+    if report_type not in _REPORT_TYPES:
+        raise ApiError(
+            400, CODE_BAD_REQUEST,
+            f"reportType 须为 {'/'.join(_REPORT_TYPES)}",
+        )
+    try:
+        progress_percent = int(_pick("progressPercent", "progress_percent", 0) or 0)
+    except (TypeError, ValueError):
+        raise ApiError(400, CODE_BAD_REQUEST, "progressPercent 必须为整数") from None
+    if not 0 <= progress_percent <= 100:
+        raise ApiError(400, CODE_BAD_REQUEST, "progressPercent 须在 0-100 之间")
     r = EProgressReport.objects.create(
         tenant_id=d.tenant_id, creator_id=d.user_id, project_id=id,
         period=period, report_type=report_type,
         content_rich=_pick("contentRich", "content_rich"),
-        progress_percent=_pick("progressPercent", "progress_percent", 0) or 0,
+        progress_percent=progress_percent,
         issues_text=_pick("issuesText", "issues_text"),
         next_plan=_pick("nextPlan", "next_plan"),
         attachment_ids=_pick("attachmentIds", "attachment_ids", []) or [],

@@ -633,6 +633,38 @@ paths:
               schema: { $ref: '#/components/schemas/ApiResponse' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /apply/applications/{id}:change-pi:
+    post:
+      tags: [application]
+      summary: 改派申报负责人（M2-b N-1）
+      description: >-
+        仅 R-MANAGER / R-LEADER 可调用。用于 PI 离职/停用导致签署环节死锁的修复：
+        新 PI 必须是本租户 ACTIVE 的内部账号；申报已立项（SIGNED/EXECUTING）或任务书
+        已签订时 409。改派成功后向新旧 PI 各发一条站内信。
+      operationId: changeApplicationPi
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [piUserId]
+              properties:
+                piUserId: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: 改派后的申报
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
   /apply/applications/{id}:decide:
     post:
       tags: [application]

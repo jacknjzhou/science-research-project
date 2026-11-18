@@ -57,13 +57,17 @@ def login(request: HttpRequest) -> object:
             SysUserRole.objects.filter(user_id=user.id)
             .values_list("role__code", flat=True)
         )
+        codes = [r for r in roles if r]
+        # 外部机构角色独占：存量混合角色账号在签发时即裁剪为纯 R-PARTNER（终审 r3 N-2）
+        if "R-PARTNER" in codes:
+            codes = ["R-PARTNER"]
         claims = _issue(
             request,
             user.id,
             user.tenant_id,
             user.legal_entity_id or 0,
             user.security_level,
-            [r for r in roles if r],
+            codes,
         )
     return claims
 

@@ -1097,7 +1097,7 @@ components:
       type: object
       required: [period, reportType, progressPercent]
       properties:
-        period: { type: string, enum: [QUARTER, HALF_YEAR, YEAR] }
+        period: { type: string, maxLength: 32, description: "期间标识，如 2026Q1 / 2026H1 / 2026" }
         reportType: { type: string, enum: [SELF, MID_CHECK, ANNUAL] }
         contentRich: { type: string }
         progressPercent: { type: integer, minimum: 0, maximum: 100 }

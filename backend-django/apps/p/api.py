@@ -301,11 +301,15 @@ def create_application(request: HttpRequest):
             pi_int = int(pi_user_id)
         except (TypeError, ValueError):
             raise ApiError(400, CODE_BAD_REQUEST, "pi_user_id 必须为整数") from None
-        exists = SysUser.objects.filter(
+        pi_user = SysUser.objects.filter(
             id=pi_int, tenant_id=d.tenant_id, deleted=0
-        ).exists()
-        if not exists:
+        ).first()
+        if pi_user is None:
             raise ApiError(400, CODE_BAD_REQUEST, "申报负责人不存在")
+        if pi_user.status != "ACTIVE":
+            raise ApiError(400, CODE_BAD_REQUEST, "申报负责人账号非启用状态")
+        if (pi_user.user_source or "INTERNAL").upper() == "EXTERNAL":
+            raise ApiError(400, CODE_BAD_REQUEST, "申报负责人不得为外部机构账号")
         pi_user_id = pi_int
     total_budget = None
     if body.get("total_budget"):
@@ -592,10 +596,13 @@ def ai_draft(request: HttpRequest):
         f"建议结构：①现状与问题；②关键科学问题凝练；③本研究切入点与预期突破。"
         f"正文需人工结合最新文献与研究积累改写定稿。"
     )
+    ref_qs = PApplication.objects.filter(tenant_id=d.tenant_id, deleted=0).exclude(id=a.id)
+    if is_external_only(d):  # 外部只引用本机构申报，避免跨机构标题泄露（终审 r3 N-2）
+        _org = current_org_id(d)
+        ref_qs = ref_qs.filter(applicant_org_id=_org) if _org else ref_qs.none()
     refs = [
         {"project_code": r.code or f"PRJ-{r.id}", "title": r.title}
-        for r in PApplication.objects.filter(tenant_id=d.tenant_id, deleted=0)
-        .exclude(id=a.id).order_by("-updated_at")[:2]
+        for r in ref_qs.order_by("-updated_at")[:2]
     ]
     a.ai_draft_marked = True
     a.modifier_id = d.user_id
@@ -1017,6 +1024,59 @@ def decide_application(request: HttpRequest, id: int):
         f"《{a.title}》评审状态更新为 {decision}，可生成任务书并签署立项。",
         f"application:{a.id}", d.tenant_id,
     )
+    return ok(request, to_api_application(a))
+
+
+def change_application_pi(request: HttpRequest, id: int):
+    """POST /apply/applications/{id}:change-pi —— 改派申报负责人（终审 r3 N-1）。
+
+    原先 PI 一旦停用/离职，PI 签署恒 403 且无任何改派入口，申报会永久死锁。
+    仅 R-MANAGER/R-LEADER 可改派；任务书签订后（SIGNED/EXECUTING）不再允许改派。
+    """
+    d = domain_from(request)
+    body = read_json(request)
+    raw = body.get("piUserId", body.get("pi_user_id"))
+    if raw in (None, ""):
+        raise ApiError(400, CODE_BAD_REQUEST, "piUserId 必填")
+    try:
+        new_pi = int(raw)
+    except (TypeError, ValueError):
+        raise ApiError(400, CODE_BAD_REQUEST, "piUserId 必须为整数") from None
+    roles = [r for r in (getattr(d, "roles", None) or []) if r]
+    if is_external_only(d) or not (has_role(roles, "R-MANAGER") or has_role(roles, "R-LEADER")):
+        raise ApiError(403, CODE_FORBIDDEN, "仅科研管理/院所领导可改派申报负责人")
+    with transaction.atomic():
+        a = _locked_scoped_app_or_404(d, id)
+        if a.status in ("SIGNED", "EXECUTING"):
+            raise ApiError(409, CODE_CONFLICT, "申报已立项，不可改派负责人")
+        _assert_application_mutable(a)
+        pi_user = SysUser.objects.filter(
+            id=new_pi, tenant_id=d.tenant_id, deleted=0
+        ).first()
+        if pi_user is None:
+            raise ApiError(400, CODE_BAD_REQUEST, "申报负责人不存在")
+        if pi_user.status != "ACTIVE":
+            raise ApiError(400, CODE_BAD_REQUEST, "申报负责人账号非启用状态")
+        if (pi_user.user_source or "INTERNAL").upper() == "EXTERNAL":
+            raise ApiError(400, CODE_BAD_REQUEST, "申报负责人不得为外部机构账号")
+        old_pi = a.pi_user_id
+        a.pi_user_id = new_pi
+        a.modifier_id = d.user_id
+        a.save(update_fields=["pi_user_id", "modifier_id", "updated_at"])
+    try:
+        _notify(
+            new_pi, "TODO", "您被指派为申报负责人",
+            f"《{a.title}》的申报负责人已变更，请及时完善并提交。",
+            f"application:{a.id}", d.tenant_id,
+        )
+        if old_pi and old_pi != new_pi:
+            _notify(
+                old_pi, "TODO", "申报负责人已变更",
+                f"《{a.title}》的申报负责人已由您变更为他人。",
+                f"application:{a.id}", d.tenant_id,
+            )
+    except Exception:  # noqa: BLE001 - 通知失败不影响改派
+        pass
     return ok(request, to_api_application(a))
 
 

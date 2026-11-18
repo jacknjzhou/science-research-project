@@ -128,6 +128,19 @@ def list_users(request: HttpRequest):
 _EXTERNAL_ROLE_CODE = "R-PARTNER"
 
 
+def _assert_org_bindable(tenant_id: int, org_id: int) -> None:
+    """机构必须存在、同租户且已过资质审核（终审 r2 Minor / r3 N-5）。"""
+    from apps.sysadmin.models import SysPartnerOrg
+
+    org = SysPartnerOrg.objects.filter(
+        id=org_id, tenant_id=tenant_id, deleted=0
+    ).first()
+    if org is None:
+        raise ApiError(400, CODE_BAD_REQUEST, "机构不存在或跨租户")
+    if org.status != "APPROVED":
+        raise ApiError(400, CODE_BAD_REQUEST, "机构尚未通过资质审核")
+
+
 def _assert_role_consistency(tenant_id: int, role_codes: list[str], org_id: int | None) -> None:
     """R-PARTNER 与内部角色不可共存，且外部角色必须有机构（终审 M2-b C4/I2）。
 
@@ -146,15 +159,7 @@ def _assert_role_consistency(tenant_id: int, role_codes: list[str], org_id: int 
         )
     if not org_id:
         raise ApiError(400, CODE_BAD_REQUEST, "外部机构角色必须绑定机构（org_id）")
-    from apps.sysadmin.models import SysPartnerOrg
-
-    org = SysPartnerOrg.objects.filter(
-        id=org_id, tenant_id=tenant_id, deleted=0
-    ).first()
-    if org is None:
-        raise ApiError(400, CODE_BAD_REQUEST, "机构不存在或跨租户")
-    if org.status != "APPROVED":  # 未过审/已停用机构不得挂账号（终审 r2 Minor）
-        raise ApiError(400, CODE_BAD_REQUEST, "机构尚未通过资质审核")
+    _assert_org_bindable(tenant_id, int(org_id))
 
 
 def create_user(request: HttpRequest):
@@ -176,11 +181,16 @@ def create_user(request: HttpRequest):
             org_id = int(org_id)  # org_id="abc" 原先会在 ORM 层抛 500（终审 r2 Minor）
         except (TypeError, ValueError):
             raise ApiError(400, CODE_BAD_REQUEST, "org_id 必须为整数") from None
+    source = (body.get("user_source") or "").upper()
+    if source not in ("", "INTERNAL", "EXTERNAL"):
+        raise ApiError(400, CODE_BAD_REQUEST, "user_source 须为 INTERNAL 或 EXTERNAL")
+    if source == "EXTERNAL" and role_codes != [_EXTERNAL_ROLE_CODE]:
+        # 外部账号必须恰好只持 R-PARTNER（终审 r3 N-4：否则先建空角色、再补内部角色即可越权）
+        raise ApiError(400, CODE_BAD_REQUEST, "外部账号只能持有 R-PARTNER 角色")
     _assert_role_consistency(d.tenant_id, role_codes, org_id)
-    if (body.get("user_source") or "").upper() == "EXTERNAL" and any(
-        c != _EXTERNAL_ROLE_CODE for c in role_codes
-    ):
-        raise ApiError(400, CODE_BAD_REQUEST, "外部账号不能持有内部角色")
+    if org_id is not None and _EXTERNAL_ROLE_CODE not in role_codes:
+        # 任何账号只要绑机构就必须是有效且已过审的机构（终审 r3 N-5：院内账号可绑 PENDING/不存在机构）
+        _assert_org_bindable(d.tenant_id, org_id)
     u = SysUser.objects.create(
         username=username,
         real_name=real_name,
@@ -316,6 +326,8 @@ def assign_role(request: HttpRequest, id: int):
     # 双向校验（终审 r2 I-1）：只拦"新增 R-PARTNER"是可绕过的——给已有外部账号追加
     # 任意内部角色同样会造出混合角色，随后并集权限即可读到院内数据。
     if role is not None:
+        if (u.user_source or "INTERNAL").upper() == "EXTERNAL" and role.code != _EXTERNAL_ROLE_CODE:
+            raise ApiError(400, CODE_BAD_REQUEST, "外部账号不能追加内部角色")
         existing = list(role_codes_of(id))
         _assert_role_consistency(d.tenant_id, existing + [role.code], u.org_id)
     SysUserRole.objects.get_or_create(user_id=id, role_id=role_id, tenant_id=d.tenant_id)

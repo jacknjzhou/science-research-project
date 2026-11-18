@@ -41,6 +41,11 @@ def ark_auth(request: HttpRequest) -> dict:
         raise ApiError(401, CODE_BAD_CREDENTIALS, "令牌无效或过期") from None
 
     roles = [str(r) for r in claims.get("roles", [])]
+    # 外部机构角色是"独占"口径（终审 r2 I-1 / r3 N-2）：令牌里只要出现 R-PARTNER，
+    # 一律裁剪为单一外部角色，杜绝"外部身份 + 内部角色并集"越权。新建入口已在
+    # sysadmin 拦死，这里兜住存量脏数据与历史令牌。
+    if "R-PARTNER" in roles and len(roles) > 1:
+        roles = ["R-PARTNER"]
     if not enforce_any(roles, request.path, request.method):
         raise ApiError(403, CODE_FORBIDDEN, "无权限")
 

@@ -903,3 +903,6 @@ p, R-MANAGER, /api/v1/apply/task-books/*,            GET
 p, R-MANAGER, /api/v1/apply/applications/*:decide,   POST
 p, R-LEADER,  /api/v1/apply/applications/*:decide,   POST
 p, R-LEADER,  /api/v1/apply/task-books/*:sign,       POST
+# M2-b 终审 r3 补口：改派申报负责人（N-1，PI 停用后的唯一解冻路径）
+p, R-MANAGER, /api/v1/apply/applications/*:change-pi, POST
+p, R-LEADER,  /api/v1/apply/applications/*:change-pi, POST
