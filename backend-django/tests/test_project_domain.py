@@ -61,7 +61,7 @@ def test_change_request_approve_one_step(seed_auth):
     c = _c()
     r = c.post(
         f"/api/v1/project/{p.id}/change-request",
-        data=json.dumps({"change_type": "DATE", "severity": "MAJOR",
+        data=json.dumps({"change_type": "DELAY", "severity": "MAJOR",
                          "old_value": "2026-01",
                          "new_value": {"endDate": "2026-06-30"}, "reason": "延期"}),
         content_type="application/json",
@@ -97,6 +97,8 @@ def test_change_request_two_step_roles(seed_auth):
     cr = EChangeRequest.objects.create(
         code="CR-T1", tenant_id=1, creator_id=2, project_id=p.id,
         change_type="BUDGET", status="SUBMITTED",
+        # 审批生效要求内容可应用（M1-d C-1）：无 payload 的预算变更一律拒绝，故此处给合法额度
+        new_value={"totalBudget": "120000.00"},
     )
     c = _c()
     # STAFF 首审 → 403
@@ -132,6 +134,8 @@ def test_change_request_two_step_roles(seed_auth):
     )
     assert r.status_code == 200
     assert r.json()["data"]["status"] == "EFFECTIVE"
+    p.refresh_from_db()
+    assert str(p.total_budget) == "120000.00"  # 终审生效真正回写项目总预算
 
 
 def test_change_reject_and_batch(seed_auth):
@@ -836,3 +840,149 @@ def test_m1d_change_versions_endpoint(seed_auth):
     r = c.get(f"/api/v1/project/{other.id}/change-request/{ids[0]}/versions",
               **bearer(2, ["R-STAFF"]))
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# M1-d 终审回归：输入强校验（C-1）与租户隔离（C-2/C-3）
+# ---------------------------------------------------------------------------
+def test_m1d_change_invalid_input_rejected(seed_auth):
+    """非法变更内容一律 40001，且不落半条生效变更单（C-1）。"""
+    p = _project()
+    c = _c()
+    cases = [
+        # changeType 不在枚举内（PG 上会撞 DDL CHECK，必须在应用层先拒）
+        {"change_type": "DATE", "new_value": {"endDate": "2026-06-30"}, "reason": "x"},
+        # 非法 changeType 即使 severity=MAJOR 也不许建单
+        {"change_type": "BOGUS", "severity": "MAJOR", "new_value": {}, "reason": "x"},
+        # 延期但日期非法
+        {"change_type": "DELAY", "new_value": {"endDate": "not-a-date"}, "reason": "x"},
+        # 延期但缺 endDate
+        {"change_type": "DELAY", "new_value": {}, "reason": "x"},
+        # 预算但金额非法
+        {"change_type": "BUDGET", "new_value": {"totalBudget": "abc"}, "reason": "x"},
+        # 预算但金额非正
+        {"change_type": "BUDGET", "new_value": {"totalBudget": "0"}, "reason": "x"},
+        # 题目但空标题
+        {"change_type": "TITLE", "new_value": {"title": "   "}, "reason": "x"},
+    ]
+    for body in cases:
+        r = c.post(f"/api/v1/project/{p.id}/change-request", data=json.dumps(body),
+                   content_type="application/json", **bearer(2, ["R-STAFF"]))
+        assert r.status_code == 400, body
+        assert r.json()["code"] == 40001, body
+    assert EChangeRequest.objects.filter(project_id=p.id).count() == 0  # 无半成品
+
+    # 成员/范围变更无确定回写路径 → 一般备案拒绝，只能走重大审批
+    for ct in ("MEMBER", "SCOPE"):
+        r = c.post(f"/api/v1/project/{p.id}/change-request",
+                   data=json.dumps({"change_type": ct, "severity": "GENERAL",
+                                    "new_value": {}, "reason": "x"}),
+                   content_type="application/json", **bearer(2, ["R-STAFF"]))
+        assert r.status_code == 400, ct
+        r = c.post(f"/api/v1/project/{p.id}/change-request",
+                   data=json.dumps({"change_type": ct, "severity": "MAJOR",
+                                    "new_value": {}, "reason": "x"}),
+                   content_type="application/json", **bearer(2, ["R-STAFF"]))
+        assert r.status_code == 200, ct
+
+
+def test_m1d_board_and_change_tenant_isolated(seed_auth):
+    """看板/变更/审批必须按租户隔离：他租户项目一律 404，且不得被回写（C-2）。"""
+    p = _project(tenant_id=2, title="他租户项目")
+    c = _c()
+    # 看板：本项目属租户 2，租户 1 的 R-STAFF 不可见
+    r = c.get(f"/api/v1/project/{p.id}/board", **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 404
+    # 建变更：同样 404，不落单
+    r = c.post(f"/api/v1/project/{p.id}/change-request",
+               data=json.dumps({"change_type": "TITLE", "new_value": {"title": "劫持"}}),
+               content_type="application/json", **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 404
+    assert EChangeRequest.objects.filter(project_id=p.id).count() == 0
+
+    # 审批：变更单属租户 2，租户 1 的 LEADER 不能审批回写
+    cr = EChangeRequest.objects.create(
+        code="CR-X1", tenant_id=2, creator_id=1, project_id=p.id,
+        change_type="TITLE", severity="MAJOR", status="SUBMITTED",
+        new_value={"title": "他租户改名"},
+    )
+    r = c.post(f"/api/v1/project/{p.id}/change-request/{cr.id}/approve",
+               data=json.dumps({"comment": "越权"}), content_type="application/json",
+               **bearer(4, ["R-LEADER"]))
+    assert r.status_code == 404
+    cr.refresh_from_db()
+    assert cr.status == "SUBMITTED"
+    p.refresh_from_db()
+    assert p.title == "他租户项目"
+
+
+def test_m1d_report_signing_uses_eval_row_tenant(seed_auth):
+    """批文签发以评估单自身项目/租户为准，调用方传入的 project_id 不再影响幂等键（I-5）。"""
+    from apps.project.models import EMidCheck, EReport
+
+    p1 = _project(tenant_id=1, title="项目一")
+    p2 = _project(tenant_id=1, title="项目二")
+    mc = EMidCheck.objects.create(tenant_id=1, creator_id=1, project_id=p1.id, check_round=1)
+
+    from apps.project.api import conclude_mid_check
+    conclude_mid_check(mc.id, p1.id, "PASS", {"items": []})
+    # 用别的 project_id 重复回写：不得再签发第二份批文
+    conclude_mid_check(mc.id, p2.id, "PASS", {"items": []})
+    reports = EReport.objects.filter(mid_check_id=mc.id)
+    assert reports.count() == 1
+    assert reports.first().project_id == p1.id
+    mc.refresh_from_db()
+    assert mc.approval_doc_id == reports.first().id
+
+
+def test_m1d_eval_template_prefill_and_snapshot(seed_auth):
+    """I-1：中检按模板 sections 预填打分骨架，验收固化模板快照；模板后改不影响已建评估。"""
+    from apps.project.models import EEvalTemplate, EFinalAccept, EMidCheck
+
+    p = _project()
+    tpl = EEvalTemplate.objects.create(
+        tenant_id=1, creator_id=1, name="中检模板", scene="MID_CHECK", status="ACTIVE",
+        sections=[{"key": "progress", "label": "进度", "weight": 0.4},
+                  {"key": "finance", "label": "经费", "weight": 0.6}],
+    )
+    c = _c()
+    r = c.post(f"/api/v1/project/{p.id}/mid-check",
+               data=json.dumps({"checkRound": 1, "templateId": tpl.id}),
+               content_type="application/json", **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 200
+    mc = EMidCheck.objects.get(id=r.json()["data"]["id"])
+    assert mc.template_id == tpl.id
+    assert mc.template_snapshot["templateId"] == tpl.id
+    assert len(mc.template_snapshot["sections"]) == 2
+    assert [it["key"] for it in mc.score_detail["items"]] == ["progress", "finance"]
+    assert all(it["score"] is None for it in mc.score_detail["items"])  # 骨架未打分
+    assert r.json()["data"]["template_id"] == tpl.id  # I-2：序列化器可见
+
+    # 模板随后被改，已建中检的快照不变
+    tpl.sections = [{"key": "only", "weight": 1.0}]
+    tpl.save(update_fields=["sections"])
+    mc.refresh_from_db()
+    assert len(mc.template_snapshot["sections"]) == 2
+
+    tplf = EEvalTemplate.objects.create(
+        tenant_id=1, creator_id=1, name="验收模板", scene="FINAL_ACCEPT",
+        status="ACTIVE", sections=[{"key": "target", "weight": 0.5}],
+    )
+    r = c.post(f"/api/v1/project/{p.id}/final-accept",
+               data=json.dumps({"templateId": tplf.id, "outputSummary": {"n": 1}}),
+               content_type="application/json", **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 200
+    fa = EFinalAccept.objects.get(id=r.json()["data"]["id"])
+    assert fa.template_snapshot["sections"] == [{"key": "target", "weight": 0.5}]
+    # I-2：验收响应带 templateId
+    assert r.json()["data"]["template_id"] == tplf.id
+
+
+def test_m1d_eval_template_status_validated(seed_auth):
+    """I-4：创建模板的 status 也校验枚举（与 update 一致）。"""
+    c = _c()
+    r = c.post("/api/v1/project/eval-templates",
+               data=json.dumps({"name": "坏状态", "scene": "MID_CHECK", "status": "BOGUS"}),
+               content_type="application/json", **bearer(1, ["R-ADMIN"]))
+    assert r.status_code == 400
+    assert r.json()["code"] == 40001

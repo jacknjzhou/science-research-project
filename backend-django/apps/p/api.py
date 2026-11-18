@@ -194,7 +194,8 @@ def conclude_guide_review(n_task_id: int) -> None:
     t = NReviewTask.objects.filter(id=n_task_id, deleted=0).first()
     if t is None or not t.target_id:
         return
-    g = PGuideline.objects.filter(id=t.target_id, deleted=0).first()
+    # 租户范围：评审任务与指南必须同租户，否则可跨租户发布他租户指南（C-3）
+    g = PGuideline.objects.filter(id=t.target_id, tenant_id=t.tenant_id, deleted=0).first()
     if g is None:
         return
     if t.conclusion not in ("PASS", "APPROVED"):

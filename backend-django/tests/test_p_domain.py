@@ -272,3 +272,22 @@ def test_m1d_expertreview_does_not_import_p_at_top_level():
         elif isinstance(node, ast.Import):
             top_imports.extend(a.name for a in node.names)
     assert not [m for m in top_imports if m.startswith("apps.p")], top_imports
+
+
+def test_m1d_guide_conclude_tenant_isolated(seed_auth):
+    """C-3：评审任务与指南必须同租户，跨租户不得发布他租户指南。"""
+    from apps.expertreview.models import NReviewTask
+    from apps.p.models import PGuideline
+    from apps.p.api import conclude_guide_review
+
+    other = PGuideline.objects.create(
+        tenant_id=2, creator_id=1, code="GL-TENANT2", title="他租户指南",
+        project_type="ZIGE", status="DRAFT",
+    )
+    t = NReviewTask.objects.create(
+        tenant_id=1, creator_id=1, biz_type="GUIDE", target_id=other.id, status="DONE",
+        conclusion="PASS",
+    )
+    conclude_guide_review(t.id)
+    other.refresh_from_db()
+    assert other.status == "DRAFT"  # 未被他租户评审任务发布

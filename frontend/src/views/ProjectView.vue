@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import type { CSSProperties } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, list, API_PREFIX } from '@/api/client'
@@ -326,6 +326,9 @@ function openChange() {
   fScope.value = ''
   changeOpen.value = true
 }
+// 成员/范围变更没有「提交即生效」的回写路径（后端 40001），必须锁定为重大变更走审批。
+const severityLocked = computed(() => changeType.value === 'MEMBER' || changeType.value === 'SCOPE')
+watch(severityLocked, (locked) => { if (locked) changeSeverity.value = 'MAJOR' })
 const changeReady = computed(() => {
   switch (changeType.value) {
     case 'DELAY': return !!fEnd.value
@@ -691,8 +694,8 @@ function onKey(e: KeyboardEvent) {
             <button class="ch-type" :class="{ on: changeSeverity === 'MAJOR' }" type="button" @click="changeSeverity = 'MAJOR'">
               <b>重大变更</b><span>提交后进入逐级审批，通过才生效</span>
             </button>
-            <button class="ch-type" :class="{ on: changeSeverity === 'GENERAL' }" type="button" @click="changeSeverity = 'GENERAL'">
-              <b>一般变更</b><span>内部备案，提交即生效（留版本快照）</span>
+            <button class="ch-type" :class="{ on: changeSeverity === 'GENERAL' }" :disabled="severityLocked" type="button" @click="changeSeverity = 'GENERAL'">
+              <b>一般变更</b><span>{{ severityLocked ? '成员/范围变更仅支持重大审批' : '内部备案，提交即生效（留版本快照）' }}</span>
             </button>
           </div>
 

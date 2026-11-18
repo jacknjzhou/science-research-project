@@ -89,6 +89,7 @@ def to_api_mid_check(r: EMidCheck) -> dict[str, Any]:
         "project_id": r.project_id, "check_round": r.check_round, "check_date": _date(r.check_date),
         "plan_id": r.plan_id, "template_id": r.template_id, "expert_ids": r.expert_ids or [],
         "conclusion": r.conclusion, "score_detail": r.score_detail, "report_id": r.report_id,
+        "approval_doc_id": r.approval_doc_id,
         "correct_deadline": _date(r.correct_deadline), "status_overdue": r.status_overdue,
     }
 
@@ -126,6 +127,7 @@ def to_api_final_accept(r: EFinalAccept) -> dict[str, Any]:
         "project_id": r.project_id, "apply_at": fmt_ts(r.apply_at), "accept_at": fmt_ts(r.accept_at),
         "output_summary": r.output_summary, "finance_report_id": r.finance_report_id,
         "expert_ids": r.expert_ids or [], "conclusion": r.conclusion,
+        "template_id": r.template_id, "approval_doc_id": r.approval_doc_id,
         "attachment_ids": r.attachment_ids or [], "archive_checklist_id": r.archive_checklist_id,
     }
 

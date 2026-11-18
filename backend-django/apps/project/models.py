@@ -132,6 +132,8 @@ class EMidCheck(models.Model):
     check_date = models.DateField(null=True, blank=True)
     plan_id = models.BigIntegerField(null=True, blank=True)
     template_id = models.BigIntegerField(null=True, blank=True)
+    # B3：建单时的模板快照（templateId + sections），模板后续被改不影响已建评估
+    template_snapshot = models.JSONField(null=True, blank=True)
     expert_ids = models.JSONField(default=list)
     conclusion = models.CharField(max_length=32, null=True, blank=True)
     score_detail = models.JSONField(null=True, blank=True)
@@ -241,6 +243,8 @@ class EFinalAccept(models.Model):
     accept_at = models.DateTimeField(null=True, blank=True)
     # B3：验收所依据的统一评估模板（同租户 E_EVAL_TEMPLATE.id，逻辑引用；可选）
     template_id = models.BigIntegerField(null=True, blank=True)
+    # B3：建单时的模板快照（templateId + sections），模板后续被改不影响已建评估
+    template_snapshot = models.JSONField(null=True, blank=True)
     # B3：结论通过时签发的批文（同租户 E_REPORT.id，逻辑引用）
     # 注：report_id 在 E 域语义是"中检/进度报告"（FK E_PROGRESS_REPORT），批文另用本列
     approval_doc_id = models.BigIntegerField(null=True, blank=True)

@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from django.db import transaction
 from django.http import HttpRequest
 from django.utils import timezone as dj_tz
 
@@ -96,6 +97,14 @@ def _get_project_or_404(project_id: int) -> EProject:
     return p
 
 
+def _get_project_or_404_tenant(project_id: int, tenant_id: int) -> EProject:
+    """带租户范围的项目查找（M1-d 新端点用；跨租户按 404 处理，不泄露存在性）。"""
+    p = EProject.objects.filter(id=project_id, tenant_id=tenant_id, deleted=0).first()
+    if p is None:
+        raise ApiError(404, CODE_NOT_FOUND, "项目不存在")
+    return p
+
+
 # ---------------------------------------------------------------------------
 # 项目读端点
 # ---------------------------------------------------------------------------
@@ -163,7 +172,8 @@ def project_board(request: HttpRequest, id: int):
     from apps.procure.models import GContract
     from apps.sysadmin.models import SysUser
 
-    p = _get_project_or_404(id)
+    d = domain_from(request)
+    p = _get_project_or_404_tenant(id, d.tenant_id)
     tenant_id = p.tenant_id
 
     # 经费：复用 03 F 域口径（预算批复/到账/已用/冻结/结余 + 两率）
@@ -278,18 +288,67 @@ def create_mid_check(request: HttpRequest, id: int):
     check_round = body.get("checkRound", body.get("check_round"))
     if check_round is None:
         raise ApiError(400, CODE_BAD_REQUEST, "请求参数错误")
+    template_id = _resolve_template_id(d.tenant_id, body, "MID_CHECK")
+    snapshot, sections = _template_bundle(d.tenant_id, template_id)
+    score_detail = body.get("scoreDetail", body.get("score_detail"))
+    if score_detail is None:
+        score_detail = _prefill_score_detail(sections)
     r = EMidCheck.objects.create(
         tenant_id=d.tenant_id, creator_id=d.user_id, project_id=id,
         check_round=check_round,
         check_date=_parse_date(body.get("checkDate") or body.get("check_date")),
         plan_id=body.get("planId", body.get("plan_id")),
-        template_id=_resolve_template_id(d.tenant_id, body, "MID_CHECK"),
+        template_id=template_id,
+        template_snapshot=snapshot,
+        score_detail=score_detail,
         expert_ids=[],
     )
     return ok(request, to_api_mid_check(r))
 
 
 _CHANGE_SEVERITIES = ("GENERAL", "MAJOR")
+_CHANGE_TYPES = ("DELAY", "BUDGET", "MEMBER", "TITLE", "SCOPE")
+# 可「提交即生效」的变更类型：仅限有确定回写目标的字段级微调。
+# MEMBER/SCOPE 生效需人员或任务书口径（M2），一律走重大变更审批留痕。
+_CHANGE_GENERAL_TYPES = ("DELAY", "BUDGET", "TITLE")
+
+
+def _validate_change(change_type: str, new_value: Any) -> None:
+    """变更内容强校验（plan Global Constraints：非法输入 40001，不静默忽略）。
+
+    校验在建单之前完成——避免「校验失败但状态已置 EFFECTIVE」的半成功变更。
+    """
+    if change_type not in _CHANGE_TYPES:
+        raise ApiError(400, CODE_BAD_REQUEST,
+                       f"changeType 须为 {'/'.join(_CHANGE_TYPES)}")
+    if not isinstance(new_value, dict):
+        raise ApiError(400, CODE_BAD_REQUEST, "newValue 须为对象")
+    if change_type == "TITLE":
+        if not str(new_value.get("title") or "").strip():
+            raise ApiError(400, CODE_BAD_REQUEST, "题目变更须提供 title")
+    elif change_type == "DELAY":
+        raw = new_value.get("endDate", new_value.get("end_date"))
+        if not raw or _parse_date(raw) is None:
+            raise ApiError(400, CODE_BAD_REQUEST, "延期变更须提供合法的 endDate")
+    elif change_type == "BUDGET":
+        raw = new_value.get("totalBudget", new_value.get("total_budget"))
+        try:
+            target = Decimal(str(raw))
+        except (InvalidOperation, TypeError, ValueError):
+            raise ApiError(400, CODE_BAD_REQUEST, "预算变更须提供合法的 totalBudget")
+        if target <= 0:
+            raise ApiError(400, CODE_BAD_REQUEST, "变更后项目总预算须为正数")
+    elif change_type == "MEMBER":
+        ids = new_value.get("memberIds", new_value.get("member_ids"))
+        if ids is not None and not isinstance(ids, list):
+            raise ApiError(400, CODE_BAD_REQUEST, "memberIds 须为数组")
+
+
+def _check_general_applicable(change_type: str) -> None:
+    """一般变更必须能落到项目字段上；无回写路径的类型只能走重大变更审批。"""
+    if change_type not in _CHANGE_GENERAL_TYPES:
+        raise ApiError(400, CODE_BAD_REQUEST,
+                       "成员/范围变更须以重大变更（severity=MAJOR）提交，经审批后生效")
 
 
 def _change_new_value(body: dict) -> dict | None:
@@ -398,7 +457,7 @@ def _sync_change_budget(project_id: int, tenant_id: int, delta: Decimal, target:
 
 def create_change_request(request: HttpRequest, id: int):
     d = domain_from(request)
-    p = _get_project_or_404(id)
+    p = _get_project_or_404_tenant(id, d.tenant_id)
     body = read_json(request)
     change_type = body.get("changeType") or body.get("change_type")
     if not change_type:
@@ -407,50 +466,59 @@ def create_change_request(request: HttpRequest, id: int):
     if severity not in _CHANGE_SEVERITIES:
         raise ApiError(400, CODE_BAD_REQUEST, "severity 须为 GENERAL/MAJOR")
     new_value = _change_new_value(body)
-    r = EChangeRequest.objects.create(
-        code=body.get("code"), tenant_id=d.tenant_id, creator_id=d.user_id, project_id=id,
-        change_type=change_type, severity=severity,
-        old_value=body.get("oldValue", body.get("old_value")),
-        new_value=new_value, reason=body.get("reason"),
-        status="SUBMITTED",
-    )
-    if not r.code:
-        r.code = code_of("CHG", r.id)
-        r.save(update_fields=["code"])
+    _validate_change(change_type, new_value)
+    if severity == "GENERAL":
+        _check_general_applicable(change_type)
 
-    v = _change_version(d.tenant_id, d.user_id, r, p)
-    r.snapshot_ref = f"E_CHANGE_VERSION#{v.id}"
-    r.save(update_fields=["snapshot_ref"])
+    # 建单 + 版本快照：一个事务，失败不留半条变更单
+    with transaction.atomic():
+        r = EChangeRequest.objects.create(
+            code=body.get("code"), tenant_id=d.tenant_id, creator_id=d.user_id, project_id=id,
+            change_type=change_type, severity=severity,
+            old_value=body.get("oldValue", body.get("old_value")),
+            new_value=new_value, reason=body.get("reason"),
+            status="SUBMITTED",
+        )
+        if not r.code:
+            r.code = code_of("CHG", r.id)
+            r.save(update_fields=["code"])
+        v = _change_version(d.tenant_id, d.user_id, r, p)
+        r.snapshot_ref = f"E_CHANGE_VERSION#{v.id}"
+        r.save(update_fields=["snapshot_ref"])
 
     if severity == "MAJOR":
         return ok(request, to_api_change_request(r))
 
     # GENERAL：内部备案，冲突先拦（顺序=先 conflict 再 log/生效，Review Focus 2）
+    # 注意：回退标记必须在事务外落库——若与 ApiError 同事务会被回滚，变更单凭空消失
     if _change_conflict(p, change_type, new_value):
         r.conflict_flag = 1
         r.status = "ROLLED_BACK"
         r.save(update_fields=["conflict_flag", "status", "updated_at"])
         raise ApiError(409, CODE_CONFLICT, "预算冲突：变更后预算低于已支出，已回退")
 
-    adjusted = _apply_change(p, r)
-    r.status = "EFFECTIVE"
-    r.approved_at = dj_tz.now()
-    r.approval_status = "APPROVED"
-    if adjusted is not None:
-        v.snapshot = {**v.snapshot, "budgetAdjustment": adjusted}
-        v.save(update_fields=["snapshot"])
-    r.save(update_fields=["status", "approved_at", "approval_status", "updated_at"])
-    approval.log(
-        d.tenant_id, "CHANGE_REQUEST", r.id, 1, d.user_id,
-        approval.first_role_of(d.roles), "EFFECTIVE", "一般变更内部备案",
-    )
+    with transaction.atomic():
+        adjusted = _apply_change(p, r)
+        r.status = "EFFECTIVE"
+        r.approved_at = dj_tz.now()
+        r.approval_status = "APPROVED"
+        if adjusted is not None:
+            v.snapshot = {**v.snapshot, "budgetAdjustment": adjusted}
+            v.save(update_fields=["snapshot"])
+        r.save(update_fields=["status", "approved_at", "approval_status", "updated_at"])
+        approval.log(
+            d.tenant_id, "CHANGE_REQUEST", r.id, 1, d.user_id,
+            approval.first_role_of(d.roles), "EFFECTIVE", "一般变更内部备案",
+        )
     return ok(request, to_api_change_request(r))
 
 
 def _advance_change(d, project_id: int, change_id: int, to_status: str, comment: str,
                     action: str) -> EChangeRequest | tuple[int, str]:
     """变更单推进核心（对齐 approveChangeOne/rejectChangeOne；两级开关 off 默认）。"""
-    row = EChangeRequest.objects.filter(id=change_id).first()
+    row = EChangeRequest.objects.filter(
+        id=change_id, tenant_id=d.tenant_id, deleted=0
+    ).first()
     if row is None or row.project_id != project_id:
         return 404, "变更单不存在"
     two_step = approval.twostep_enabled()
@@ -477,7 +545,10 @@ def _advance_change(d, project_id: int, change_id: int, to_status: str, comment:
         to_status, step = "REJECTED", 1
 
     # 生效前冲突检查（P-6：必须先于 approval.log 与状态推进，否则冲突变更会被审批生效）
-    p = EProject.objects.filter(id=project_id, deleted=0).first()
+    p = EProject.objects.filter(id=project_id, tenant_id=d.tenant_id, deleted=0).first()
+    if to_status == "EFFECTIVE":
+        # 审批生效同样要过输入校验：变更内容坏掉时宁可 40001，也不能「无内容生效」
+        _validate_change(row.change_type, row.new_value)
     if to_status == "EFFECTIVE" and p is not None and _change_conflict(
         p, row.change_type, row.new_value
     ):
@@ -486,26 +557,26 @@ def _advance_change(d, project_id: int, change_id: int, to_status: str, comment:
         )
         return 409, "预算冲突：变更后预算低于已支出，已回退"
 
-    n = EChangeRequest.objects.filter(id=change_id, project_id=project_id, status=row.status).update(
-        status=to_status, updated_at=dj_tz.now()
-    )
-    if n == 0:
-        return 409, "状态不允许或变更单不存在"
-    adjusted = None
-    if to_status == "EFFECTIVE" and p is not None:
-        adjusted = _apply_change(p, row)
-        if adjusted is not None:
-            ver = EChangeVersion.objects.filter(change=row, deleted=0).order_by("-version_no").first()
-            if ver is not None:
-                ver.snapshot = {**(ver.snapshot or {}), "budgetAdjustment": adjusted}
-                ver.save(update_fields=["snapshot"])
-        EChangeRequest.objects.filter(id=change_id).update(
-            approved_at=dj_tz.now(), approval_status="APPROVED"
+    with transaction.atomic():
+        n = EChangeRequest.objects.filter(
+            id=change_id, project_id=project_id, tenant_id=d.tenant_id, status=row.status
+        ).update(status=to_status, updated_at=dj_tz.now())
+        if n == 0:
+            return 409, "状态不允许或变更单不存在"
+        if to_status == "EFFECTIVE" and p is not None:
+            adjusted = _apply_change(p, row)
+            if adjusted is not None:
+                ver = EChangeVersion.objects.filter(change=row, deleted=0).order_by("-version_no").first()
+                if ver is not None:
+                    ver.snapshot = {**(ver.snapshot or {}), "budgetAdjustment": adjusted}
+                    ver.save(update_fields=["snapshot"])
+            EChangeRequest.objects.filter(id=change_id).update(
+                approved_at=dj_tz.now(), approval_status="APPROVED"
+            )
+        approval.log(
+            d.tenant_id, "CHANGE_REQUEST", change_id, step, d.user_id,
+            approval.first_role_of(d.roles), action, comment,
         )
-    approval.log(
-        d.tenant_id, "CHANGE_REQUEST", change_id, step, d.user_id,
-        approval.first_role_of(d.roles), action, comment,
-    )
     return EChangeRequest.objects.get(id=change_id)
 
 
@@ -566,10 +637,13 @@ def create_final_accept(request: HttpRequest, id: int):
     d = domain_from(request)
     _get_project_or_404(id)
     body = read_json(request)
+    template_id = _resolve_template_id(d.tenant_id, body, "FINAL_ACCEPT")
+    snapshot, _ = _template_bundle(d.tenant_id, template_id)
     r = EFinalAccept.objects.create(
         tenant_id=d.tenant_id, creator_id=d.user_id, project_id=id,
         finance_report_id=body.get("financeReportId", body.get("finance_report_id")),
-        template_id=_resolve_template_id(d.tenant_id, body, "FINAL_ACCEPT"),
+        template_id=template_id,
+        template_snapshot=snapshot,
         output_summary=body.get("outputSummary", body.get("output_summary")),
         apply_at=dj_tz.now(),
     )
@@ -581,6 +655,34 @@ def create_final_accept(request: HttpRequest, id: int):
 # ---------------------------------------------------------------------------
 _EVAL_SCENES = ("MID_CHECK", "FINAL_ACCEPT")
 _EVAL_TEMPLATE_STATUSES = ("ACTIVE", "DISABLED")
+
+
+def _template_bundle(tenant_id: int, template_id: int | None) -> tuple[dict | None, list]:
+    """模板快照 + sections（建单时固化，模板后续改动不影响已建评估）。"""
+    if template_id is None:
+        return None, []
+    t = EEvalTemplate.objects.filter(id=template_id, tenant_id=tenant_id, deleted=0).first()
+    if t is None:
+        return None, []
+    sections = t.sections if isinstance(t.sections, list) else []
+    return {"templateId": t.id, "scene": t.scene, "sections": sections}, sections
+
+
+def _prefill_score_detail(sections: list) -> dict | None:
+    """按模板 sections 预填打分骨架（中检 plan Task 4 硬要求：score_detail==sections）。"""
+    if not sections:
+        return None
+    items = []
+    for sec in sections:
+        if not isinstance(sec, dict):
+            continue
+        items.append({
+            "key": sec.get("key"),
+            "label": sec.get("label", sec.get("key")),
+            "weight": sec.get("weight"),
+            "score": None,
+        })
+    return {"items": items} if items else None
 
 
 def _resolve_template_id(tenant_id: int, body: dict, scene: str) -> int | None:
@@ -638,10 +740,13 @@ def create_eval_template(request: HttpRequest):
     rubric = body.get("scoreRubric", body.get("score_rubric"))
     if rubric is not None and not isinstance(rubric, dict):
         raise ApiError(400, CODE_BAD_REQUEST, "scoreRubric 须为对象")
+    status = body.get("status") or "ACTIVE"
+    if status not in _EVAL_TEMPLATE_STATUSES:
+        raise ApiError(400, CODE_BAD_REQUEST, "status 须为 ACTIVE/DISABLED")
     r = EEvalTemplate.objects.create(
         tenant_id=d.tenant_id, creator_id=d.user_id, name=name, scene=scene,
         sections=sections or [], score_rubric=rubric or {},
-        status=body.get("status") or "ACTIVE", remark=body.get("remark"),
+        status=status, remark=body.get("remark"),
     )
     return ok(request, to_api_eval_template(r))
 
@@ -1074,13 +1179,13 @@ def _issue_report(project_id: int, tenant_id: int, user_id: int, doc_type: str, 
 
     批文是评估结论的正式文本载体，一次评估只出一份；重复 conclude 不重复签发。
     """
-    qs = EReport.objects.filter(tenant_id=tenant_id, project_id=project_id,
-                                doc_type=doc_type, deleted=0)
+    # 幂等键 = (tenant, doc_type, 评估单 id)；不含 project_id——否则换个 project_id 可再签一份
+    qs = EReport.objects.filter(tenant_id=tenant_id, doc_type=doc_type, deleted=0)
     if mid_check_id is not None:
         qs = qs.filter(mid_check_id=mid_check_id)
     elif final_accept_id is not None:
         qs = qs.filter(final_accept_id=final_accept_id)
-    old = qs.first()
+    old = qs.select_for_update().first()
     if old is not None:
         return old.id
     rp = EReport.objects.create(
@@ -1097,23 +1202,26 @@ def _issue_report(project_id: int, tenant_id: int, user_id: int, doc_type: str, 
 def conclude_mid_check(mid_check_id: int, project_id: int, conclusion: str,
                        score_detail: Any) -> None:
     """N.conclude(MID_CHECK) 回写中检结论与打分明细，并签发批文（B3）。"""
-    mc = EMidCheck.objects.filter(id=mid_check_id, deleted=0).first()
-    if mc is None:
-        return
-    mc.conclusion = conclusion
-    mc.score_detail = score_detail
-    mc.save(update_fields=["conclusion", "score_detail", "updated_at"])
+    with transaction.atomic():
+        mc = EMidCheck.objects.select_for_update().filter(id=mid_check_id, deleted=0).first()
+        if mc is None:
+            return
+        mc.conclusion = conclusion
+        mc.score_detail = score_detail
+        mc.save(update_fields=["conclusion", "score_detail", "updated_at"])
 
-    p = EProject.objects.filter(id=project_id, deleted=0).first()
-    title = f"{p.title if p else '项目'} 中期检查批文"
-    report_id = _issue_report(
-        project_id=project_id, tenant_id=mc.tenant_id, user_id=mc.creator_id,
-        doc_type="MID_CHECK", title=title, conclusion=conclusion,
-        score_detail=score_detail, mid_check_id=mc.id,
-    )
-    if mc.approval_doc_id != report_id:
-        mc.approval_doc_id = report_id
-        mc.save(update_fields=["approval_doc_id", "updated_at"])
+        # 批文归属以中检单自身的 project 为准，不采信调用方传入的 project_id（防跨租户/错项目）
+        mc_project_id = mc.project_id
+        p = EProject.objects.filter(id=mc_project_id, tenant_id=mc.tenant_id, deleted=0).first()
+        title = f"{p.title if p else '项目'} 中期检查批文"
+        report_id = _issue_report(
+            project_id=mc_project_id, tenant_id=mc.tenant_id, user_id=mc.creator_id,
+            doc_type="MID_CHECK", title=title, conclusion=conclusion,
+            score_detail=score_detail, mid_check_id=mc.id,
+        )
+        if mc.approval_doc_id != report_id:
+            mc.approval_doc_id = report_id
+            mc.save(update_fields=["approval_doc_id", "updated_at"])
     try:  # 通知 best-effort：任何异常都不阻断结论落库
         _notify_role(mc.tenant_id, "R-MANAGER", "MID_CHECK", title,
                      f"第 {mc.check_round} 轮中检结论 {conclusion}，批文已生成", f"mid-check:{mc.id}")
