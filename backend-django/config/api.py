@@ -495,6 +495,10 @@ api.post("/reviews/{id}/fees", auth=ark_auth, tags=["expertreview"])(expertrevie
 api.post("/portal/expert-apply", auth=ark_auth, tags=["expertreview"])(expertreview_portal.apply_expert)
 api.get("/expert-applications", auth=ark_auth, tags=["expertreview"])(expertreview_portal.list_expert_applications)
 api.post("/expert-applications/{id}/audit", auth=ark_auth, tags=["expertreview"])(expertreview_portal.audit_expert_application)
+api.get("/experts/{id}/credit", auth=ark_auth, tags=["expertreview"])(expertreview_portal.get_expert_credit)
+api.get("/portal/expert/credit", auth=ark_auth, tags=["expertreview"])(expertreview_portal.portal_credit)
+api.get("/portal/expert/reviews", auth=ark_auth, tags=["expertreview"])(expertreview_portal.portal_reviews)
+api.get("/portal/expert/activities", auth=ark_auth, tags=["expertreview"])(expertreview_portal.portal_activities)
 
 # —— V 学术活动：calendar/stats 静态先于 {id} ——
 api.get("/activities", auth=ark_auth, tags=["activity"])(activity_api.list_activities)

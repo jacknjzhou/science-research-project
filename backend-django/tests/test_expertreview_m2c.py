@@ -223,3 +223,80 @@ def test_other_tenant_cannot_audit(seed_auth):
     r = _post_tenant(f"/api/v1/expert-applications/{e.id}/audit", {"action": "APPROVE"},
                      mgr2.id, ["R-MANAGER"], 2)
     assert r.status_code == 404, r.content
+
+
+# ---------------------------------------------------------------- Task 5
+
+def _credit_fixture(uid=101):
+    """2 邀：1 接（2h 内响应）+ 1 拒；1 份打分 88.00。"""
+    from datetime import timedelta
+
+    from django.utils import timezone as dj_tz
+
+    from apps.expertreview.models import NReviewInvitation, NReviewScore
+
+    e = _expert(uid=uid, name="信用专家")
+    t1, t2 = _task(), _task()
+    iv1 = _invite(t1, e, response="ACCEPT")
+    NReviewInvitation.objects.filter(id=iv1.id).update(
+        responded_at=dj_tz.now() - timedelta(hours=2))
+    _invite(t2, e, response="DECLINE")
+    NReviewScore.objects.create(tenant_id=1, task_id=t1.id, expert_id=e.id,
+                                total_score="88.00", target_type="R_OUTPUT", target_id=1)
+    return e, t1
+
+
+def test_credit_computes_rates_from_invitations(seed_auth):
+    e, _ = _credit_fixture()
+    c = _c()
+    r = c.get(f"/api/v1/experts/{e.id}/credit", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 200, r.content
+    d = r.json()["data"]
+    assert d["invited_count"] == 2 and d["accepted_count"] == 1 and d["declined_count"] == 1
+    assert d["accept_rate"] == "0.50"
+    assert d["on_time_rate"] == "1.00"
+    assert d["avg_score"] == "88.00" and d["abstain_count"] == 0
+
+
+def test_portal_credit_only_self(seed_auth):
+    """门户信用卡只给本人；他人 id 走门户即 404。"""
+    e, _ = _credit_fixture(uid=101)
+    other = _expert(uid=102, name="他人")
+    c = _c()
+    r = c.get("/api/v1/portal/expert/credit", **bearer(101, ["R-EXPERT"]))
+    assert r.status_code == 200 and r.json()["data"]["expert_id"] == e.id
+    r = c.get(f"/api/v1/portal/expert/credit?expert_id={other.id}", **bearer(101, ["R-EXPERT"]))
+    assert r.status_code == 200 and r.json()["data"]["expert_id"] == e.id
+
+
+def test_portal_reviews_lists_only_my_invitations(seed_auth):
+    from apps.expertreview.models import NReviewInvitation
+
+    e, t1 = _credit_fixture(uid=101)
+    other = _expert(uid=102, name="他人")
+    _invite(_task(), other)
+    r = _c().get("/api/v1/portal/expert/reviews", **bearer(101, ["R-EXPERT"]))
+    assert r.status_code == 200, r.content
+    rows = r.json()["data"]["list"]
+    assert len(rows) == 2
+    mine = set(
+        NReviewInvitation.objects.filter(tenant_id=1, expert_id=e.id)
+        .values_list("task_id", flat=True)
+    )
+    assert {x["task_id"] for x in rows} == mine
+    assert all(x["response"] in ("ACCEPT", "DECLINE", "PENDING") for x in rows)
+
+
+def test_portal_activities_lists_invited_activities(seed_auth):
+    from apps.activity.models import VActivity, VActivityParticipant
+
+    e = _expert(uid=101)
+    a = VActivity.objects.create(
+        tenant_id=1, creator_id=1, title="学术沙龙", status="APPROVED",
+        activity_type="SEMINAR", start_at="2026-12-01T09:00:00+08:00", venue="报告厅")
+    VActivityParticipant.objects.create(
+        tenant_id=1, activity_id=a.id, user_id=101, role="SPEAKER")
+    r = _c().get("/api/v1/portal/expert/activities", **bearer(101, ["R-EXPERT"]))
+    assert r.status_code == 200, r.content
+    rows = r.json()["data"]["list"]
+    assert len(rows) == 1 and rows[0]["title"] == "学术沙龙" and rows[0]["role"] == "SPEAKER"

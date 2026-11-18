@@ -10,7 +10,7 @@ from __future__ import annotations
 from django.http import HttpRequest
 from django.utils import timezone as dj_tz
 
-from apps.expertreview.api import page_args
+from apps.expertreview.api import page_args, _my_expert_or_403
 from apps.expertreview.models import NExpert
 from apps.expertreview.mappings import fmt_ts, to_api_expert
 from core.auth.deps import domain_from
@@ -195,3 +195,138 @@ def _grant_expert_role(tenant_id: int, user_id: int | None):
         return None
     SysUserRole.objects.get_or_create(user_id=user_id, role_id=role.id, tenant_id=tenant_id)
     return role
+
+
+# ---------------------------------------------------------------- 信用档案与门户只读（Task 5）
+
+_ON_TIME_HOURS = 72
+
+
+def _expert_credit(tenant_id: int, expert_id: int) -> dict:
+    """专家信用档案（计算式，不落新表）：响应率/按时率/弃权率/均分。"""
+    from decimal import Decimal
+
+    from django.db.models import Avg
+    from django.utils import timezone as dj_tz
+
+    from apps.expertreview.models import NReviewInvitation, NReviewScore
+    from core.httpx import CODE_NOT_FOUND
+
+    e = NExpert.objects.filter(id=expert_id, tenant_id=tenant_id, deleted=0).first()
+    if e is None:
+        raise ApiError(404, CODE_NOT_FOUND, "专家不存在")
+
+    invs = list(
+        NReviewInvitation.objects.filter(tenant_id=tenant_id, expert_id=expert_id)
+    )
+    invited = len(invs)
+    accepted = sum(1 for i in invs if i.response == "ACCEPT")
+    declined = sum(1 for i in invs if i.response == "DECLINE")
+    expired = sum(1 for i in invs if i.response == "EXPIRED")
+    responded = [i for i in invs if i.responded_at is not None]
+    on_time = sum(
+        1
+        for i in responded
+        if i.responded_at - i.invited_at <= dj_tz.timedelta(hours=_ON_TIME_HOURS)
+    )
+    scores = NReviewScore.objects.filter(tenant_id=tenant_id, expert_id=expert_id)
+    abstain = scores.filter(status="ABSTAIN").count()
+    avg = scores.aggregate(v=Avg("total_score"))["v"]
+
+    def _rate(num: int, den: int) -> str:
+        if den <= 0:
+            return "0.00"
+        return f"{Decimal(num) / Decimal(den):.2f}"
+
+    return {
+        "expert_id": e.id,
+        "name": e.name,
+        "review_count": e.review_count or 0,
+        "invited_count": invited,
+        "accepted_count": accepted,
+        "declined_count": declined,
+        "expired_count": expired,
+        "accept_rate": _rate(accepted, invited),
+        "on_time_rate": _rate(on_time, len(responded)),
+        "abstain_count": abstain,
+        "avg_score": None if avg is None else f"{Decimal(avg):.2f}",
+        "last_review_at": fmt_ts(e.last_review_at),
+    }
+
+
+def get_expert_credit(request: HttpRequest, id: int):
+    """管理端看任意专家信用（R-MANAGER/R-LEADER）。"""
+    d = domain_from(request)
+    return ok(request, _expert_credit(d.tenant_id, id))
+
+
+def portal_credit(request: HttpRequest):
+    d = domain_from(request)
+    expert = _my_expert_or_403(d)
+    return ok(request, _expert_credit(d.tenant_id, expert.id))
+
+
+def portal_reviews(request: HttpRequest):
+    """我的评审邀请（含任务标题/状态/响应）。"""
+    from apps.expertreview.models import NReviewInvitation, NReviewTask
+
+    d = domain_from(request)
+    expert = _my_expert_or_403(d)
+    invs = list(
+        NReviewInvitation.objects.filter(tenant_id=d.tenant_id, expert_id=expert.id)
+        .order_by("-id")[:100]
+    )
+    task_ids = [i.task_id for i in invs]
+    tasks = {
+        t.id: t
+        for t in NReviewTask.objects.filter(tenant_id=d.tenant_id, id__in=task_ids, deleted=0)
+    }
+    rows = []
+    for i in invs:
+        t = tasks.get(i.task_id)
+        rows.append(
+            {
+                "id": i.id,
+                "task_id": i.task_id,
+                "title": t.title if t else None,
+                "biz_type": t.biz_type if t else None,
+                "task_status": t.status if t else None,
+                "response": i.response,
+                "invited_at": fmt_ts(i.invited_at),
+                "responded_at": fmt_ts(i.responded_at),
+            }
+        )
+    return ok(request, {"list": rows, "total": len(rows)})
+
+
+def portal_activities(request: HttpRequest):
+    """受邀学术活动（C3「学术活动邀请」只读面）。"""
+    from apps.activity.models import VActivity, VActivityParticipant
+
+    d = domain_from(request)
+    if not d.user_id:
+        raise ApiError(403, CODE_FORBIDDEN, "未认证")
+    parts = list(
+        VActivityParticipant.objects.filter(
+            tenant_id=d.tenant_id, user_id=d.user_id, activity_id__gt=0
+        ).order_by("-id")[:100]
+    )
+    ids = [p.activity_id for p in parts]
+    acts = {a.id: a for a in VActivity.objects.filter(tenant_id=d.tenant_id, id__in=ids, deleted=0)}
+    rows = []
+    for p in parts:
+        a = acts.get(p.activity_id)
+        if a is None:
+            continue
+        rows.append(
+            {
+                "id": a.id,
+                "title": a.title,
+                "activity_type": a.activity_type,
+                "status": a.status,
+                "start_at": fmt_ts(a.start_at),
+                "venue": a.venue,
+                "role": p.role,
+            }
+        )
+    return ok(request, {"list": rows, "total": len(rows)})

@@ -304,6 +304,23 @@ components:
       audit_user_id:   { type: integer, nullable: true }
       reject_reason:   { type: string, nullable: true }
 
+  ExpertCredit:
+    type: object
+    description: 专家信用档案（计算式：邀请/响应/按时/弃权/均分）
+    properties:
+      expert_id:       { type: integer }
+      name:            { type: string }
+      review_count:    { type: integer }
+      invited_count:   { type: integer }
+      accepted_count:  { type: integer }
+      declined_count:  { type: integer }
+      expired_count:   { type: integer }
+      accept_rate:     { type: string, description: 接受率（两位小数字符串） }
+      on_time_rate:    { type: string, description: 72 小时内响应占比 }
+      abstain_count:   { type: integer }
+      avg_score:       { type: string, nullable: true }
+      last_review_at:  { type: string, nullable: true }
+
   responses:
     Ok:
       description: 成功
@@ -823,3 +840,108 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ApiResponse' }
+
+  /experts/{id}/credit:
+    get:
+      tags: [expertreview]
+      operationId: getExpertCredit
+      summary: 专家信用档案（管理端）
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: 信用档案
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ExpertCredit' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /portal/expert/credit:
+    get:
+      tags: [expertreview]
+      operationId: portalExpertCredit
+      summary: 我的信用档案（专家门户，身份取令牌）
+      responses:
+        '200':
+          description: 信用档案
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ExpertCredit' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /portal/expert/reviews:
+    get:
+      tags: [expertreview]
+      operationId: portalExpertReviews
+      summary: 我的评审邀请（含任务标题与状态）
+      responses:
+        '200':
+          description: 评审邀请列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                id:          { type: integer }
+                                task_id:     { type: integer }
+                                title:       { type: string, nullable: true }
+                                biz_type:    { type: string, nullable: true }
+                                task_status: { type: string, nullable: true }
+                                response:    { type: string, description: PENDING/ACCEPT/DECLINE/EXPIRED }
+                                invited_at:  { type: string, nullable: true }
+                                responded_at: { type: string, nullable: true }
+                          total: { type: integer }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /portal/expert/activities:
+    get:
+      tags: [expertreview]
+      operationId: portalExpertActivities
+      summary: 我受邀的学术活动（只读）
+      responses:
+        '200':
+          description: 学术活动列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                id:            { type: integer }
+                                title:         { type: string }
+                                activity_type: { type: string }
+                                status:        { type: string }
+                                start_at:      { type: string, nullable: true }
+                                venue:         { type: string, nullable: true }
+                                role:          { type: string, description: SPEAKER/CHAIR/MEMBER/ATTENDEE }
+                          total: { type: integer }
+        '403': { $ref: '#/components/responses/Forbidden' }
