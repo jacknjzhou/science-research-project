@@ -23,10 +23,19 @@ from apps.sysadmin.mappings import (
     dict_item_list,
     to_api_dict,
     to_api_dict_item,
+    to_api_partner_org,
     to_api_role,
     to_api_user,
 )
-from apps.sysadmin.models import PageGrant, SysDict, SysDictItem, SysRole, SysUser, SysUserRole
+from apps.sysadmin.models import (
+    PageGrant,
+    SysDict,
+    SysDictItem,
+    SysPartnerOrg,
+    SysRole,
+    SysUser,
+    SysUserRole,
+)
 from core.auth.casbin_util import build_caps
 from core.auth.deps import domain_from
 from core.httpx import (
@@ -539,3 +548,157 @@ def update_role_permissions(request: HttpRequest, role_code: str):
         "role": role_code, "granted": created, "revoked": removed,
         "permissions": sorted(codes),
     })
+
+
+# ===========================================================================
+# M2-a 外部机构：自助注册 + 门户（隔离维度＝org_id，tenant 仍为主办方）
+# ===========================================================================
+
+_ORG_TYPES = ("COLLAB", "SUPPLIER", "UNIVERSITY", "INSTITUTE")
+
+
+def _notify_role_inapp(
+    tenant_id: int, role_code: str, typ: str, title: str, content: str, biz_ref: str
+) -> int:
+    """给某角色全部在用用户投站内信（best-effort，失败不阻断业务）。"""
+    from apps.notify.models import SysNotification
+
+    try:
+        uids = list(
+            SysUserRole.objects.filter(
+                role__code=role_code, tenant_id=tenant_id
+            ).values_list("user_id", flat=True)
+        )
+        for uid in uids:
+            SysNotification.objects.create(
+                tenant_id=tenant_id,
+                user_id=uid,
+                typ=typ,
+                title=title,
+                content=content,
+                biz_ref=biz_ref,
+            )
+        return len(uids)
+    except Exception:  # pragma: no cover - 通知永不阻断主流程
+        return 0
+
+
+def _partner_org_or_404(tenant_id: int, org_id: int) -> SysPartnerOrg:
+    o = SysPartnerOrg.objects.filter(
+        id=org_id, tenant_id=tenant_id, deleted=0
+    ).first()
+    if o is None:
+        raise ApiError(404, CODE_NOT_FOUND, "机构不存在")
+    return o
+
+
+def _my_partner_org(tenant_id: int, user_id: int) -> SysPartnerOrg:
+    """当前外部用户所属机构；无 org_id（内部用户）或机构已删 → 404（不泄露存在性）。"""
+    u = SysUser.objects.filter(id=user_id, tenant_id=tenant_id, deleted=0).first()
+    if u is None or u.org_id is None:
+        raise ApiError(404, CODE_NOT_FOUND, "机构不存在")
+    return _partner_org_or_404(tenant_id, u.org_id)
+
+
+def _str_field(body: dict, key: str, label: str, *, max_len: int, required: bool = True) -> str:
+    raw = body.get(key)
+    val = raw.strip() if isinstance(raw, str) else ""
+    if not val:
+        if required:
+            raise ApiError(400, CODE_BAD_REQUEST, f"{label}不能为空")
+        return ""
+    if len(val) > max_len:
+        raise ApiError(400, CODE_BAD_REQUEST, f"{label}超长（最多 {max_len} 字符）")
+    return val
+
+
+def _validate_password(pwd: str) -> None:
+    if len(pwd) < 8:
+        raise ApiError(400, CODE_BAD_REQUEST, "口令至少 8 位")
+    if pwd.isdigit():
+        raise ApiError(400, CODE_BAD_REQUEST, "口令不能为纯数字")
+    if not any(c.isalpha() for c in pwd):
+        raise ApiError(400, CODE_BAD_REQUEST, "口令须同时包含字母")
+
+
+def register_partner(request: HttpRequest) -> object:
+    """公开自助注册：建 PENDING 机构 + LOCKED 账号（未审核不可登录）。
+
+    无 domain 上下文（无登录态），tenant 取 body.tenant_id 或 1。
+    """
+    body = read_json(request)
+    try:
+        tenant_id = int(body.get("tenant_id") or 1)
+    except (TypeError, ValueError):
+        raise ApiError(400, CODE_BAD_REQUEST, "tenant_id 非法") from None
+
+    org_name = _str_field(body, "org_name", "机构名称", max_len=256)
+    credit_code = _str_field(body, "credit_code", "统一社会信用代码", max_len=64)
+    if len(credit_code) != 18 or not credit_code[0].isalnum():
+        raise ApiError(400, CODE_BAD_REQUEST, "统一社会信用代码须为 18 位")
+    org_type = (body.get("org_type") or "COLLAB")
+    if org_type not in _ORG_TYPES:
+        raise ApiError(400, CODE_BAD_REQUEST, f"机构类型须为 {list(_ORG_TYPES)} 之一")
+    contact_name = _str_field(body, "contact_name", "联系人", max_len=64)
+    contact_phone = _str_field(body, "contact_phone", "联系电话", max_len=32)
+    contact_email = _str_field(body, "contact_email", "联系邮箱", max_len=128)
+    if "@" not in contact_email:
+        raise ApiError(400, CODE_BAD_REQUEST, "联系邮箱格式不正确")
+    username = _str_field(body, "username", "登录名", max_len=64)
+    if len(username) < 3:
+        raise ApiError(400, CODE_BAD_REQUEST, "登录名至少 3 位")
+    real_name = _str_field(body, "real_name", "姓名", max_len=64)
+    password = body.get("password")
+    if not isinstance(password, str):
+        raise ApiError(400, CODE_BAD_REQUEST, "口令不能为空")
+    _validate_password(password)
+    address = _str_field(body, "address", "地址", max_len=256, required=False)
+
+    if SysPartnerOrg.objects.filter(
+        tenant_id=tenant_id, credit_code=credit_code, deleted=0
+    ).exists():
+        raise ApiError(409, CODE_CONFLICT, "机构或用户名已注册")
+    if SysUser.objects.filter(
+        tenant_id=tenant_id, username=username, deleted=0
+    ).exists():
+        raise ApiError(409, CODE_CONFLICT, "机构或用户名已注册")
+
+    with transaction.atomic():
+        org = SysPartnerOrg.objects.create(
+            code="",  # 建行后按 id 回填 PTN-年-序
+            tenant_id=tenant_id,
+            name=org_name,
+            credit_code=credit_code,
+            org_type=org_type,
+            contact_name=contact_name,
+            contact_phone=contact_phone,
+            contact_email=contact_email,
+            address=address or None,
+            status="PENDING",
+            creator_id=1,  # 自助注册无登录态
+            remark="self-register",
+        )
+        org.code = f"PTN-{dj_tz.localdate().year}-{org.id:06d}"
+        org.save(update_fields=["code"])
+        SysUser.objects.create(
+            username=username,
+            real_name=real_name,
+            email=contact_email,
+            phone=contact_phone,
+            password_hash=hash_password(password),
+            status="LOCKED",  # 未审核：既有登录逻辑对非 ACTIVE 一律 40302
+            tenant_id=tenant_id,
+            org_id=org.id,
+            user_source="EXTERNAL",
+            creator_id=1,
+            remark="self-register",
+        )
+    _notify_role_inapp(
+        tenant_id,
+        "R-MANAGER",
+        "TODO",
+        "外部机构待审核",
+        f"{org.name}（{org.credit_code}）提交了机构注册申请，请审核资质。",
+        f"partner-org:{org.id}",
+    )
+    return ok(request, to_api_partner_org(org))

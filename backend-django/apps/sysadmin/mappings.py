@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from typing import Any
 
-from apps.sysadmin.models import SysDict, SysDictItem, SysRole, SysUser
+from apps.sysadmin.models import SysDict, SysDictItem, SysPartnerOrg, SysRole, SysUser
 
 
 def fmt_ts(dt: datetime | None) -> str | None:
@@ -88,3 +88,30 @@ def to_api_dict_item(i: SysDictItem) -> dict[str, Any]:
 
 def dict_item_list(rows) -> list[dict[str, Any]]:
     return [to_api_dict_item(r) for r in rows]
+
+
+def to_api_partner_org(o: SysPartnerOrg) -> dict[str, Any]:
+    """外部合作机构（U 域沿用 snake_case，对齐 to_api_user 风格）。"""
+    return {
+        "id": o.id,
+        "code": o.code,
+        "tenant_id": o.tenant_id,
+        "name": o.name,
+        "short_name": o.short_name,
+        "credit_code": o.credit_code,
+        "org_type": o.org_type,
+        "contact_name": o.contact_name,
+        "contact_phone": o.contact_phone,
+        "contact_email": o.contact_email,
+        "address": o.address,
+        "qualification_json": o.qualification_json,
+        "status": o.status,
+        "audit_user_id": o.audit_user_id,
+        "audited_at": fmt_ts(o.audited_at),
+        "reject_reason": o.reject_reason,
+        "deleted": o.deleted,
+        "creator_id": o.creator_id,
+        "remark": o.remark,
+        "created_at": fmt_ts(o.created_at),
+        "updated_at": fmt_ts(o.updated_at),
+    }
