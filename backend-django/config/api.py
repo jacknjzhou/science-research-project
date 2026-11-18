@@ -18,6 +18,9 @@ api.get("/partner-orgs", auth=ark_auth, tags=["portal"])(sysadmin_api.list_partn
 api.post("/partner-orgs/{id}/audit", auth=ark_auth, tags=["portal"])(
     sysadmin_api.audit_partner_org
 )
+api.get("/portal/org", auth=ark_auth, tags=["portal"])(sysadmin_api.portal_org)
+api.put("/portal/org", auth=ark_auth, tags=["portal"])(sysadmin_api.update_portal_org)
+api.get("/portal/home", auth=ark_auth, tags=["portal"])(sysadmin_api.portal_home)
 
 # —— auth/me（所有已认证角色）——
 api.get("/auth/me", auth=ark_auth, tags=["auth"])(sysadmin_api.get_me)

@@ -190,3 +190,79 @@ def test_reject_requires_reason_and_keeps_user_locked(seed_auth):
 def test_audit_unknown_org_is_404(seed_auth):
     r = _post(AUDIT_URL.format(id=99999), {"action": "APPROVE"}, roles=("R-MANAGER",))
     assert r.status_code == 404
+
+
+# ===========================================================================
+# Task 6：门户端点（R-PARTNER）
+# ===========================================================================
+
+
+def _approved_partner(**kw):
+    """注册→审核→返回 (org, user)。"""
+    oid, _ = _register_then_approve(**kw)
+    username = kw.get("username", "p_example")
+    return SysPartnerOrg.objects.get(id=oid), SysUser.objects.get(username=username)
+
+
+def _get(url, roles, uid):
+    return Client().get(url, **bearer(uid, list(roles)))
+
+
+def _put(url, body, roles, uid):
+    return Client().put(
+        url, data=json.dumps(body), content_type="application/json",
+        **bearer(uid, list(roles))
+    )
+
+
+def test_portal_home_lists_only_published_guidelines(seed_auth):
+    org, u = _approved_partner()
+    from apps.p.models import PGuideline
+    from apps.notify.models import SysNotification
+
+    PGuideline.objects.create(tenant_id=1, title="已发布指南", project_type="ZIGE",
+                             status="PUBLISHED", creator_id=1)
+    PGuideline.objects.create(tenant_id=1, title="草稿指南", project_type="ZIGE",
+                             status="DRAFT", creator_id=1)
+    SysNotification.objects.create(tenant_id=1, user_id=u.id, typ="ANNOUNCE",
+                                   title="公告A")
+    # 他用户的公告不得出现（收件人过滤）
+    SysNotification.objects.create(tenant_id=1, user_id=u.id + 999, typ="ANNOUNCE",
+                                   title="别人的公告")
+    resp = _get("/api/v1/portal/home", ("R-PARTNER",), u.id)
+    assert resp.status_code == 200, resp.content
+    data = _data(resp)
+    assert [g["title"] for g in data["guidelines"]] == ["已发布指南"]
+    titles = [a["title"] for a in data["announcements"]]
+    assert "公告A" in titles and "别人的公告" not in titles
+    # 审核通过本身会投递 1 条 + 上述公告 1 条 = 2（只算本用户未读）
+    assert data["todos"]["unread_notifications"] == 2
+    assert data["org"]["id"] == org.id
+
+
+def test_portal_org_update_only_contact_fields(seed_auth):
+    org, u = _approved_partner()
+    r = _put("/api/v1/portal/org",
+             {"contact_phone": "13900000000", "name": "改名尝试",
+              "status": "APPROVED", "credit_code": "000000000000000000"},
+             ("R-PARTNER",), u.id)
+    assert r.status_code == 200, r.content
+    o = SysPartnerOrg.objects.get(id=org.id)
+    assert o.contact_phone == "13900000000"
+    assert o.name == org.name and o.status == "APPROVED"
+    assert o.credit_code == org.credit_code
+
+
+def test_portal_is_org_scoped(seed_auth):
+    org_a, ua = _approved_partner()
+    org_b, ub = _approved_partner(
+        username="p_b", credit_code="91310000MA1K3XY12C", org_name="示例B学院"
+    )
+    da = _data(_get("/api/v1/portal/org", ("R-PARTNER",), ua.id))
+    db_ = _data(_get("/api/v1/portal/org", ("R-PARTNER",), ub.id))
+    assert da["id"] == org_a.id and db_["id"] == org_b.id
+
+
+def test_internal_user_without_org_is_denied(seed_auth):
+    r = _get("/api/v1/portal/org", ("R-STAFF",), 2)
+    assert r.status_code == 403

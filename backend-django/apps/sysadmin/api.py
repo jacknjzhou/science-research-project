@@ -21,6 +21,7 @@ from django.utils import timezone as dj_tz
 
 from apps.sysadmin.mappings import (
     dict_item_list,
+    fmt_ts,
     to_api_dict,
     to_api_dict_item,
     to_api_partner_org,
@@ -792,3 +793,90 @@ def audit_partner_org(request: HttpRequest, id: int) -> object:
         except Exception:  # pragma: no cover - 通知永不阻断
             pass
     return ok(request, to_api_partner_org(org))
+
+
+def portal_org(request: HttpRequest) -> object:
+    """门户：当前外部用户所属机构信息。"""
+    d = domain_from(request)
+    return ok(request, to_api_partner_org(_my_partner_org(d.tenant_id, d.user_id)))
+
+
+_PORTAL_EDITABLE = ("contact_name", "contact_phone", "contact_email", "address")
+
+
+def update_portal_org(request: HttpRequest) -> object:
+    """门户：机构自助维护联系方式（**只允许**联系人/电话/邮箱/地址，其余键忽略）。"""
+    d = domain_from(request)
+    org = _my_partner_org(d.tenant_id, d.user_id)
+    body = read_json(request)
+    changed: list[str] = []
+    if "contact_name" in body:
+        org.contact_name = _str_field(body, "contact_name", "联系人", max_len=64)
+        changed.append("contact_name")
+    if "contact_phone" in body:
+        org.contact_phone = _str_field(body, "contact_phone", "联系电话", max_len=32)
+        changed.append("contact_phone")
+    if "contact_email" in body:
+        email = _str_field(body, "contact_email", "联系邮箱", max_len=128)
+        if "@" not in email:
+            raise ApiError(400, CODE_BAD_REQUEST, "联系邮箱格式不正确")
+        org.contact_email = email
+        changed.append("contact_email")
+    if "address" in body:
+        org.address = _str_field(
+            body, "address", "地址", max_len=256, required=False
+        ) or None
+        changed.append("address")
+    if not changed:
+        raise ApiError(400, CODE_BAD_REQUEST, f"仅可维护 {list(_PORTAL_EDITABLE)}")
+    org.modifier_id = d.user_id
+    changed += ["modifier_id", "updated_at"]
+    org.save(update_fields=changed)
+    return ok(request, to_api_partner_org(org))
+
+
+def portal_home(request: HttpRequest) -> object:
+    """门户首页：本机构卡 + 公告 + 已发布指南 + 待办计数。"""
+    from apps.notify.models import SysNotification
+    from apps.p.models import PGuideline
+
+    d = domain_from(request)
+    org = _my_partner_org(d.tenant_id, d.user_id)
+    anns = list(
+        SysNotification.objects.filter(
+            tenant_id=d.tenant_id, user_id=d.user_id, typ="ANNOUNCE"
+        ).order_by("-id")[:5]
+    )
+    guides = list(
+        PGuideline.objects.filter(
+            tenant_id=d.tenant_id, deleted=0, status="PUBLISHED"
+        ).order_by("-publish_at", "-id")[:5]
+    )
+    unread = SysNotification.objects.filter(
+        tenant_id=d.tenant_id, user_id=d.user_id, read_at__isnull=True
+    ).count()
+    return ok(request, {
+        "org": to_api_partner_org(org),
+        "announcements": [
+            {
+                "id": n.id,
+                "title": n.title,
+                "content": n.content,
+                "created_at": fmt_ts(n.created_at),
+            }
+            for n in anns
+        ],
+        "guidelines": [
+            {
+                "id": g.id,
+                "code": g.code,
+                "title": g.title,
+                "project_type": g.project_type,
+                "apply_start_at": fmt_ts(g.apply_start_at),
+                "apply_end_at": fmt_ts(g.apply_end_at),
+                "publish_at": fmt_ts(g.publish_at),
+            }
+            for g in guides
+        ],
+        "todos": {"unread_notifications": unread, "pending_applications": 0},
+    })
