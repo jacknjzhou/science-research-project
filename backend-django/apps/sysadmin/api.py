@@ -125,7 +125,9 @@ def list_users(request: HttpRequest):
     )
 
 
-_EXTERNAL_ROLE_CODE = "R-PARTNER"
+# 外部允许集（M2-c）：机构用户 + 外部评审专家；两者都不得与内部角色共存
+_EXTERNAL_ROLE_CODES = ("R-PARTNER", "R-EXPERT")
+_EXTERNAL_ROLE_CODE = "R-PARTNER"  # 需要绑定机构的那个
 
 
 def _assert_org_bindable(tenant_id: int, org_id: int) -> None:
@@ -149,17 +151,22 @@ def _assert_role_consistency(tenant_id: int, role_codes: list[str], org_id: int 
     两条都在授权入口拦死，运行期再 fail-closed 兜一层。
     """
     codes = [c for c in (role_codes or []) if c]
-    if _EXTERNAL_ROLE_CODE not in codes:
+    externals = [c for c in codes if c in _EXTERNAL_ROLE_CODES]
+    if not externals:
         return
-    others = [c for c in codes if c != _EXTERNAL_ROLE_CODE]
+    others = [c for c in codes if c not in _EXTERNAL_ROLE_CODES]
     if others:
         raise ApiError(
             400, CODE_BAD_REQUEST,
-            f"外部机构角色 {_EXTERNAL_ROLE_CODE} 不能与内部角色共存：{','.join(others)}",
+            f"外部角色 {'/'.join(externals)} 不能与内部角色共存：{','.join(others)}",
         )
-    if not org_id:
-        raise ApiError(400, CODE_BAD_REQUEST, "外部机构角色必须绑定机构（org_id）")
-    _assert_org_bindable(tenant_id, int(org_id))
+    # R-PARTNER（机构用户）必须有已过审机构；R-EXPERT 可不绑机构（纯外部专家）
+    if _EXTERNAL_ROLE_CODE in codes:
+        if not org_id:
+            raise ApiError(400, CODE_BAD_REQUEST, "外部机构角色必须绑定机构（org_id）")
+        _assert_org_bindable(tenant_id, int(org_id))
+    elif org_id:
+        _assert_org_bindable(tenant_id, int(org_id))
 
 
 def create_user(request: HttpRequest):
@@ -184,11 +191,13 @@ def create_user(request: HttpRequest):
     source = (body.get("user_source") or "").upper()
     if source not in ("", "INTERNAL", "EXTERNAL"):
         raise ApiError(400, CODE_BAD_REQUEST, "user_source 须为 INTERNAL 或 EXTERNAL")
-    if source == "EXTERNAL" and role_codes != [_EXTERNAL_ROLE_CODE]:
-        # 外部账号必须恰好只持 R-PARTNER（终审 r3 N-4：否则先建空角色、再补内部角色即可越权）
-        raise ApiError(400, CODE_BAD_REQUEST, "外部账号只能持有 R-PARTNER 角色")
+    if source == "EXTERNAL" and (
+        not role_codes or any(c not in _EXTERNAL_ROLE_CODES for c in role_codes)
+    ):
+        # 外部账号只能持有外部允许集内的角色（M2-c 扩为 R-PARTNER + R-EXPERT）
+        raise ApiError(400, CODE_BAD_REQUEST, "外部账号只能持有 R-PARTNER/R-EXPERT 角色")
     _assert_role_consistency(d.tenant_id, role_codes, org_id)
-    if org_id is not None and _EXTERNAL_ROLE_CODE not in role_codes:
+    if org_id is not None and not any(c in _EXTERNAL_ROLE_CODES for c in role_codes):
         # 任何账号只要绑机构就必须是有效且已过审的机构（终审 r3 N-5：院内账号可绑 PENDING/不存在机构）
         _assert_org_bindable(d.tenant_id, org_id)
     u = SysUser.objects.create(
@@ -205,7 +214,7 @@ def create_user(request: HttpRequest):
         creator_id=d.user_id,
         org_id=org_id,
         user_source=(
-            "EXTERNAL" if _EXTERNAL_ROLE_CODE in role_codes
+            "EXTERNAL" if any(c in _EXTERNAL_ROLE_CODES for c in role_codes)
             else (body.get("user_source") or "INTERNAL")
         ),
     )
@@ -326,7 +335,10 @@ def assign_role(request: HttpRequest, id: int):
     # 双向校验（终审 r2 I-1）：只拦"新增 R-PARTNER"是可绕过的——给已有外部账号追加
     # 任意内部角色同样会造出混合角色，随后并集权限即可读到院内数据。
     if role is not None:
-        if (u.user_source or "INTERNAL").upper() == "EXTERNAL" and role.code != _EXTERNAL_ROLE_CODE:
+        if (
+            (u.user_source or "INTERNAL").upper() == "EXTERNAL"
+            and role.code not in _EXTERNAL_ROLE_CODES
+        ):
             raise ApiError(400, CODE_BAD_REQUEST, "外部账号不能追加内部角色")
         existing = list(role_codes_of(id))
         _assert_role_consistency(d.tenant_id, existing + [role.code], u.org_id)

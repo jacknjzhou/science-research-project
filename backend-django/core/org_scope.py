@@ -6,7 +6,22 @@ uid/tenant_id/legal_entity_id/security_level/roles），因此机构 id 按需�
 """
 from __future__ import annotations
 
-_EXTERNAL_ROLE = "R-PARTNER"
+# 外部允许集（M2-c）：外部机构用户 + 外部评审专家。两者都是"外部身份"，
+# 运行期一律按外部（更严）口径处理；内部角色即使残留在令牌里也被 deps 剥掉。
+EXTERNAL_ROLES: tuple[str, ...] = ("R-PARTNER", "R-EXPERT")
+
+
+def external_roles_of(roles: list[str] | None) -> list[str]:
+    """保留外部允许集内的角色（保序去重）；调用方负责丢弃其余内部角色。"""
+    out: list[str] = []
+    for r in roles or []:
+        if r in EXTERNAL_ROLES and r not in out:
+            out.append(r)
+    return out
+
+
+def has_external_role(roles: list[str] | None) -> bool:
+    return bool(set(roles or []) & set(EXTERNAL_ROLES))
 
 
 def current_org_id(d) -> int | None:
@@ -33,4 +48,4 @@ def is_external_only(d) -> bool:
     调用方只给本机构数据、跨机构一律 404。
     """
     roles = [r for r in (getattr(d, "roles", None) or []) if r]
-    return _EXTERNAL_ROLE in roles
+    return has_external_role(roles)

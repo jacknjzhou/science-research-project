@@ -58,9 +58,11 @@ def login(request: HttpRequest) -> object:
             .values_list("role__code", flat=True)
         )
         codes = [r for r in roles if r]
-        # 外部机构角色独占：存量混合角色账号在签发时即裁剪为纯 R-PARTNER（终审 r3 N-2）
-        if "R-PARTNER" in codes:
-            codes = ["R-PARTNER"]
+        # 外部角色独占（M2-c 允许集）：存量混合角色账号签发时只保留外部允许集内的角色
+        from core.org_scope import external_roles_of, has_external_role
+
+        if has_external_role(codes):
+            codes = external_roles_of(codes)
         claims = _issue(
             request,
             user.id,

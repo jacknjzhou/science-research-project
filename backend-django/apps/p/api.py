@@ -75,7 +75,7 @@ def _parse_dt(s):
 #: 纯外部身份判定：除 R-PARTNER 外**没有任何**其它角色时，才按外部口径收口。
 #: 这样 R-AUDITOR/R-FINANCE/R-EXPERT/R-ETHICS 等内部只读角色不受影响（fail-open 给内部，
 #: 但仍要求至少持有一个内部角色；无角色（异常态）按外部处理 = fail-closed）。
-_EXTERNAL_ROLE = "R-PARTNER"
+_EXTERNAL_ROLE = "R-PARTNER"  # 机构角色；外部身份判定见 core.org_scope.EXTERNAL_ROLES
 
 
 def _guideline_status_scope(d) -> str | None:
@@ -83,7 +83,9 @@ def _guideline_status_scope(d) -> str | None:
     roles = [r for r in (getattr(d, "roles", None) or []) if r]
     if not roles:
         return "PUBLISHED"
-    if has_role(roles, _EXTERNAL_ROLE):  # 含混合角色（fail-closed，见 core/org_scope）
+    from core.org_scope import has_external_role
+
+    if has_external_role(roles):  # 含混合角色（fail-closed，见 core/org_scope）
         return "PUBLISHED"
     return None
 
