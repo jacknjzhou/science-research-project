@@ -291,3 +291,38 @@ def test_m1d_guide_conclude_tenant_isolated(seed_auth):
     conclude_guide_review(t.id)
     other.refresh_from_db()
     assert other.status == "DRAFT"  # 未被他租户评审任务发布
+
+
+# ---------------------------------------------------------------------------
+# M2-a C-2 收口：外部机构角色只见已发布、详情按租户收口
+# ---------------------------------------------------------------------------
+def _two_guidelines(tenant_id=1):
+    pub = PGuideline.objects.create(tenant_id=tenant_id, title="已发布指南",
+                                    project_type="ZIGE", status="PUBLISHED", creator_id=1)
+    draft = PGuideline.objects.create(tenant_id=tenant_id, title="草稿指南",
+                                      project_type="ZIGE", status="DRAFT", creator_id=1)
+    return pub, draft
+
+
+def test_partner_sees_only_published_guidelines(seed_auth):
+    _two_guidelines()
+    r = _c().get("/api/v1/apply/guidelines", **bearer(2, ["R-PARTNER"]))
+    assert r.status_code == 200
+    titles = [g["title"] for g in r.json()["data"]["list"]]
+    assert titles == ["已发布指南"]
+
+
+def test_partner_cannot_read_draft_or_cross_tenant(seed_auth):
+    _pub, draft = _two_guidelines(tenant_id=1)
+    other = PGuideline.objects.create(tenant_id=2, title="租户2未公开指南",
+                                      project_type="ZIGE", status="PUBLISHED", creator_id=1)
+    c = _c()
+    assert c.get(f"/api/v1/apply/guidelines/{draft.id}",
+                 **bearer(2, ["R-PARTNER"])).status_code == 404
+    assert c.get(f"/api/v1/apply/guidelines/{other.id}",
+                 **bearer(2, ["R-PARTNER"])).status_code == 404
+    # 内部角色仍可读草稿，但跨租户同样 404
+    assert c.get(f"/api/v1/apply/guidelines/{draft.id}",
+                 **bearer(1, ["R-STAFF"])).status_code == 200
+    assert c.get(f"/api/v1/apply/guidelines/{other.id}",
+                 **bearer(1, ["R-STAFF"])).status_code == 404

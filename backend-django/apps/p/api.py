@@ -13,6 +13,7 @@ from django.utils import timezone as dj_tz
 from apps.expertreview.models import NReviewInvitation, NReviewScore, NReviewTask
 from apps.p.mappings import num2, to_api_application, to_api_guideline
 from apps.p.models import PApplication, PApplicationDoc, PGuideline
+from core.approval import has_role
 from core.auth.deps import domain_from
 from core.httpx import (
     ApiError,
@@ -55,11 +56,28 @@ def _parse_dt(s):
 # ---------------------------------------------------------------------------
 # 申报指南（P-02）
 # ---------------------------------------------------------------------------
+#: 内部（非外部机构）角色：可看全部状态；其余只读已发布（M2-a C-2 收口）
+_INTERNAL_GUIDELINE_ROLES = ("R-ADMIN", "R-MANAGER", "R-LEADER", "R-STAFF")
+
+
+def _guideline_status_scope(d) -> str | None:
+    """外部机构角色（只有 R-PARTNER）强制只看 PUBLISHED；内部角色返回 None（不限制）。"""
+    roles = getattr(d, "roles", None) or []
+    if not roles:
+        return "PUBLISHED"
+    if any(has_role(roles, r) for r in _INTERNAL_GUIDELINE_ROLES):
+        return None
+    return "PUBLISHED"
+
+
 def list_guidelines(request: HttpRequest):
     d = domain_from(request)
     page, size, limit, offset = page_args(request)
     qs = PGuideline.objects.filter(tenant_id=d.tenant_id, deleted=0)
-    if request.GET.get("status"):
+    scope = _guideline_status_scope(d)
+    if scope:
+        qs = qs.filter(status=scope)
+    elif request.GET.get("status"):
         qs = qs.filter(status=request.GET["status"])
     if request.GET.get("project_type"):
         qs = qs.filter(project_type=request.GET["project_type"])
@@ -72,8 +90,10 @@ def list_guidelines(request: HttpRequest):
 
 
 def get_guideline(request: HttpRequest, id: int):
-    g = PGuideline.objects.filter(id=id, deleted=0).first()
-    if g is None:
+    d = domain_from(request)
+    g = PGuideline.objects.filter(id=id, tenant_id=d.tenant_id, deleted=0).first()
+    if g is None or (_guideline_status_scope(d) == "PUBLISHED" and g.status != "PUBLISHED"):
+        # 跨租户 / 未发布对外部角色一律 404（不泄露存在性）
         raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
     return ok(request, to_api_guideline(g))
 
