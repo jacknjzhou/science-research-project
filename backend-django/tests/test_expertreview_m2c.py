@@ -12,9 +12,14 @@ def _c() -> Client:
     return Client()
 
 
-def _post(path, payload, uid, roles):
+def _post(path, payload, uid, roles, tenant_id=1):
     return _c().post(path, data=json.dumps(payload), content_type="application/json",
-                     **bearer(uid, roles))
+                     **bearer(uid, roles, tenant_id))
+
+
+def _post_tenant(path, payload, uid, roles, tenant_id):
+    return _c().post(path, data=json.dumps(payload), content_type="application/json",
+                     **bearer(uid, roles, tenant_id))
 
 
 def _expert(tenant_id=1, uid=101, status="ACTIVE", name="专家A"):
@@ -97,3 +102,124 @@ def test_submit_score_ignores_foreign_expert_id(seed_auth):
               {"total_score": "88.00"}, 102, ["R-EXPERT"])
     assert r.status_code == 200, r.content
     assert NReviewScore.objects.filter(task_id=t.id, expert_id=b.id).exists()
+
+
+# ---------------------------------------------------------------- Task 4
+
+def _user(seed_auth, username="ext_expert", email="ext@example.com", org=None):
+    from apps.sysadmin.models import SysUser
+
+    return SysUser.objects.create(
+        username=username, real_name=username, password_hash=seed_auth["admin"].password_hash,
+        status="ACTIVE", tenant_id=1, creator_id=1, email=email,
+        org_id=org.id if org else None,
+        user_source="EXTERNAL" if org else "INTERNAL",
+    )
+
+
+def _org(name="协作机构", code="91310000MA1K3XY00A"):
+    from apps.sysadmin.models import SysPartnerOrg
+
+    return SysPartnerOrg.objects.create(
+        tenant_id=1, creator_id=1, name=name, credit_code=code,
+        org_type="UNIVERSITY", status="APPROVED")
+
+
+def test_partner_user_can_apply_as_expert(seed_auth):
+    """外部机构用户提交专家申请 → CANDIDATE 档案（C3 自助注册）。"""
+    from apps.expertreview.models import NExpert
+
+    org = _org()
+    u = _user(seed_auth, org=org)
+    r = _post("/api/v1/portal/expert-apply",
+              {"name": "张三", "title": "教授", "field_tags": ["AI", "材料"]},
+              u.id, ["R-PARTNER"])
+    assert r.status_code == 200, r.content
+    e = NExpert.objects.get(user_id=u.id, tenant_id=1)
+    assert e.status == "CANDIDATE" and e.source == "EXTERNAL"
+    assert e.field_tags == ["AI", "材料"] and e.code.startswith("NEX-")
+
+
+def test_apply_twice_conflicts(seed_auth):
+    org = _org()
+    u = _user(seed_auth, org=org)
+    _post("/api/v1/portal/expert-apply", {"name": "张三"}, u.id, ["R-PARTNER"])
+    r = _post("/api/v1/portal/expert-apply", {"name": "张三"}, u.id, ["R-PARTNER"])
+    assert r.status_code == 409, r.content
+    assert r.json()["code"] == 40901
+
+
+def test_manager_approves_expert_and_grants_role(seed_auth):
+    """审核通过 → ACTIVE + 授 R-EXPERT + 站内信 + 邮件。"""
+    from apps.expertreview.models import NExpert
+    from apps.sysadmin.models import SysUserRole
+
+    org = _org()
+    u = _user(seed_auth, org=org)
+    _post("/api/v1/portal/expert-apply", {"name": "李四"}, u.id, ["R-PARTNER"])
+    e = NExpert.objects.get(user_id=u.id)
+
+    manager = _user(seed_auth, username="mgr1", email="mgr1@example.com")
+    SysUserRole.objects.create(user=manager, role=seed_auth["roles"]["R-MANAGER"], tenant_id=1)
+
+    r = _post(f"/api/v1/expert-applications/{e.id}/audit", {"action": "APPROVE"},
+              manager.id, ["R-MANAGER"])
+    assert r.status_code == 200, r.content
+    e.refresh_from_db()
+    assert e.status == "ACTIVE"
+    assert SysUserRole.objects.filter(user=u, role__code="R-EXPERT").exists()
+
+    from apps.notify.models import SysNotification
+    assert SysNotification.objects.filter(user_id=u.id).exists()
+    from django.core import mail
+    # 提交时给申请人发过一封「已提交」，审核通过再发一封「已通过」
+    assert any("ext@example.com" in m.to for m in mail.outbox)
+    assert any("通过" in m.subject for m in mail.outbox)
+
+
+def test_reject_requires_reason(seed_auth):
+    """驳回必须给理由；理由落库并在档案上留痕（置 SUSPENDED）。"""
+    from apps.expertreview.models import NExpert
+    from apps.sysadmin.models import SysUserRole
+
+    org = _org()
+    u = _user(seed_auth, org=org)
+    _post("/api/v1/portal/expert-apply", {"name": "王五"}, u.id, ["R-PARTNER"])
+    e = NExpert.objects.get(user_id=u.id)
+    manager = _user(seed_auth, username="mgr2")
+    SysUserRole.objects.create(user=manager, role=seed_auth["roles"]["R-MANAGER"], tenant_id=1)
+
+    r = _post(f"/api/v1/expert-applications/{e.id}/audit", {"action": "REJECT"},
+              manager.id, ["R-MANAGER"])
+    assert r.status_code == 400, r.content
+
+    r = _post(f"/api/v1/expert-applications/{e.id}/audit",
+              {"action": "REJECT", "reason": "材料不全"}, manager.id, ["R-MANAGER"])
+    assert r.status_code == 200, r.content
+    e.refresh_from_db()
+    assert e.status == "SUSPENDED" and "材料不全" in (e.remark or "")
+
+
+def test_other_tenant_cannot_audit(seed_auth):
+    from apps.expertreview.models import NExpert
+    from apps.sysadmin.models import SysUserRole
+
+    org = _org()
+    u = _user(seed_auth, org=org)
+    _post("/api/v1/portal/expert-apply", {"name": "赵六"}, u.id, ["R-PARTNER"])
+    e = NExpert.objects.get(user_id=u.id)
+
+    from apps.sysadmin.models import SysUser
+
+    mgr2 = SysUser.objects.create(
+        username="mgr_t2", real_name="异租户管理员", password_hash=seed_auth["admin"].password_hash,
+        status="ACTIVE", tenant_id=2, creator_id=1, email="m2@example.com")
+    from apps.sysadmin.models import SysRole
+
+    role, _ = SysRole.objects.get_or_create(code="R-MANAGER", tenant_id=2,
+                                            defaults={"name": "科研管理岗", "is_builtin": True})
+    SysUserRole.objects.create(user=mgr2, role=role, tenant_id=2)
+
+    r = _post_tenant(f"/api/v1/expert-applications/{e.id}/audit", {"action": "APPROVE"},
+                     mgr2.id, ["R-MANAGER"], 2)
+    assert r.status_code == 404, r.content

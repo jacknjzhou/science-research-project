@@ -258,6 +258,52 @@ components:
         message: { type: string }
         traceId: { type: string }
 
+  ExpertApplyRequest:
+    type: object
+    required: [name]
+    properties:
+      name:        { type: string, maxLength: 64, description: 专家姓名 }
+      title:       { type: string, description: 职称（教授/研究员等） }
+      org_name:    { type: string, description: 所属单位名称 }
+      phone:       { type: string }
+      email:       { type: string }
+      field_tags:  { type: array, items: { type: string }, description: 研究领域标签（用于抽取匹配） }
+      cv_doc_ids:  { type: array, items: { type: integer } }
+
+  ExpertAuditRequest:
+    type: object
+    required: [action]
+    properties:
+      action: { type: string, enum: [APPROVE, REJECT], description: 通过→ACTIVE 并授予 R-EXPERT；驳回→SUSPENDED }
+      reason: { type: string, maxLength: 512, description: 驳回必填 }
+
+  ExpertApplication:
+    type: object
+    description: 专家申请/档案（审核台视图；字段与 NExpert 一致，snake_case）
+    properties:
+      id:              { type: integer }
+      code:            { type: string, description: 'NEX-年-序' }
+      tenant_id:       { type: integer }
+      status:          { type: string, description: CANDIDATE/ACTIVE/SUSPENDED/BLACKLIST }
+      name:            { type: string }
+      gender:          { type: string }
+      title:           { type: string }
+      org_name:        { type: string }
+      user_id:         { type: integer }
+      source:          { type: string, description: INTERNAL/EXTERNAL }
+      field_tags:      { type: array, items: { type: string } }
+      expertise_level: { type: string }
+      avoid_orgs:      { type: array, items: { type: string } }
+      avoid_person_ids: { type: array, items: { type: integer } }
+      security_level:  { type: string }
+      last_review_at:  { type: string, nullable: true }
+      review_count:    { type: integer }
+      created_at:      { type: string }
+      updated_at:      { type: string }
+      audited_at:      { type: string, nullable: true }
+      audit_user_id:   { type: integer, nullable: true }
+      reject_reason:   { type: string, nullable: true }
+
   responses:
     Ok:
       description: 成功
@@ -688,3 +734,92 @@ paths:
                     properties:
                       data: { $ref: '#/components/schemas/ReviewDetail' }
         '404': { $ref: '#/components/responses/NotFound' }
+
+  /portal/expert-apply:
+    post:
+      tags: [expertreview]
+      operationId: applyExpert
+      summary: 专家自助申请（外部机构用户/已生效专家可提交，建 CANDIDATE 档案）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpertApplyRequest' }
+      responses:
+        '200':
+          description: 申请已受理
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ExpertApplication' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: 已提交过申请
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+
+  /expert-applications:
+    get:
+      tags: [expertreview]
+      operationId: listExpertApplications
+      summary: 专家申请审核台列表（缺省只列 CANDIDATE；status=ALL 看全部）
+      parameters:
+        - { name: status, in: query, schema: { type: string } }
+        - { name: page,   in: query, schema: { type: integer, default: 1 } }
+        - { name: size,   in: query, schema: { type: integer, default: 20 } }
+      responses:
+        '200':
+          description: 申请列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:  { type: array, items: { $ref: '#/components/schemas/ExpertApplication' } }
+                          total: { type: integer }
+                          page:  { type: integer }
+                          size:  { type: integer }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /expert-applications/{id}/audit:
+    post:
+      tags: [expertreview]
+      operationId: auditExpertApplication
+      summary: 审核专家申请（通过即授权 R-EXPERT 并双通道通知）
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExpertAuditRequest' }
+      responses:
+        '200':
+          description: 审核完成
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ExpertApplication' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: 非待审状态
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }

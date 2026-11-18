@@ -906,3 +906,8 @@ p, R-LEADER,  /api/v1/apply/task-books/*:sign,       POST
 # M2-b 终审 r3 补口：改派申报负责人（N-1，PI 停用后的唯一解冻路径）
 p, R-MANAGER, /api/v1/apply/applications/*:change-pi, POST
 p, R-LEADER,  /api/v1/apply/applications/*:change-pi, POST
+# M2-c（C3）：外部专家自助申请 + 管理端审核
+p, R-PARTNER, /api/v1/portal/expert-apply,            POST
+p, R-EXPERT,  /api/v1/portal/expert-apply,            POST
+p, R-MANAGER, /api/v1/expert-applications,            GET
+p, R-MANAGER, /api/v1/expert-applications/*/audit,    POST

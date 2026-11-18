@@ -335,7 +335,8 @@ INSERT INTO seq_prefix_registry (prefix, biz_object, owner_module, introduced_ve
   ('RVW','评审任务','N','v1.0',TRUE),
   ('RPT','评估批文','E','v1.2',TRUE),
   ('CHG','项目变更','E','v1.2',TRUE),
-  ('PTN','外部合作机构','U','v1.2',TRUE);
+  ('PTN','外部合作机构','U','v1.2',TRUE),
+  ('NEX','评审专家','N','v1.2',TRUE);
 
 -- =============================================================================
 -- M2-a 增补：外部合作机构（sysadmin 域，与 sys_user 同域）

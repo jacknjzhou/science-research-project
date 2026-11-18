@@ -413,6 +413,7 @@ api.post("/settlements/{int:settlement_id}/approve", auth=ark_auth, tags=["fundi
 # ==================== Phase 3：R/N/V/O/M/D 域 ====================
 from apps.output import api as output_api
 from apps.expertreview import api as expertreview_api
+from apps.expertreview import portal as expertreview_portal
 from apps.activity import api as activity_api
 from apps.archive import api as archive_api
 from apps.performance import api as performance_api
@@ -489,6 +490,11 @@ api.post("/reviews/{id}/start", auth=ark_auth, tags=["expertreview"])(expertrevi
 api.post("/reviews/{id}/scores", auth=ark_auth, tags=["expertreview"])(expertreview_api.submit_score)
 api.post("/reviews/{id}/conclude", auth=ark_auth, tags=["expertreview"])(expertreview_api.conclude_review)
 api.post("/reviews/{id}/fees", auth=ark_auth, tags=["expertreview"])(expertreview_api.generate_fees)
+
+# M2-c 专家门户（C3）：自助注册 + 管理端审核
+api.post("/portal/expert-apply", auth=ark_auth, tags=["expertreview"])(expertreview_portal.apply_expert)
+api.get("/expert-applications", auth=ark_auth, tags=["expertreview"])(expertreview_portal.list_expert_applications)
+api.post("/expert-applications/{id}/audit", auth=ark_auth, tags=["expertreview"])(expertreview_portal.audit_expert_application)
 
 # —— V 学术活动：calendar/stats 静态先于 {id} ——
 api.get("/activities", auth=ark_auth, tags=["activity"])(activity_api.list_activities)
