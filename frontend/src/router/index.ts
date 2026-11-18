@@ -53,6 +53,12 @@ const routes: RouteRecordRaw[] = [
   { path: '/register', name: 'register', meta: { zh: '外部机构注册', en: 'PARTNER SIGN-UP', public: true }, component: () => import('@/views/RegisterView.vue') },
   { path: '/portal', name: 'portal', meta: { zh: '机构门户', en: 'PARTNER PORTAL', roles: ['R-PARTNER'] }, component: () => import('@/views/PortalView.vue') },
   { path: '/admin/partner-orgs', name: 'admin-partner-orgs', meta: { zh: '机构资质审核', en: 'PARTNER ACCREDITATION', roles: ['R-MANAGER', 'R-ADMIN'] }, component: () => import('@/views/admin/PartnerOrgsView.vue') },
+  // —— M2-b：开放课题全流程（门户侧 4 页 + 管理端指南建议审核）——
+  { path: '/portal/applications', name: 'portal-applications', meta: { zh: '我的申报', en: 'MY APPLICATIONS', roles: ['R-PARTNER'] }, component: () => import('@/views/portal/ApplicationsView.vue') },
+  { path: '/portal/guide-suggest', name: 'portal-guide-suggest', meta: { zh: '指南建议', en: 'GUIDE SUGGESTION', roles: ['R-PARTNER'] }, component: () => import('@/views/portal/GuideSuggestView.vue') },
+  { path: '/portal/task-book', name: 'portal-task-book', meta: { zh: '任务书签订', en: 'TASK BOOK', roles: ['R-PARTNER', 'R-MANAGER', 'R-LEADER'] }, component: () => import('@/views/portal/TaskBookView.vue') },
+  { path: '/portal/project-report', name: 'portal-project-report', meta: { zh: '汇报与验收', en: 'REPORT & ACCEPT', roles: ['R-PARTNER', 'R-STAFF', 'R-MANAGER'] }, component: () => import('@/views/portal/ProjectReportView.vue') },
+  { path: '/admin/guide-suggestions', name: 'admin-guide-suggestions', meta: { zh: '指南建议审核', en: 'GUIDE SUGGESTION REVIEW', roles: ['R-MANAGER', 'R-ADMIN'] }, component: () => import('@/views/admin/GuideSuggestionsView.vue') },
   // —— 越权兜底 ——
   { path: '/forbidden', name: 'forbidden', meta: { zh: '无访问权限', en: 'FORBIDDEN', public: true }, component: () => import('@/views/ForbiddenView.vue') },
 ]

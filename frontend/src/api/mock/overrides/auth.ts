@@ -84,6 +84,16 @@ const ROLE_CAPS: Record<string, string[]> = {
     '/api/v1/notifications GET', '/api/v1/notifications/* POST',
     '/api/v1/notifications/read-all POST',
     '/api/v1/dicts/* GET',
+    // —— M2-b：开放课题全流程（镜像 policy.csv M2-b R-PARTNER 段）——
+    '/api/v1/apply/guide-suggestions GET', '/api/v1/apply/guide-suggestions POST',
+    '/api/v1/apply/applications GET', '/api/v1/apply/applications POST',
+    '/api/v1/apply/applications/* GET', '/api/v1/apply/applications/* PUT',
+    '/api/v1/apply/applications/* POST',
+    '/api/v1/apply/applications/*/sections/* PUT',
+    '/api/v1/apply/task-books GET', '/api/v1/apply/task-books/* GET',
+    '/api/v1/apply/task-books/* POST',
+    '/api/v1/project/*/progress-report GET', '/api/v1/project/*/progress-report POST',
+    '/api/v1/project/*/final-accept GET', '/api/v1/project/*/final-accept POST',
   ],
   'R-STAFF': [
     ...W(['GET']),
@@ -126,6 +136,12 @@ const PAGE_GRANTS: Array<[string, string]> = [
   // M2-a：外部机构门户 + 资质审核台（policy.csv R-PARTNER / R-MANAGER 行同口径）
   ['portal', 'R-PARTNER'],
   ['admin-partner-orgs', 'R-MANAGER'], ['admin-partner-orgs', 'R-ADMIN'],
+  // —— M2-b：开放课题全流程页（seed_demo.PAGE_GRANTS 同口径）——
+  ['portal-applications', 'R-PARTNER'],
+  ['portal-guide-suggest', 'R-PARTNER'],
+  ['portal-task-book', 'R-PARTNER'], ['portal-task-book', 'R-MANAGER'], ['portal-task-book', 'R-LEADER'],
+  ['portal-project-report', 'R-PARTNER'], ['portal-project-report', 'R-STAFF'], ['portal-project-report', 'R-MANAGER'],
+  ['admin-guide-suggestions', 'R-MANAGER'], ['admin-guide-suggestions', 'R-ADMIN'],
 ]
 
 function usernameFromToken(token: string): string {

@@ -199,10 +199,17 @@ const groups: NavGroup[] = [
     { v: 'admin-dicts', ic: '☰', label: '数据字典', roles: ['R-ADMIN'] },
     // M2-a：外部机构资质审核（R-MANAGER；R-ADMIN 恒可见）
     { v: 'admin-partner-orgs', ic: '◎', label: '机构资质审核', roles: ['R-MANAGER', 'R-ADMIN'] },
+    // M2-b：外部机构提交的指南建议审核（采纳即生成指南草稿）
+    { v: 'admin-guide-suggestions', ic: '✎', label: '指南建议审核', roles: ['R-MANAGER', 'R-ADMIN'] },
   ]},
   { t: '机 构 门 户', items: [
     // M2-a：外部机构用户专属（R-PARTNER）；内部账号不看该组
     { v: 'portal', ic: '⌂', label: '机构门户', roles: ['R-PARTNER'] },
+    // M2-b：开放课题全流程（外部机构自助）
+    { v: 'portal-applications', ic: '▤', label: '我的申报', roles: ['R-PARTNER'] },
+    { v: 'portal-guide-suggest', ic: '❖', label: '指南建议', roles: ['R-PARTNER'] },
+    { v: 'portal-task-book', ic: '⎙', label: '任务书签订', roles: ['R-PARTNER', 'R-MANAGER', 'R-LEADER'] },
+    { v: 'portal-project-report', ic: '⟳', label: '汇报与验收', roles: ['R-PARTNER', 'R-STAFF', 'R-MANAGER'] },
   ]},
 ]
 

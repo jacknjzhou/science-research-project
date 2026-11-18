@@ -149,3 +149,209 @@ export const overrides: Record<string, unknown> = {
     return o
   }) as unknown,
 }
+
+// ===========================================================================
+// M2-b 开放课题全流程（C2）：指南建议 / 申报 / 任务书 / 阶段汇报 / 验收
+// 契约：01-P（guide-suggestions、applications、task-books）+ 02-E（progress-report、final-accept）
+// 全部 snake_case；mock 仅演示主流程（提交/采纳/签章/汇报），不含权限与冲突校验。
+// ===========================================================================
+interface MockSuggestion {
+  id: number; code: string; tenant_id: number; title: string; content_rich: string | null
+  org_id: number; status: string; guideline_id: number | null
+  reject_reason: string | null; created_at: string
+}
+interface MockApplication {
+  id: number; code: string; tenant_id: number; title: string; project_type: string
+  status: string; applicant_org_id: number; applicant_type: string
+  total_budget: string; duration_months: number; abstract: string | null
+  pi_user_id: number; updated_at: string
+}
+interface MockTaskBook {
+  id: number; code: string; application_id: number; status: string
+  content_snapshot: Record<string, any>; sign_records: Array<Record<string, any>>
+  effective_date: string | null; project_id: number | null; print_template_code: string
+}
+interface MockReport {
+  id: number; project_id: number; period: string; report_type: string
+  progress_percent: number; content_rich: string | null; submitted_at: string
+}
+interface MockFinalAccept {
+  id: number; project_id: number; status: string; output_summary: string | null
+  apply_at: string; accept_at: string | null; approval_doc_id: number | null
+}
+
+const SUGGESTIONS: MockSuggestion[] = [
+  {
+    id: 1, code: 'SUG-2026-000001', tenant_id: 1,
+    title: '面向产业场景的大模型评测方法',
+    content_rich: '建议围绕行业大模型的可信评测建立方法体系与基准数据集。',
+    org_id: 1, status: 'PENDING', guideline_id: null, reject_reason: null,
+    created_at: '2026-11-12T03:00:00Z',
+  },
+]
+const APPLICATIONS: MockApplication[] = [
+  {
+    id: 1, code: 'APP-2026-000001', tenant_id: 1, title: '开放数据可信治理研究',
+    project_type: '开放课题', status: 'DRAFT', applicant_org_id: 1,
+    applicant_type: 'EXTERNAL', total_budget: '100000.00', duration_months: 12,
+    abstract: '研究开放数据共享中的可信治理机制。', pi_user_id: 9,
+    updated_at: '2026-11-17T02:00:00Z',
+  },
+]
+const TASK_BOOKS: MockTaskBook[] = []
+const REPORTS: MockReport[] = []
+const FINAL_ACCEPTS: MockFinalAccept[] = []
+
+const nowIso = () => new Date().toISOString()
+/** M2-b 段专用：取路径末段的数字 id（本段 URL 形如 /apply/task-books/3:sign）。 */
+const bId = (url: string): number =>
+  Number(url.split('?')[0].split('/').filter(Boolean).slice(-1)[0].split(':')[0]) || 0
+
+function page<T>(rows: T[]) {
+  return { list: rows, total: rows.length, page: 1, size: 20 }
+}
+
+export const portalM2bOverrides: Record<string, unknown> = {
+  'GET /apply/guide-suggestions': ((url: string) => {
+    const q = url.includes('?') ? new URLSearchParams(url.slice(url.indexOf('?') + 1)) : null
+    const status = q?.get('status') || ''
+    const rows = SUGGESTIONS.filter((s) => !status || s.status === status)
+    return page([...rows].sort((a, b) => b.id - a.id))
+  }) as unknown,
+
+  'POST /apply/guide-suggestions': ((_url: string, ctx: { body: unknown }) => {
+    const b = (ctx.body || {}) as Record<string, any>
+    const s: MockSuggestion = {
+      id: SUGGESTIONS.length + 1,
+      code: `SUG-2026-${String(SUGGESTIONS.length + 1).padStart(6, '0')}`,
+      tenant_id: 1, title: b.title || '未命名建议', content_rich: b.content_rich ?? null,
+      org_id: 1, status: 'PENDING', guideline_id: null, reject_reason: null, created_at: nowIso(),
+    }
+    SUGGESTIONS.unshift(s)
+    return s
+  }) as unknown,
+
+  'POST /apply/guide-suggestions/{id}:accept': ((url: string) => {
+    const s = SUGGESTIONS.find((x) => x.id === bId(url))
+    if (s) {
+      s.status = 'ACCEPTED'
+      s.guideline_id = 3100 + s.id // 演示：真实后端会建 PGuideline(DRAFT) 并回填
+    }
+    return { guideline_id: s?.guideline_id ?? null }
+  }) as unknown,
+
+  'POST /apply/guide-suggestions/{id}:reject': ((url: string, ctx: { body: unknown }) => {
+    const s = SUGGESTIONS.find((x) => x.id === bId(url))
+    const b = (ctx.body || {}) as Record<string, any>
+    if (s) {
+      s.status = 'REJECTED'
+      s.reject_reason = b.reason || '与本年征集方向不匹配'
+    }
+    return s || {}
+  }) as unknown,
+
+  'GET /apply/applications': (() => page([...APPLICATIONS].sort((a, b) => b.id - a.id))) as unknown,
+
+  'POST /apply/applications': ((_url: string, ctx: { body: unknown }) => {
+    const b = (ctx.body || {}) as Record<string, any>
+    const a: MockApplication = {
+      id: APPLICATIONS.length + 1,
+      code: `APP-2026-${String(APPLICATIONS.length + 1).padStart(6, '0')}`,
+      tenant_id: 1, title: b.title || '未命名申报', project_type: b.project_type || '开放课题',
+      status: 'DRAFT', applicant_org_id: 1, applicant_type: 'EXTERNAL',
+      total_budget: b.total_budget || '0.00', duration_months: b.duration_months || 12,
+      abstract: b.abstract ?? null, pi_user_id: 9, updated_at: nowIso(),
+    }
+    APPLICATIONS.unshift(a)
+    return a
+  }) as unknown,
+
+  'POST /apply/applications/{id}/submit': ((url: string) => {
+    const a = APPLICATIONS.find((x) => x.id === bId(url))
+    if (a) {
+      a.status = 'SUBMITTED'
+      a.updated_at = nowIso()
+    }
+    return a || {}
+  }) as unknown,
+
+  'POST /apply/task-books': ((_url: string, ctx: { body: unknown }) => {
+    const b = (ctx.body || {}) as Record<string, any>
+    const aid = Number(b.application_id) || 0
+    const exist = TASK_BOOKS.find((t) => t.application_id === aid)
+    if (exist) return exist
+    const a = APPLICATIONS.find((x) => x.id === aid)
+    const tb: MockTaskBook = {
+      id: TASK_BOOKS.length + 1,
+      code: `PRJ-2026-${String(TASK_BOOKS.length + 1).padStart(6, '0')}`,
+      application_id: aid, status: 'DRAFT', print_template_code: 'TASK_BOOK',
+      content_snapshot: {
+        title: a?.title || '未命名课题', project_type: a?.project_type || '开放课题',
+        pi_user_id: a?.pi_user_id || 9, applicant_org_id: a?.applicant_org_id ?? 1,
+        total_budget: a?.total_budget || '0.00', duration_months: a?.duration_months || 12,
+        abstract: a?.abstract ?? null, frozen_at: nowIso(),
+      },
+      sign_records: [], effective_date: null, project_id: null,
+    }
+    TASK_BOOKS.unshift(tb)
+    return tb
+  }) as unknown,
+
+  'GET /apply/task-books/{id}': ((url: string) =>
+    TASK_BOOKS.find((t) => t.id === bId(url)) || TASK_BOOKS[0] || {}) as unknown,
+
+  'POST /apply/task-books/{id}:sign': ((url: string, ctx: { body: unknown }) => {
+    const tb = TASK_BOOKS.find((t) => t.id === bId(url))
+    const b = (ctx.body || {}) as Record<string, any>
+    if (!tb) return {}
+    const role = String(b.role || '').toUpperCase()
+    if (!tb.sign_records.some((r) => r.role === role)) {
+      tb.sign_records.push({ role, signerId: role === 'PI' ? tb.content_snapshot.pi_user_id : 2, signedAt: nowIso(), result: 'OK' })
+    }
+    const roles = new Set(tb.sign_records.map((r) => r.role))
+    if (tb.status === 'DRAFT' && roles.has('PI') && (roles.has('MANAGER') || roles.has('LEADER'))) {
+      tb.status = 'SIGNED'
+      tb.effective_date = nowIso().slice(0, 10)
+      tb.project_id = 9000 + tb.id // 演示：真实后端同事务建 E_PROJECT
+    }
+    return tb
+  }) as unknown,
+
+  'GET /project/{id}/progress-report': ((url: string) => {
+    const pid = bId(url)
+    return page(REPORTS.filter((r) => r.project_id === pid).sort((a, b) => b.id - a.id))
+  }) as unknown,
+
+  'POST /project/{id}/progress-report': ((url: string, ctx: { body: unknown }) => {
+    const pid = bId(url)
+    const b = (ctx.body || {}) as Record<string, any>
+    const r: MockReport = {
+      id: REPORTS.length + 1, project_id: pid, period: b.period || '2026Q1',
+      report_type: b.report_type || 'QUARTERLY', progress_percent: Number(b.progress_percent) || 0,
+      content_rich: b.content_rich ?? null, submitted_at: nowIso(),
+    }
+    REPORTS.unshift(r)
+    return r
+  }) as unknown,
+
+  'GET /project/{id}/final-accept': ((url: string) => {
+    const pid = bId(url)
+    return FINAL_ACCEPTS.find((f) => f.project_id === pid) || {}
+  }) as unknown,
+
+  'POST /project/{id}/final-accept': ((url: string, ctx: { body: unknown }) => {
+    const pid = bId(url)
+    const b = (ctx.body || {}) as Record<string, any>
+    const exist = FINAL_ACCEPTS.find((f) => f.project_id === pid)
+    if (exist) return exist
+    const fa: MockFinalAccept = {
+      id: FINAL_ACCEPTS.length + 1, project_id: pid, status: 'APPLIED',
+      output_summary: b.output_summary ?? null, apply_at: nowIso(),
+      accept_at: null, approval_doc_id: null,
+    }
+    FINAL_ACCEPTS.unshift(fa)
+    return fa
+  }) as unknown,
+}
+
+Object.assign(overrides, portalM2bOverrides)
