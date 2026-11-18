@@ -113,7 +113,8 @@ CREATE TABLE G_SUPPLIER (
                     CHECK (blacklist IN (0,1)),                 -- 是否黑名单（1=硬拦截，禁止参与任何新合同）
   review_status     VARCHAR(16)  NOT NULL DEFAULT 'PENDING'
                     CHECK (review_status IN ('PENDING','IN_LIBRARY','REJECTED','EXPIRED')),  -- 资质入库审查状态（对齐 status）
-  expire_date       DATE                                         -- 资质到期日（到期自动置 EXPIRED，禁止新合同引用）
+  expire_date       DATE,                                        -- 资质到期日（到期自动置 EXPIRED，禁止新合同引用）
+  org_id            BIGINT                                       -- M2-c：绑定外部合作机构 sys_partner_org.id（空=院内供应商）
 );
 CREATE UNIQUE INDEX uk_sup_code ON G_SUPPLIER(tenant_id, code) WHERE deleted = 0;
 CREATE UNIQUE INDEX uk_sup_credit ON G_SUPPLIER(tenant_id, credit_code) WHERE deleted = 0 AND credit_code IS NOT NULL;
@@ -121,12 +122,14 @@ CREATE INDEX idx_sup_tenant_entity_status ON G_SUPPLIER(tenant_id, legal_entity_
 CREATE INDEX idx_sup_type_status ON G_SUPPLIER(tenant_id, type, review_status);
 CREATE INDEX idx_sup_blacklist ON G_SUPPLIER(tenant_id, blacklist);
 CREATE INDEX idx_sup_expire ON G_SUPPLIER(expire_date);
+CREATE INDEX idx_sup_org ON G_SUPPLIER(org_id) WHERE deleted = 0;
 COMMENT ON TABLE  G_SUPPLIER IS '供应商/外协单位库（G-04/G-09）：资质入库、分级、黑名单硬拦截、到期禁止新合同';
 COMMENT ON COLUMN G_SUPPLIER.code            IS '单号前缀随 type 分流：供应商 SUP-年-序；外协单位 SOSC-年-序';
 COMMENT ON COLUMN G_SUPPLIER.qualification_json IS '资质证照 JSONB：每项含证书号/机关/有效期/附件；供 svc-policy 校验到期与齐全度';
 COMMENT ON COLUMN G_SUPPLIER.blacklist       IS '黑名单标记（0/1）；命中即禁止参与新合同/新招标，历史只读';
 COMMENT ON COLUMN G_SUPPLIER.review_status   IS '资质入库状态，与 status 同源；到期任务自动置 EXPIRED';
 COMMENT ON COLUMN G_SUPPLIER.expire_date     IS '最近一项资质到期日，过期后禁止被新合同引用（PRD 11）';
+COMMENT ON COLUMN G_SUPPLIER.org_id          IS 'M2-c 外部供应商门户：绑定 sys_partner_org.id，供应商自助登录后按机构看询价与合同进度（脱敏）';
 
 
 -- -----------------------------------------------------------------------------

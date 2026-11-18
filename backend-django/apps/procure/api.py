@@ -712,3 +712,24 @@ def payment_callback(request: HttpRequest):
     p.save()
     return ok(request, {"id": p.id, "status": p.status, "paid_amount": float(p.paid_amount),
                         "paid_at": p.paid_at.isoformat()})
+
+
+# ---------------------------------------------------------------- M2-c 门户（C4）
+
+def _supplier_or_404(tenant_id: int, supplier_id: int) -> GSupplier:
+    s = GSupplier.objects.filter(id=supplier_id, tenant_id=tenant_id, deleted=0).first()
+    if s is None:
+        raise ApiError(404, CODE_NOT_FOUND, "供应商不存在")
+    return s
+
+
+def _my_supplier(d) -> GSupplier | None:
+    """外部账号 → 其机构绑定的供应商；无绑定返回 None（不抛，由调用点决定 403/空页）。"""
+    from core.org_scope import current_org_id
+
+    org_id = current_org_id(d)
+    if not org_id:
+        return None
+    return GSupplier.objects.filter(
+        tenant_id=d.tenant_id, org_id=org_id, deleted=0
+    ).first()

@@ -62,6 +62,8 @@ class GSupplier(models.Model):
     grade = models.CharField(max_length=2, default="C")
     blacklist = models.BooleanField(default=False)
     qualification_expire_date = models.DateField(null=True, blank=True)
+    # M2-c：绑定外部合作机构（空=院内供应商）
+    org_id = models.BigIntegerField(null=True, blank=True)
 
     class Meta:
         db_table = "g_supplier"
