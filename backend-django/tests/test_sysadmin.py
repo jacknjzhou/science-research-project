@@ -98,7 +98,8 @@ def test_list_roles(seed_auth):
     codes = [x["code"] for x in r.json()["data"]["list"]]
     # 顺序无关：角色行可能由数据迁移 0003（policy.csv 顺序）或 seed_auth 创建
     assert sorted(codes) == sorted(["R-STAFF", "R-MANAGER", "R-LEADER", "R-FINANCE",
-                                    "R-AUDITOR", "R-EXPERT", "R-ETHICS", "R-ADMIN"])
+                                    "R-AUDITOR", "R-EXPERT", "R-ETHICS", "R-ADMIN",
+                                    "R-PARTNER"])  # M2-a 外部机构用户
 
 
 def test_create_update_delete_role(seed_auth):
@@ -342,7 +343,7 @@ def test_seed_demo_idempotent(db):
     call_command("seed_demo")  # 二次执行零新增
     from apps.sysadmin.models import SysDict, SysDictItem, SysRole, SysUser
 
-    assert SysRole.objects.count() == 8
+    assert SysRole.objects.count() == 9  # 8 基础角色 + M2-a R-PARTNER
     assert SysUser.objects.count() == 4
     assert SysDict.objects.count() == 5
     assert SysDictItem.objects.count() == 26

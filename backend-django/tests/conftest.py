@@ -33,6 +33,7 @@ def seed_auth(db):
         ("R-EXPERT", "评审专家"),
         ("R-ETHICS", "伦理委员会"),
         ("R-ADMIN", "系统管理员"),
+        ("R-PARTNER", "外部机构用户"),
     ]:
         # 数据迁移 0003 已按 policy.csv 创建同名角色行，这里幂等取用
         role, _ = SysRole.objects.get_or_create(

@@ -466,3 +466,50 @@ def test_m1d_keymatch2_coverage():
     assert key_match2("/api/v1/apply/guidelines/3:publish", "/api/v1/apply/*")
     assert key_match2("/api/v1/apply/guidelines/3:close", "/api/v1/apply/*")
     assert ("R-MANAGER", "/api/v1/apply/*", "POST") in rows
+
+
+# ===========================================================================
+# 5. M2-a：外部机构门户策略域（R-PARTNER）
+# ===========================================================================
+
+
+def test_m2a_partner_policy_rows_exist():
+    rows = _policy_p_rows()
+    expected = {
+        ("R-PARTNER", "/api/v1/portal/org", "GET"),
+        ("R-PARTNER", "/api/v1/portal/org", "PUT"),
+        ("R-PARTNER", "/api/v1/portal/home", "GET"),
+        ("R-PARTNER", "/api/v1/apply/guidelines", "GET"),
+        ("R-PARTNER", "/api/v1/apply/guidelines/*", "GET"),
+        ("R-PARTNER", "/api/v1/notifications", "GET"),
+        ("R-PARTNER", "/api/v1/notifications/*", "POST"),
+        ("R-PARTNER", "/api/v1/notifications/read-all", "POST"),
+        ("R-PARTNER", "/api/v1/dicts/*", "GET"),
+        ("R-PARTNER", "/api/v1/auth/me", "GET"),
+    }
+    assert expected <= rows
+
+
+def test_m2a_partner_denied_secret_domain():
+    """涉密域对外部用户默认全拒（roadmap 验收口径）：R-PARTNER 无任何涉密/管理域策略行。"""
+    rows = _policy_p_rows()
+    assert not [
+        r
+        for r in rows
+        if r[0] == "R-PARTNER"
+        and (
+            r[1].startswith("/api/v1/x")
+            or r[1].startswith("/api/v1/confsec")
+            or r[1].startswith("/api/v1/admin")
+        )
+    ]
+
+
+def test_m2a_partner_keymatch2_guideline_detail_covered():
+    """指南详情 /apply/guidelines/{id} 由 /api/v1/apply/guidelines/* 覆盖；写操作不被覆盖。"""
+    from casbin.util import key_match2
+
+    rows = _policy_p_rows()
+    assert key_match2("/api/v1/apply/guidelines/12", "/api/v1/apply/guidelines/*")
+    assert ("R-PARTNER", "/api/v1/apply/guidelines", "POST") not in rows
+    assert ("R-PARTNER", "/api/v1/apply/guidelines/*", "POST") not in rows

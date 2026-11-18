@@ -859,3 +859,15 @@ p, R-AUDITOR, /api/v1/security/log,                  GET
 p, R-ADMIN,   /api/v1/security/log,                  GET
 # 涉密人员审查/清退：R-ADMIN（MFA）
 p, R-ADMIN,   /api/v1/security/personnel/review,     POST
+
+# —— M2-a 外部机构门户（R-PARTNER：只读本机构与已发布指南，无任何业务写权；涉密域默认全拒）——
+p, R-PARTNER, /api/v1/auth/me,                       GET
+p, R-PARTNER, /api/v1/portal/org,                    GET
+p, R-PARTNER, /api/v1/portal/org,                    PUT
+p, R-PARTNER, /api/v1/portal/home,                   GET
+p, R-PARTNER, /api/v1/apply/guidelines,              GET
+p, R-PARTNER, /api/v1/apply/guidelines/*,            GET
+p, R-PARTNER, /api/v1/notifications,                 GET
+p, R-PARTNER, /api/v1/notifications/*,               POST
+p, R-PARTNER, /api/v1/notifications/read-all,        POST
+p, R-PARTNER, /api/v1/dicts/*,                       GET

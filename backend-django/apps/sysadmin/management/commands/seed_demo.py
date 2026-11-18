@@ -25,6 +25,7 @@ ROLES = [
     ("R-EXPERT", "评审专家"),
     ("R-ETHICS", "伦理委员会"),
     ("R-ADMIN", "系统管理员"),
+    ("R-PARTNER", "外部机构用户"),  # M2-a：机构门户
 ]
 
 USERS = [  # (username, real_name, email, staff_no, security_level, password)
