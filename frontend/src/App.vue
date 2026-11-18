@@ -197,6 +197,12 @@ const groups: NavGroup[] = [
     { v: 'admin-users', ic: '⚑', label: '用户管理', roles: ['R-ADMIN'] },
     { v: 'admin-roles', ic: '⚙', label: '角色与权限', roles: ['R-ADMIN', 'R-AUDITOR'] },
     { v: 'admin-dicts', ic: '☰', label: '数据字典', roles: ['R-ADMIN'] },
+    // M2-a：外部机构资质审核（R-MANAGER；R-ADMIN 恒可见）
+    { v: 'admin-partner-orgs', ic: '◎', label: '机构资质审核', roles: ['R-MANAGER', 'R-ADMIN'] },
+  ]},
+  { t: '机 构 门 户', items: [
+    // M2-a：外部机构用户专属（R-PARTNER）；内部账号不看该组
+    { v: 'portal', ic: '⌂', label: '机构门户', roles: ['R-PARTNER'] },
   ]},
 ]
 
@@ -254,6 +260,9 @@ watch(() => route.path, () => { if (auth.isAuthed) loadBadges() })
       <div v-if="loginErr" style="color:#c0392b;font-size:13px;margin:-4px 0 8px">{{ loginErr }}</div>
       <button class="btn seal login-btn" :disabled="logging" @click="submitLogin">{{ logging ? '登录中…' : '登 录' }}</button>
       <div class="login-foot">演示账号 <b>admin/Admin@123456</b> · <b>staff/Staff@123456</b> · <b>finance/Finance@123456</b></div>
+      <div class="login-foot" style="margin-top:6px">
+        外部机构首次使用？<a href="#/register" style="color:var(--seal);text-decoration:underline">机构自助注册</a>
+      </div>
     </div>
   </div>
 

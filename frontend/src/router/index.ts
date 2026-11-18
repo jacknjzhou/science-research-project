@@ -49,6 +49,10 @@ const routes: RouteRecordRaw[] = [
   { path: '/admin/users', name: 'admin-users', meta: { zh: '用户管理', en: 'USER ADMIN', roles: ['R-ADMIN'] }, component: () => import('@/views/admin/UsersView.vue') },
   { path: '/admin/roles', name: 'admin-roles', meta: { zh: '角色与权限', en: 'ROLES & PERMISSIONS', roles: ['R-ADMIN', 'R-AUDITOR'] }, component: () => import('@/views/admin/RolesView.vue') },
   { path: '/admin/dicts', name: 'admin-dicts', meta: { zh: '数据字典', en: 'DICTIONARIES', roles: ['R-ADMIN'] }, component: () => import('@/views/admin/DictsView.vue') },
+  // —— M2-a：外部机构注册（公开）/ 机构门户（R-PARTNER）/ 机构审核台（R-MANAGER）——
+  { path: '/register', name: 'register', meta: { zh: '外部机构注册', en: 'PARTNER SIGN-UP', public: true }, component: () => import('@/views/RegisterView.vue') },
+  { path: '/portal', name: 'portal', meta: { zh: '机构门户', en: 'PARTNER PORTAL', roles: ['R-PARTNER'] }, component: () => import('@/views/PortalView.vue') },
+  { path: '/admin/partner-orgs', name: 'admin-partner-orgs', meta: { zh: '机构资质审核', en: 'PARTNER ACCREDITATION', roles: ['R-MANAGER', 'R-ADMIN'] }, component: () => import('@/views/admin/PartnerOrgsView.vue') },
   // —— 越权兜底 ——
   { path: '/forbidden', name: 'forbidden', meta: { zh: '无访问权限', en: 'FORBIDDEN', public: true }, component: () => import('@/views/ForbiddenView.vue') },
 ]

@@ -72,6 +72,18 @@ const ROLE_CAPS: Record<string, string[]> = {
     '/api/v1/disbursements POST', '/api/v1/disbursements/check-contract POST',
     '/api/v1/incomes/ocr-receipt POST',
     '/api/v1/projects/*/open-account POST',
+    // M2-a（policy.csv:859-862）：外部机构资质审核台
+    '/api/v1/partner-orgs GET', '/api/v1/partner-orgs/*/audit POST',
+  ],
+  // M2-a：外部机构用户——仅本机构门户与公开面（镜像 policy.csv R-PARTNER 段）
+  'R-PARTNER': [
+    '/api/v1/auth/me GET',
+    '/api/v1/portal/org GET', '/api/v1/portal/org PUT',
+    '/api/v1/portal/home GET',
+    '/api/v1/apply/guidelines GET', '/api/v1/apply/guidelines/* GET',
+    '/api/v1/notifications GET', '/api/v1/notifications/* POST',
+    '/api/v1/notifications/read-all POST',
+    '/api/v1/dicts/* GET',
   ],
   'R-STAFF': [
     ...W(['GET']),
@@ -111,6 +123,9 @@ const PAGE_GRANTS: Array<[string, string]> = [
   // import-bank-flow / incomes claim 由 R-MANAGER/R-FINANCE 既有 /incomes/* 通配覆盖，R-LEADER 无）
   ['funding-disburse', 'R-MANAGER'], ['funding-disburse', 'R-FINANCE'], ['funding-disburse', 'R-LEADER'],
   ['funding-income', 'R-MANAGER'], ['funding-income', 'R-FINANCE'], ['funding-income', 'R-LEADER'],
+  // M2-a：外部机构门户 + 资质审核台（policy.csv R-PARTNER / R-MANAGER 行同口径）
+  ['portal', 'R-PARTNER'],
+  ['admin-partner-orgs', 'R-MANAGER'], ['admin-partner-orgs', 'R-ADMIN'],
 ]
 
 function usernameFromToken(token: string): string {
