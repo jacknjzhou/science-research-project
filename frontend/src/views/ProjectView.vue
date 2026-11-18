@@ -46,9 +46,10 @@ const route = useRoute()
 // mock 时代的演示 ID 90001 在真后端不存在（404 项目不存在），已废弃。
 let id = String(route.params.id || '')
 
-type TabKey = 'info' | 'mile' | 'fund' | 'member' | 'doc'
+type TabKey = 'info' | 'board' | 'mile' | 'fund' | 'member' | 'doc'
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'info', label: '基本信息' },
+  { key: 'board', label: '看板' },
   { key: 'mile', label: '里程碑' },
   { key: 'fund', label: '经费' },
   { key: 'member', label: '成员' },
@@ -62,7 +63,7 @@ const tasks = ref<ETask[]>([])
 const milestones = ref<EMilestone[]>([])
 const checklist = ref<EArchiveChecklist | null>(null)
 const loading = ref(true)
-const tabLoading = ref<Record<TabKey, boolean>>({ info: false, mile: false, fund: false, member: false, doc: false })
+const tabLoading = ref<Record<TabKey, boolean>>({ info: false, board: false, mile: false, fund: false, member: false, doc: false })
 
 const num = (s?: string | number | null) => toNum(s)
 const wan = (s?: string | number | null) => toWan(s)
@@ -151,8 +152,11 @@ async function loadDetail() {
     loading.value = false
   }
 }
-let mileLoaded = false, docLoaded = false
+let mileLoaded = false, docLoaded = false, boardLoaded = false
 async function ensureTab(key: TabKey) {
+  if (key === 'board' && !boardLoaded) {
+    await loadBoard()
+  }
   if (key === 'mile' && !mileLoaded) {
     tabLoading.value.mile = true
     try {
@@ -234,6 +238,40 @@ async function previewDoc(c: ChecklistItem) {
     toast('预览失败：' + (e?.message || e))
   }
 }
+// —— 八要素看板（B2，契约 GET /project/{id}/board → ProjectBoard）——
+// 八要素：经费/进度/人员/质量/外包/变更/成果（人员与质量同一卡内并列），
+// 数值全部后端口径，前端不做二次计算，仅格式化。
+interface BoardFund {
+  projectId: number; budgetApproved: string; incomeTotal: string; used: string; frozen: string
+  remaining: string; execRateByBudget: string; execRateByIncome: string
+}
+interface ProjectBoard {
+  fund: BoardFund
+  progress: { milestonesTotal: number; milestonesDone: number; tasksTotal: number; tasksDone: number }
+  members: { userId: number; name: string | null }[]
+  quality: { healthScore: number; riskLevel: string; lastCheckAt: string | null }
+  outsource: { contracts: number; amountTotal: string }
+  changes: { total: number; byStatus: Record<string, number> }
+  outputs: { total: number }
+}
+const board = ref<ProjectBoard | null>(null)
+async function loadBoard() {
+  if (!id) return
+  tabLoading.value.board = true
+  try {
+    board.value = await api.get<ProjectBoard>(`/project/${id}/board`)
+    boardLoaded = true
+  } catch (e: any) { toast('看板加载失败：' + (e?.message || e)) }
+  finally { tabLoading.value.board = false }
+}
+const boardDone = computed(() => {
+  const b = board.value
+  if (!b) return ''
+  const p = b.progress
+  const rate = p.tasksTotal ? Math.round((p.tasksDone / p.tasksTotal) * 100) : 0
+  return `${p.tasksDone}/${p.tasksTotal} 任务 · ${rate}%`
+})
+
 // —— 发起变更向导（E-07，契约 POST /project/{id}/change-request）——
 // 后端 changeRequestBody 为 snake_case：change_type/old_value/new_value/reason；
 // 响应 ToAPIChangeRequest：status/approval_status/impact_analysis/conflict_flag。
@@ -254,6 +292,8 @@ const CHANGE_TYPES: { key: ChangeType; label: string; desc: string }[] = [
 ]
 const changeOpen = ref(false)
 const changeType = ref<ChangeType | ''>('')
+// 严重程度缺省 MAJOR：向导是人工发起，默认走审批更安全；GENERAL 为内部备案即时生效。
+const changeSeverity = ref<'MAJOR' | 'GENERAL'>('MAJOR')
 const changeReason = ref('')
 const changeSubmitting = ref(false)
 const changeResult = ref<ChangeRequestResult | null>(null)
@@ -262,7 +302,8 @@ const changeError = ref('')
 const fEnd = ref('')            // DELAY：新结题日期
 const fNewTitle = ref('')       // TITLE
 const fSubject = ref('')        // BUDGET：科目（默认取第一个经费用行）
-const fAmount = ref('')         // BUDGET：新批复金额（万元）
+const fAmount = ref('')         // BUDGET：新批复金额（万元，科目级说明）
+const fTotalBudget = ref('')    // BUDGET：变更后项目总预算（元，B4 生效回写锚点）
 const fMemberAction = ref<'ADD' | 'REMOVE'>('ADD')
 const fMemberName = ref('')
 const fMemberRole = ref('参与人员')
@@ -270,6 +311,7 @@ const fScope = ref('')          // SCOPE
 
 function openChange() {
   changeType.value = ''
+  changeSeverity.value = 'MAJOR'
   changeReason.value = ''
   changeResult.value = null
   changeError.value = ''
@@ -277,6 +319,7 @@ function openChange() {
   fNewTitle.value = detail.value?.title || ''
   fSubject.value = detail.value?.funding_lines?.[0]?.subject || '设备费'
   fAmount.value = ''
+  fTotalBudget.value = detail.value?.total_budget ?? ''
   fMemberAction.value = 'ADD'
   fMemberName.value = ''
   fMemberRole.value = '参与人员'
@@ -287,27 +330,35 @@ const changeReady = computed(() => {
   switch (changeType.value) {
     case 'DELAY': return !!fEnd.value
     case 'TITLE': return !!fNewTitle.value.trim() && fNewTitle.value.trim() !== detail.value?.title
-    case 'BUDGET': return !!fSubject.value && !!fAmount.value && !isNaN(Number(fAmount.value))
+    case 'BUDGET': return !!fSubject.value && !!fAmount.value && !isNaN(Number(fAmount.value)) && !!fTotalBudget.value && !isNaN(Number(fTotalBudget.value))
     case 'MEMBER': return !!fMemberName.value.trim()
     case 'SCOPE': return !!fScope.value.trim()
     default: return false
   }
 })
-function buildChangePayload(): { change_type: string; old_value: any; new_value: any; reason: string } | null {
+function buildChangePayload(): { change_type: string; old_value: any; new_value: any; reason: string; severity: 'MAJOR' | 'GENERAL' } | null {
   const d = detail.value
   switch (changeType.value) {
     case 'DELAY':
-      return { change_type: 'DELAY', old_value: { end_date: d?.end_date || null }, new_value: { end_date: fEnd.value }, reason: changeReason.value }
+      return { change_type: 'DELAY', old_value: { end_date: d?.end_date || null }, new_value: { endDate: fEnd.value }, reason: changeReason.value, severity: changeSeverity.value }
     case 'BUDGET': {
       const line = (d?.funding_lines || []).find((f) => f.subject === fSubject.value)
-      return { change_type: 'BUDGET', old_value: { subject: fSubject.value, approved: line?.approved ?? null }, new_value: { subject: fSubject.value, approved: String(Number(fAmount.value)) }, reason: changeReason.value }
+      // totalBudget 是 B4 生效回写的锚点（后端 _apply_change 读 newValue.totalBudget 并联动 F 域预算）；
+      // subject/approved 仅作科目级说明字段随快照留痕。
+      return {
+        change_type: 'BUDGET',
+        old_value: { subject: fSubject.value, approved: line?.approved ?? null, totalBudget: d?.total_budget ?? null },
+        new_value: { subject: fSubject.value, approved: String(Number(fAmount.value)), totalBudget: String(Number(fTotalBudget.value)) },
+        reason: changeReason.value,
+        severity: changeSeverity.value,
+      }
     }
     case 'MEMBER':
-      return { change_type: 'MEMBER', old_value: { members: d?.members || [] }, new_value: { action: fMemberAction.value, name: fMemberName.value.trim(), role: fMemberRole.value }, reason: changeReason.value }
+      return { change_type: 'MEMBER', old_value: { members: d?.members || [] }, new_value: { action: fMemberAction.value, name: fMemberName.value.trim(), role: fMemberRole.value }, reason: changeReason.value, severity: changeSeverity.value }
     case 'TITLE':
-      return { change_type: 'TITLE', old_value: { title: d?.title || '' }, new_value: { title: fNewTitle.value.trim() }, reason: changeReason.value }
+      return { change_type: 'TITLE', old_value: { title: d?.title || '' }, new_value: { title: fNewTitle.value.trim() }, reason: changeReason.value, severity: changeSeverity.value }
     case 'SCOPE':
-      return { change_type: 'SCOPE', old_value: { scope: '见申报书/任务书' }, new_value: { scope: fScope.value.trim() }, reason: changeReason.value }
+      return { change_type: 'SCOPE', old_value: { scope: '见申报书/任务书' }, new_value: { scope: fScope.value.trim() }, reason: changeReason.value, severity: changeSeverity.value }
   }
   return null
 }
@@ -364,6 +415,67 @@ function onKey(e: KeyboardEvent) {
 
     <div class="tabs">
       <div class="tab" :class="{ on: tab === t.key }" v-for="t in TABS" :key="t.key" @click="switchTab(t.key)">{{ t.label }}</div>
+    </div>
+
+    <!-- 八要素看板（B2）：每要素给数字 + 直达对应业务系统 -->
+    <div class="pane" v-show="tab === 'board'">
+      <div v-if="tabLoading.board" style="padding:24px;color:var(--ink-mute)">看板加载中…</div>
+      <div v-else-if="!board" style="padding:24px;color:var(--ink-mute)">暂无看板数据</div>
+      <template v-else>
+        <div class="grid g3">
+          <div class="card">
+            <div class="card-h"><h4>经费</h4><button class="btn ghost sm" @click="switchTab('fund')">明细</button></div>
+            <div class="card-b">
+              <div class="kv"><span>批复预算</span><b class="mono">{{ board.fund.budgetApproved }}</b></div>
+              <div class="kv"><span>已用 / 冻结</span><b class="mono">{{ board.fund.used }} / {{ board.fund.frozen }}</b></div>
+              <div class="kv"><span>结余</span><b class="mono">{{ board.fund.remaining }}</b></div>
+              <div class="kv"><span>预算执行率</span><b class="mono">{{ pct(board.fund.execRateByBudget) }}%</b></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h4>进度</h4><button class="btn ghost sm" @click="switchTab('mile')">里程碑</button></div>
+            <div class="card-b">
+              <div class="kv"><span>里程碑完成</span><b class="mono">{{ board.progress.milestonesDone }} / {{ board.progress.milestonesTotal }}</b></div>
+              <div class="kv"><span>任务完成</span><b class="mono">{{ board.progress.tasksDone }} / {{ board.progress.tasksTotal }}</b></div>
+              <div class="kv"><span>任务完成率</span><b class="mono">{{ boardDone }}</b></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h4>人员</h4><button class="btn ghost sm" @click="switchTab('member')">成员</button></div>
+            <div class="card-b">
+              <div class="kv"><span>成员数</span><b class="mono">{{ board.members.length }}</b></div>
+              <div style="margin-top:8px;font-size:12px;line-height:1.9;color:var(--ink-mute)">
+                {{ board.members.map((m) => m.name || ('用户#' + m.userId)).join('、') || '暂无成员' }}
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h4>质量</h4><span class="tag" :class="board.quality.riskLevel === 'LOW' ? 'ok' : 'warn'">{{ board.quality.riskLevel }}</span></div>
+            <div class="card-b">
+              <div class="kv"><span>健康度</span><b class="mono">{{ board.quality.healthScore }}</b></div>
+              <div class="kv"><span>最近体检</span><b>{{ board.quality.lastCheckAt || '—' }}</b></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h4>外包</h4><button class="btn ghost sm" @click="$router.push({ name: 'procurement' }).catch(() => {})">合同</button></div>
+            <div class="card-b">
+              <div class="kv"><span>合同数</span><b class="mono">{{ board.outsource.contracts }}</b></div>
+              <div class="kv"><span>合同金额</span><b class="mono">{{ board.outsource.amountTotal }}</b></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h4>变更</h4><span class="tag info">{{ board.changes.total }} 次</span></div>
+            <div class="card-b">
+              <div class="kv" v-for="(n, st) in board.changes.byStatus" :key="st"><span>{{ CHANGE_STATUS_TEXT[String(st)] || st }}</span><b class="mono">{{ n }}</b></div>
+              <div v-if="!Object.keys(board.changes.byStatus).length" style="font-size:12px;color:var(--ink-mute)">暂无变更</div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h4>成果</h4><button class="btn ghost sm" @click="$router.push({ name: 'output' }).catch(() => {})">成果库</button></div>
+            <div class="card-b"><div class="kv"><span>登记成果</span><b class="mono">{{ board.outputs.total }}</b></div></div>
+          </div>
+        </div>
+      </template>
     </div>
 
     <!-- 基本信息 -->
@@ -573,6 +685,17 @@ function onKey(e: KeyboardEvent) {
             </button>
           </div>
 
+          <!-- 严重程度（B4 分流）：MAJOR=重大变更走主管审批；GENERAL=一般变更内部备案即时生效 -->
+          <div v-if="changeType" class="ch-sec">严重程度</div>
+          <div v-if="changeType" class="ch-types">
+            <button class="ch-type" :class="{ on: changeSeverity === 'MAJOR' }" type="button" @click="changeSeverity = 'MAJOR'">
+              <b>重大变更</b><span>提交后进入逐级审批，通过才生效</span>
+            </button>
+            <button class="ch-type" :class="{ on: changeSeverity === 'GENERAL' }" type="button" @click="changeSeverity = 'GENERAL'">
+              <b>一般变更</b><span>内部备案，提交即生效（留版本快照）</span>
+            </button>
+          </div>
+
           <template v-if="changeType">
             <div class="ch-form">
               <template v-if="changeType === 'DELAY'">
@@ -593,6 +716,10 @@ function onKey(e: KeyboardEvent) {
                 </div>
                 <div class="ch-field"><label>变更后批复金额（万元） *</label><input type="number" min="0" step="0.01" v-model="fAmount" placeholder="如 95.00" /></div>
               </template>
+              <template v-if="changeType === 'BUDGET'">
+                <div class="ch-field"><label>变更后项目总预算 *</label><input type="number" step="0.01" v-model="fTotalBudget" placeholder="元" /></div>
+                <p class="ch-tip">项目总预算为 B4 生效回写与财务预算联动的锚点；科目级金额仅作变更说明随版本快照留痕。</p>
+              </template>
               <template v-if="changeType === 'MEMBER'">
                 <div class="ch-field"><label>操作 *</label>
                   <span class="ch-radio">
@@ -605,6 +732,7 @@ function onKey(e: KeyboardEvent) {
                   <select v-model="fMemberRole"><option>参与人员</option><option>子课题负责人</option><option>财务联络员</option></select>
                 </div>
               </template>
+              <p class="ch-tip" v-if="changeType === 'MEMBER'">成员名单以人员模块为准：审批生效后按人力资源口径同步（本表单仅记录变更意向）。</p>
               <template v-if="changeType === 'SCOPE'">
                 <div class="ch-field"><label>变更后研究内容与考核指标 *</label><textarea rows="4" v-model="fScope" placeholder="说明调整后的研究范围、技术路线与考核指标"></textarea></div>
               </template>

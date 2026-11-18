@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-import { list } from '@/api/client'
+import { api, list } from '@/api/client'
+import { auth } from '@/api/auth'
 import { useDict } from '@/composables/useDict'
 
 // 契约 Guideline（design/01-P）：真实后端字段，展示层语义字段（ico/notes/tags/状态）
@@ -36,6 +37,33 @@ const loading = ref(true)
 const activeType = ref('全部')
 const keyword = ref('')
 const active = ref<Guideline | null>(null) // 详情抽屉
+const acting = ref(false)
+// 发布/关闭属 R-MANAGER 写权（policy.csv apply/* POST 覆盖），R-STAFF 亦可见；后端幂等。
+const canPublish = computed(() => auth.can('/apply/guidelines/0:publish POST'))
+const canClose = computed(() => auth.can('/apply/guidelines/0:close POST'))
+async function publishGuide(g: Guideline | null) {
+  if (!g || acting.value) return
+  acting.value = true
+  try {
+    const r = await api.post<Guideline>(`/apply/guidelines/${g.id}:publish`)
+    g.status = r?.status || 'PUBLISHED'
+    g.publish_at = r?.publish_at ?? g.publish_at
+    if (active.value?.id === g.id) active.value = { ...g }
+    toast(`《${g.title}》已发布，已通知科研人员填报`)
+  } catch (e: any) { toast('发布失败：' + (e?.message || e)) }
+  finally { acting.value = false }
+}
+async function closeGuideAction(g: Guideline | null) {
+  if (!g || acting.value) return
+  acting.value = true
+  try {
+    const r = await api.post<Guideline>(`/apply/guidelines/${g.id}:close`)
+    g.status = r?.status || 'CLOSED'
+    if (active.value?.id === g.id) active.value = { ...g }
+    toast(`《${g.title}》已关闭`)
+  } catch (e: any) { toast('关闭失败：' + (e?.message || e)) }
+  finally { acting.value = false }
+}
 
 // 类型筛选：契约 project_type 为字典 item_code（PRD 2.8），useDict 拉取 + 硬编码 fallback
 const TYPE_FALLBACK = [
@@ -274,7 +302,19 @@ function goApply() {
             <span v-else></span>
             <div>
               <button class="btn ghost" @click="closeGuide">关闭</button>
-              <button class="btn" @click="goApply">去申报 →</button>
+              <button
+                v-if="canClose && active.status === 'PUBLISHED'"
+                class="btn ghost"
+                :disabled="acting"
+                @click="closeGuideAction(active)"
+              >关闭征集</button>
+              <button
+                v-if="canPublish && active.status === 'DRAFT'"
+                class="btn"
+                :disabled="acting"
+                @click="publishGuide(active)"
+              >发布指南</button>
+              <button v-else class="btn" @click="goApply">去申报 →</button>
             </div>
           </footer>
         </aside>

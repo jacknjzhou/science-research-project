@@ -140,6 +140,52 @@ export const overrides: Record<string, unknown> = {
   'GET /project/{id}': detail,
   'GET /project/{id}/tasks': { list: taskList },
   'GET /project/{id}/milestones': { list: milestoneList },
+  // B2 八要素看板：数值取自本 override 内的 detail/taskList/milestoneList，保证与各 tab 自洽。
+  'GET /project/{id}/board': ((url: string) => {
+    const d = detail(url) as any
+    return {
+    fund: {
+      projectId: 1,
+      budgetApproved: '1200000',
+      incomeTotal: '900000',
+      used: '420000',
+      frozen: '30000',
+      remaining: '750000',
+      execRateByBudget: '0.3750',
+      execRateByIncome: '0.5000',
+    },
+    progress: {
+      milestonesTotal: milestoneList.length,
+      milestonesDone: milestoneList.filter((m: any) => m.status === 'ACHIEVED').length,
+      tasksTotal: taskList.length,
+      tasksDone: taskList.filter((t: any) => t.status === 'COMPLETED').length,
+    },
+    members: [
+      { userId: 2, name: '张伟' },
+      { userId: 3, name: '李娜' },
+    ],
+    quality: { healthScore: 86, riskLevel: 'LOW', lastCheckAt: '2026-10-01T09:00:00Z' },
+    outsource: { contracts: 2, amountTotal: '260000' },
+    changes: { total: 2, byStatus: { EFFECTIVE: 1, SUBMITTED: 1 } },
+    outputs: { total: 5 },
+    }
+  }) as unknown,
+  // B4 变更版本快照（v1=提交时基线）
+  'GET /project/{id}/change-request/{changeId}/versions': ((url: string) => {
+    const d = detail(url) as any
+    return {
+      list: [
+        {
+          id: 1,
+          changeId: 1,
+          versionNo: 1,
+          snapshot: { title: d.title, endDate: d.end_date, memberIds: [2, 3], totalBudget: d.total_budget },
+          createdAt: '2026-10-12T02:00:00Z',
+          creatorId: 2,
+        },
+      ],
+    }
+  }) as unknown,
   'GET /project/{id}/risk-warnings': riskWarnings,
   'GET /project/{id}/archive-checklist': archiveChecklist,
 }

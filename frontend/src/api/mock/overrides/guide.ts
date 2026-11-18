@@ -125,4 +125,15 @@ export const overrides: Record<string, unknown> = {
     page: 1,
     size: 20,
   },
+  // B5 指南发布/关闭（契约 POST /apply/guidelines/{id}:publish|:close，幂等）
+  'POST /apply/guidelines/{id}:publish': ((url: string) => {
+    const id = Number(decodeURIComponent(url.split('/apply/guidelines/')[1]?.split(':')[0]?.split('?')[0] || '')) || 3001
+    const g = (overrides['GET /apply/guidelines'] as any)?.list?.find((x: any) => x.id === id) ?? {}
+    return { ...g, id, status: 'PUBLISHED', publish_at: g.publish_at || '2026-11-18T01:00:00Z' }
+  }) as unknown,
+  'POST /apply/guidelines/{id}:close': ((url: string) => {
+    const id = Number(decodeURIComponent(url.split('/apply/guidelines/')[1]?.split(':')[0]?.split('?')[0] || '')) || 3001
+    const g = (overrides['GET /apply/guidelines'] as any)?.list?.find((x: any) => x.id === id) ?? {}
+    return { ...g, id, status: 'CLOSED' }
+  }) as unknown,
 }
