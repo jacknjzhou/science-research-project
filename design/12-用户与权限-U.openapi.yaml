@@ -1071,6 +1071,8 @@ components:
         status:            { type: string, enum: [ACTIVE, LOCKED, DISABLED] }
         tenant_id:         { type: integer, format: int64 }
         legal_entity_id:   { type: integer, format: int64, nullable: true }
+        org_id:            { type: integer, format: int64, nullable: true, description: 外部机构 sys_partner_org.id（M2-b；院内用户为 null） }
+        user_source:       { type: string, enum: [INTERNAL, EXTERNAL], description: 身份来源（M2-b） }
         roles:             { type: array, items: { type: string } }
         created_at:        { type: string, format: date-time }
         updated_at:        { type: string, format: date-time }

@@ -3,7 +3,7 @@ import { ref, reactive, computed } from 'vue'
 import { api, ApiError, type PageResult } from '@/api/client'
 
 // 阶段汇报与验收申请（M2-b C2）：外部机构按本机构项目提交/查看。
-// 字段全 snake_case（02-E 契约 EProgressReport / EFinalAccept）。
+// 后端当前返回 snake_case（并同时补了契约 camelCase 别名，见 apps/project/mappings.py）。
 interface Report {
   id: number
   project_id?: number
@@ -34,7 +34,7 @@ const err = ref('')
 const fa = ref<FinalAccept | null>(null)
 const faErr = ref('')
 
-const form = reactive({ period: '', report_type: 'QUARTERLY', progress_percent: 0, content_rich: '' })
+const form = reactive({ period: '', report_type: 'SELF', progress_percent: 0, content_rich: '' })
 const ready = computed(() => !!projectId.value && form.period.trim().length > 0)
 
 async function load() {
@@ -145,8 +145,8 @@ function useProject() {
           <div>
             <div class="fld">类型</div>
             <select v-model="form.report_type" class="fg" style="width:100%">
-              <option value="QUARTERLY">季度汇报</option>
-              <option value="HALF_YEAR">半年汇报</option>
+              <option value="SELF">季度自评</option>
+              <option value="MID_CHECK">中期检查</option>
               <option value="ANNUAL">年度汇报</option>
             </select>
           </div>

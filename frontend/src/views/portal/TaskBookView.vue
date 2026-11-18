@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, ApiError } from '@/api/client'
+import { auth } from '@/api/auth'
 
 // 任务书详情与签署（M2-b C2）：PI 以本人身份签署，管理端/领导签署后即立项建项。
 // 字段全 snake_case（01-P 契约 TaskBook）；content_snapshot 在生成时冻结，不可改。
@@ -30,9 +31,22 @@ const err = ref('')
 const acting = ref(false)
 
 const id = computed(() => Number(route.query.id || 0))
+// 终审 M2-b C2/I4：按钮必须按「当前用户身份 + 角色」收窄，服务端仍会再校验一次
+const myRoles = computed(() => auth.roles || [])
+const myUid = computed(() => Number((auth.user as any)?.id || 0))
+const isPartner = computed(() => myRoles.value.includes('R-PARTNER'))
+const signedRoles = computed(() => (tb.value?.sign_records || []).map((r) => r.role))
+const snapPiId = computed(() => Number((tb.value?.content_snapshot as any)?.pi_user_id || 0))
+
 const canSignPi = computed(() =>
-  !!tb.value && tb.value.status === 'DRAFT' &&
-  !(tb.value.sign_records || []).some((r) => r.role === 'PI'))
+  !!tb.value && tb.value.status === 'DRAFT' && !signedRoles.value.includes('PI') &&
+  myUid.value > 0 && myUid.value === snapPiId.value)
+const canSignManager = computed(() =>
+  !!tb.value && tb.value.status === 'DRAFT' && !isPartner.value &&
+  myRoles.value.includes('R-MANAGER') && !signedRoles.value.includes('MANAGER'))
+const canSignLeader = computed(() =>
+  !!tb.value && tb.value.status === 'DRAFT' && !isPartner.value &&
+  myRoles.value.includes('R-LEADER') && !signedRoles.value.includes('LEADER'))
 
 const snapshot = computed(() => {
   const s = tb.value?.content_snapshot || {}
@@ -125,8 +139,10 @@ onMounted(load)
           <h5>签署记录</h5>
           <div style="display:flex;gap:8px">
             <button v-if="canSignPi" class="btn seal sm" :disabled="acting" @click="sign('PI')">以 PI 身份签署</button>
-            <button v-if="tb.status === 'DRAFT'" class="btn sm" :disabled="acting" @click="sign('MANAGER')">科研管理签署</button>
-            <button v-if="tb.status === 'DRAFT'" class="btn sm ghost" :disabled="acting" @click="sign('LEADER')">院所领导签署</button>
+            <button v-if="canSignManager" class="btn sm" :disabled="acting" @click="sign('MANAGER')">科研管理签署</button>
+            <button v-if="canSignLeader" class="btn sm ghost" :disabled="acting" @click="sign('LEADER')">院所领导签署</button>
+            <span v-if="tb.status === 'DRAFT' && !canSignPi && !canSignManager && !canSignLeader"
+                  style="font-size:11.5px;color:var(--ink-mute)">当前账号无权签署（PI 须为申报负责人本人；管理端签署需 R-MANAGER/R-LEADER）</span>
           </div>
         </div>
         <table class="tbl" width="100%" style="border-collapse:collapse">

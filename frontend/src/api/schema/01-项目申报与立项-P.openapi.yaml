@@ -633,6 +633,40 @@ paths:
               schema: { $ref: '#/components/schemas/ApiResponse' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /apply/applications/{id}:decide:
+    post:
+      tags: [application]
+      summary: 评审决议（M2-b，PUBLISHED/DECIDED）
+      description: >-
+        评审阶段的状态推进端点：仅 R-MANAGER / R-LEADER 可调用，decision=PUBLISHED
+        （拟资助公示）或 DECIDED（已决）；仅 SUBMITTED/FORMAL_CHECK/RECOMMENDED/
+        UNDER_REVIEW/INTERVIEWING 可推进，其余状态 409。决议为 PUBLISHED/DECIDED 后
+        才可生成任务书并签署立项。
+      operationId: decideApplication
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [PUBLISHED, DECIDED] }
+                comment:  { type: string, maxLength: 512 }
+      responses:
+        '200':
+          description: 决议后的申报
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
   /apply/ai/draft:
     post:
       tags: [ai]
