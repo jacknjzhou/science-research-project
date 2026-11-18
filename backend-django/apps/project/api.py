@@ -34,6 +34,7 @@ from apps.project.models import (
     EArchiveChecklist,
     EChangeRequest,
     EEvalTemplate,
+    EReport,
     EFinalAccept,
     EHealthHistory,
     EMidCheck,
@@ -43,6 +44,7 @@ from apps.project.models import (
     EProjectCategory,
     ETask,
 )
+from apps.funding.mappings import code_of
 from apps.sysadmin.mappings import fmt_ts
 from core import approval
 from core.auth.deps import domain_from
@@ -858,9 +860,62 @@ def set_mid_check_experts(mid_check_id: int, expert_user_ids: list[int]) -> None
     mc.save(update_fields=["expert_ids", "updated_at"])
 
 
+def _notify(user_id: int, typ: str, title: str, content: str, biz_ref: str, tenant_id: int):
+    """通知触达（best-effort：永不阻断业务，对齐 funding/api.py:116 范式）。"""
+    if user_id and user_id > 0:
+        try:
+            SysNotification.objects.create(
+                tenant_id=tenant_id, user_id=user_id, typ=typ,
+                title=title, content=content, biz_ref=biz_ref)
+        except Exception:
+            pass
+
+
+def _notify_role(tenant_id: int, role: str, typ: str, title: str, content: str, biz_ref: str):
+    """按角色广播通知（best-effort，E 域自建同款，对齐 funding/api.py:122-137）。"""
+    try:
+        from apps.sysadmin.models import SysRole, SysUser, SysUserRole
+        r = SysRole.objects.filter(code=role, tenant_id=tenant_id).first()
+        if r is None:
+            return
+        uids = list(SysUserRole.objects.filter(role=r).values_list("user_id", flat=True))
+        for uid in SysUser.objects.filter(id__in=uids, status="ACTIVE").values_list("id", flat=True):
+            _notify(uid, typ, title, content, biz_ref, tenant_id)
+    except Exception:
+        pass
+
+
+def _issue_report(project_id: int, tenant_id: int, user_id: int, doc_type: str, title: str,
+                  conclusion: str | None, score_detail: Any,
+                  mid_check_id: int | None = None,
+                  final_accept_id: int | None = None) -> int:
+    """签发评估批文（幂等：同 (doc_type, mid_check_id|final_accept_id) 命中即复用）。
+
+    批文是评估结论的正式文本载体，一次评估只出一份；重复 conclude 不重复签发。
+    """
+    qs = EReport.objects.filter(tenant_id=tenant_id, project_id=project_id,
+                                doc_type=doc_type, deleted=0)
+    if mid_check_id is not None:
+        qs = qs.filter(mid_check_id=mid_check_id)
+    elif final_accept_id is not None:
+        qs = qs.filter(final_accept_id=final_accept_id)
+    old = qs.first()
+    if old is not None:
+        return old.id
+    rp = EReport.objects.create(
+        tenant_id=tenant_id, creator_id=user_id, project_id=project_id,
+        doc_type=doc_type, title=title, conclusion=conclusion,
+        score_detail=score_detail, status="ISSUED", issued_at=dj_tz.now(),
+        mid_check_id=mid_check_id, final_accept_id=final_accept_id,
+    )
+    rp.code = code_of("RPT", rp.id)
+    rp.save(update_fields=["code"])
+    return rp.id
+
+
 def conclude_mid_check(mid_check_id: int, project_id: int, conclusion: str,
                        score_detail: Any) -> None:
-    """N.conclude(MID_CHECK) 回写中检结论与打分明细。"""
+    """N.conclude(MID_CHECK) 回写中检结论与打分明细，并签发批文（B3）。"""
     mc = EMidCheck.objects.filter(id=mid_check_id, deleted=0).first()
     if mc is None:
         return
@@ -868,9 +923,25 @@ def conclude_mid_check(mid_check_id: int, project_id: int, conclusion: str,
     mc.score_detail = score_detail
     mc.save(update_fields=["conclusion", "score_detail", "updated_at"])
 
+    p = EProject.objects.filter(id=project_id, deleted=0).first()
+    title = f"{p.title if p else '项目'} 中期检查批文"
+    report_id = _issue_report(
+        project_id=project_id, tenant_id=mc.tenant_id, user_id=mc.creator_id,
+        doc_type="MID_CHECK", title=title, conclusion=conclusion,
+        score_detail=score_detail, mid_check_id=mc.id,
+    )
+    if mc.approval_doc_id != report_id:
+        mc.approval_doc_id = report_id
+        mc.save(update_fields=["approval_doc_id", "updated_at"])
+    try:  # 通知 best-effort：任何异常都不阻断结论落库
+        _notify_role(mc.tenant_id, "R-MANAGER", "MID_CHECK", title,
+                     f"第 {mc.check_round} 轮中检结论 {conclusion}，批文已生成", f"mid-check:{mc.id}")
+    except Exception:
+        pass
+
 
 def conclude_final_accept(final_accept_id: int, status: str) -> None:
-    """N.conclude(FINAL_ACCEPT) 回写结题验收状态（APPROVED/REJECTED/NEED_SUPPLEMENT）。"""
+    """N.conclude(FINAL_ACCEPT) 回写结题验收状态；仅通过时签发批文（B3）。"""
     fa = EFinalAccept.objects.filter(id=final_accept_id, deleted=0).first()
     if fa is None:
         return
@@ -878,6 +949,24 @@ def conclude_final_accept(final_accept_id: int, status: str) -> None:
     if status == "APPROVED":
         fa.accept_at = dj_tz.now()
     fa.save(update_fields=["status", "accept_at", "updated_at"])
+    if status != "APPROVED":
+        return
+
+    p = EProject.objects.filter(id=fa.project_id, deleted=0).first()
+    title = f"{p.title if p else '项目'} 结题验收批文"
+    report_id = _issue_report(
+        project_id=fa.project_id, tenant_id=fa.tenant_id, user_id=fa.creator_id,
+        doc_type="FINAL_ACCEPT", title=title, conclusion=fa.conclusion,
+        score_detail=fa.output_summary, final_accept_id=fa.id,
+    )
+    if fa.approval_doc_id != report_id:
+        fa.approval_doc_id = report_id
+        fa.save(update_fields=["approval_doc_id", "updated_at"])
+    try:  # 通知 best-effort：任何异常都不阻断结论落库
+        _notify_role(fa.tenant_id, "R-MANAGER", "FINAL_ACCEPT", title,
+                     "结题验收通过，批文已生成", f"final-accept:{fa.id}")
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------

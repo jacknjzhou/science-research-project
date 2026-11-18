@@ -328,4 +328,5 @@ INSERT INTO seq_prefix_registry (prefix, biz_object, owner_module, introduced_ve
   ('EXR','专家','N','v1.0',TRUE),
   ('ARC','案卷','O','v1.0',TRUE),
   ('BORROW','借阅','O','v1.0',TRUE),
-  ('RVW','评审任务','N','v1.0',TRUE);
+  ('RVW','评审任务','N','v1.0',TRUE),
+  ('RPT','评估批文','E','v1.2',TRUE);

@@ -619,3 +619,71 @@ def test_m1d_final_accept_binds_template(seed_auth):
     assert r.status_code == 200
     fa = EFinalAccept.objects.get(id=r.json()["data"]["id"])
     assert fa.template_id == t["id"]
+
+
+# ---------------------------------------------------------------------------
+# M1-d B3：评估结论批文生成 + 通知（conclude 单一写者尾部）
+# ---------------------------------------------------------------------------
+def test_m1d_mid_check_conclude_issues_report(seed_auth):
+    from apps.project.api import conclude_mid_check
+    from apps.project.models import EMidCheck, EReport
+
+    p = _project()
+    mc = EMidCheck.objects.create(tenant_id=1, creator_id=1, project=p, check_round=1)
+    conclude_mid_check(mc.id, p.id, "PASS", {"total": 92})
+
+    mc.refresh_from_db()
+    assert mc.approval_doc_id is not None
+    rp = EReport.objects.get(id=mc.approval_doc_id)
+    assert rp.project_id == p.id
+    assert rp.doc_type == "MID_CHECK"
+    assert "批文" in rp.title
+    assert rp.mid_check_id == mc.id
+    assert rp.status == "ISSUED"
+    assert rp.issued_at is not None
+    assert rp.code and rp.code.startswith("RPT-")
+
+
+def test_m1d_conclude_report_idempotent(seed_auth):
+    from apps.project.api import conclude_final_accept
+    from apps.project.models import EFinalAccept, EReport
+
+    p = _project()
+    fa = EFinalAccept.objects.create(tenant_id=1, creator_id=1, project=p)
+    conclude_final_accept(fa.id, "APPROVED")
+    conclude_final_accept(fa.id, "APPROVED")
+
+    fa.refresh_from_db()
+    assert fa.status == "APPROVED"
+    assert fa.approval_doc_id is not None
+    assert EReport.objects.filter(final_accept_id=fa.id, deleted=0).count() == 1
+
+
+def test_m1d_final_accept_rejected_issues_no_report(seed_auth):
+    """驳回/补正不出批文——批文只在通过时签发。"""
+    from apps.project.api import conclude_final_accept
+    from apps.project.models import EFinalAccept, EReport
+
+    p = _project()
+    fa = EFinalAccept.objects.create(tenant_id=1, creator_id=1, project=p)
+    conclude_final_accept(fa.id, "REJECTED")
+    fa.refresh_from_db()
+    assert fa.approval_doc_id is None
+    assert EReport.objects.filter(final_accept_id=fa.id, deleted=0).count() == 0
+
+
+def test_m1d_conclude_notify_failure_does_not_block(seed_auth, monkeypatch):
+    """通知 best-effort：_notify_role 抛错也要出批文（业务不可被通知拖挂）。"""
+    from apps.project import api as project_api
+    from apps.project.models import EMidCheck, EReport
+
+    def boom(*a, **kw):
+        raise RuntimeError("notify down")
+
+    monkeypatch.setattr(project_api, "_notify_role", boom)
+    p = _project()
+    mc = EMidCheck.objects.create(tenant_id=1, creator_id=1, project=p, check_round=2)
+    project_api.conclude_mid_check(mc.id, p.id, "PASS", {})
+    mc.refresh_from_db()
+    assert mc.approval_doc_id is not None
+    assert EReport.objects.filter(mid_check_id=mc.id, deleted=0).count() == 1

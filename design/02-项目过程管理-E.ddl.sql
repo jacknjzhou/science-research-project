@@ -211,6 +211,7 @@ CREATE TABLE E_MID_CHECK (
                    CHECK (conclusion IN ('CONTINUE','CORRECT','TERMINATE')), -- 中检结论（README §4）
   score_detail     JSONB,                                           -- 多维度评分明细（半结构化）
   report_id        BIGINT REFERENCES E_PROGRESS_REPORT(id),         -- 同模块物理外键：关联中检报告
+  approval_doc_id  BIGINT,                                          -- 逻辑外键：E_REPORT.id（B3 中检批文，结论通过时签发）
   correct_deadline DATE,                                            -- 整改截止日期（结论=CORRECT 时置入）
   status_overdue   SMALLINT     NOT NULL DEFAULT 0                  -- 是否逾期整改（触发支出冻结，见 §8）
 );
@@ -341,6 +342,7 @@ CREATE TABLE E_FINAL_ACCEPT (
                    CHECK (conclusion IN ('PASS','PASS_WITH_CONDITIONS','FAIL')), -- 结题结论（README §4）
   attachment_ids   JSONB        NOT NULL DEFAULT '[]'::jsonb,       -- E_PROJECT_DOC.id 数组
   template_id      BIGINT,                                          -- 逻辑外键：E_EVAL_TEMPLATE.id（B3 统一评估模板，scene=FINAL_ACCEPT）
+  approval_doc_id  BIGINT,                                          -- 逻辑外键：E_REPORT.id（B3 结题批文，仅 APPROVED 时签发）
   archive_checklist_id BIGINT                                       -- 同模块物理外键：归档清单校验实例（E-15）；FK 由文末 ALTER TABLE 后加，避免前向引用
 );
 COMMENT ON TABLE  E_FINAL_ACCEPT IS '结题申请与验收（E-08），技术验收与财务验收并行';
@@ -468,12 +470,47 @@ CREATE INDEX idx_e_arch_tpl     ON E_ARCHIVE_CHECKLIST(tenant_id, project_type, 
 
 
 -- -----------------------------------------------------------------------------
+-- 11) E_REPORT 评估批文（B3；中检/验收结论通过时签发，一评估一批文）
+-- -----------------------------------------------------------------------------
+CREATE TABLE E_REPORT (
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  code             VARCHAR(64),                                     -- RPT-年-序（seq_prefix_registry 登记 E/RPT）
+  tenant_id        BIGINT       NOT NULL,
+  status           VARCHAR(16)  NOT NULL DEFAULT 'ISSUED'
+                   CHECK (status IN ('DRAFT','ISSUED')),
+  deleted          SMALLINT     NOT NULL DEFAULT 0,
+  creator_id       BIGINT       NOT NULL,
+  modifier_id      BIGINT,
+  created_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  remark           TEXT,
+  project_id       BIGINT       NOT NULL REFERENCES E_PROJECT(id),
+  doc_type         VARCHAR(16)  NOT NULL DEFAULT 'MID_CHECK'
+                   CHECK (doc_type IN ('MID_CHECK','FINAL_ACCEPT')),  -- 与评估场景一一对应
+  mid_check_id     BIGINT,                                           -- 逻辑外键：E_MID_CHECK.id（doc_type=MID_CHECK）
+  final_accept_id  BIGINT,                                           -- 逻辑外键：E_FINAL_ACCEPT.id（doc_type=FINAL_ACCEPT）
+  title            VARCHAR(256) NOT NULL,                            -- 批文标题（含项目名与评估场景）
+  content_rich     TEXT,                                             -- 批文正文（富文本）
+  conclusion       VARCHAR(32),                                      -- 结论（PASS/PASS_WITH_CONDITIONS/FAIL 等）
+  score_detail     JSONB,                                            -- 评分/验收材料快照
+  issued_at        TIMESTAMPTZ,                                      -- 签发时间
+  attachment_ids   JSONB        NOT NULL DEFAULT '[]'::jsonb         -- E_PROJECT_DOC.id 数组
+);
+COMMENT ON TABLE  E_REPORT IS '评估批文（B3）：中检/结题验收结论通过时签发，一评估一批文（幂等复用）';
+COMMENT ON COLUMN E_REPORT.doc_type IS 'MID_CHECK/FINAL_ACCEPT，与 E_EVAL_TEMPLATE.scene 对应';
+
+CREATE INDEX idx_e_report_proj ON E_REPORT(tenant_id, project_id, doc_type);
+
+-- -----------------------------------------------------------------------------
 -- 延迟外键（本模块内前向引用，建表顺序 E_FINAL_ACCEPT 早于 E_ARCHIVE_CHECKLIST）
 -- -----------------------------------------------------------------------------
 ALTER TABLE E_FINAL_ACCEPT
   ADD CONSTRAINT fk_e_final_archive_checklist
   FOREIGN KEY (archive_checklist_id) REFERENCES E_ARCHIVE_CHECKLIST(id);
 
+-- =============================================================================
+-- 备注：
+--   0a) M1-d 增补：单号前缀 RPT 已在 00-common.sql `seq_prefix_registry` 登记（owner=E，v1.2）。
 -- =============================================================================
 -- 引用说明（不在本文件建表）：
 --   e_trace_node 追溯节点（E-17）已在 00-common.sql 定义，object_type/object_id 指向 E_* 与 PRJ 编号，

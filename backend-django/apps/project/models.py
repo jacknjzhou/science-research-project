@@ -136,6 +136,8 @@ class EMidCheck(models.Model):
     conclusion = models.CharField(max_length=32, null=True, blank=True)
     score_detail = models.JSONField(null=True, blank=True)
     report = models.ForeignKey(EProgressReport, on_delete=models.SET_NULL, db_column="report_id", null=True, blank=True)
+    # B3：结论通过时签发的批文（同租户 E_REPORT.id，逻辑引用）
+    approval_doc_id = models.BigIntegerField(null=True, blank=True)
     correct_deadline = models.DateField(null=True, blank=True)
     status_overdue = models.SmallIntegerField(default=0)
 
@@ -239,6 +241,9 @@ class EFinalAccept(models.Model):
     accept_at = models.DateTimeField(null=True, blank=True)
     # B3：验收所依据的统一评估模板（同租户 E_EVAL_TEMPLATE.id，逻辑引用；可选）
     template_id = models.BigIntegerField(null=True, blank=True)
+    # B3：结论通过时签发的批文（同租户 E_REPORT.id，逻辑引用）
+    # 注：report_id 在 E 域语义是"中检/进度报告"（FK E_PROGRESS_REPORT），批文另用本列
+    approval_doc_id = models.BigIntegerField(null=True, blank=True)
     output_summary = models.JSONField(null=True, blank=True)
     finance_report_id = models.BigIntegerField(null=True, blank=True)
     expert_ids = models.JSONField(default=list)
@@ -334,6 +339,39 @@ class EApplication(models.Model):
 
     class Meta:
         db_table = "E_APPLICATION"
+
+
+class EReport(models.Model):
+    """评估批文（B3）：中检/验收结论通过时签发，一评估一批文（幂等）。"""
+
+    id = models.BigAutoField(primary_key=True)
+    code = models.CharField(max_length=64, null=True, blank=True)  # RPT-年-序
+    tenant_id = models.BigIntegerField()
+    # DRAFT/ISSUED
+    status = models.CharField(max_length=16, default="ISSUED")
+    deleted = models.SmallIntegerField(default=0)
+    creator_id = models.BigIntegerField()
+    modifier_id = models.BigIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    remark = models.TextField(null=True, blank=True)
+    project = models.ForeignKey(EProject, on_delete=models.CASCADE, db_column="project_id")
+    # MID_CHECK/FINAL_ACCEPT（与评估场景一一对应）
+    doc_type = models.CharField(max_length=16, default="MID_CHECK")
+    mid_check_id = models.BigIntegerField(null=True, blank=True)
+    final_accept_id = models.BigIntegerField(null=True, blank=True)
+    title = models.CharField(max_length=256)
+    content_rich = models.TextField(null=True, blank=True)
+    conclusion = models.CharField(max_length=32, null=True, blank=True)
+    score_detail = models.JSONField(null=True, blank=True)
+    issued_at = models.DateTimeField(null=True, blank=True)
+    attachment_ids = models.JSONField(default=list)
+
+    class Meta:
+        db_table = "E_REPORT"
+        indexes = [
+            models.Index(fields=["tenant_id", "project_id", "doc_type"], name="idx_e_report_proj"),
+        ]
 
 
 class EHealthHistory(models.Model):

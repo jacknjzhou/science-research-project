@@ -1072,7 +1072,8 @@ components:
         expertIds: { type: array, items: { type: integer, format: int64 } }
         conclusion: { $ref: '#/components/schemas/MidCheckConclusion' }
         scoreDetail: { type: object }
-        reportId: { type: integer, format: int64 }
+        reportId: { type: integer, format: int64, description: 中检报告 E_PROGRESS_REPORT.id }
+        approvalDocId: { type: integer, format: int64, description: 批文 E_REPORT.id（B3，结论落定后签发） }
         correctDeadline: { type: string, format: date }
         status: { type: string, enum: [PLANNED, IN_REVIEW, SCORED, CONCLUDED, CORRECTING] }
 
@@ -1130,6 +1131,7 @@ components:
         acceptAt: { type: string, format: date-time }
         outputSummary: { type: object, description: 成果清单汇总（只读引用 04 R） }
         templateId: { type: integer, format: int64, description: 验收依据的评估模板（B3，E_EVAL_TEMPLATE.id，scene=FINAL_ACCEPT） }
+        approvalDocId: { type: integer, format: int64, description: 批文 E_REPORT.id（B3，仅 APPROVED 时签发） }
         financeReportId: { type: integer, format: int64 }
         expertIds: { type: array, items: { type: integer, format: int64 } }
         conclusion: { $ref: '#/components/schemas/FinalConclusion' }
@@ -1191,6 +1193,24 @@ components:
         completeness: { type: string, description: 'NUMERIC(6,4) 完成度' }
         blockedItems: { type: array, items: { type: string }, description: 缺项清单（拦截依据） }
         status: { type: string, enum: [TEMPLATE, IN_PROGRESS, PASSED, BLOCKED] }
+
+    EReport:
+      type: object
+      description: 评估批文（B3，E_REPORT）；中检/验收结论落定时签发，一评估一批文
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string, nullable: true, description: RPT-年-序 }
+        projectId: { type: integer, format: int64 }
+        docType: { type: string, enum: [MID_CHECK, FINAL_ACCEPT] }
+        midCheckId: { type: integer, format: int64, nullable: true }
+        finalAcceptId: { type: integer, format: int64, nullable: true }
+        title: { type: string }
+        contentRich: { type: string, nullable: true }
+        conclusion: { type: string, nullable: true }
+        scoreDetail: { type: object, nullable: true }
+        status: { type: string, enum: [DRAFT, ISSUED] }
+        issuedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
 
     EvalTemplate:
       type: object
