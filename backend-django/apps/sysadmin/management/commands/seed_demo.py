@@ -207,7 +207,7 @@ class Command(BaseCommand):
         )
         from apps.notify.models import SysImportLog, SysNotification, SysTask
         from apps.output.models import RDataset, RJournalSource, ROutput
-        from apps.p.models import PApplication, PGuideline
+        from apps.p.models import PApplication, PGuideline, PGuideSuggestion, PTaskBook
         from apps.performance.models import MPayout, MRecord, MScheme, MSchemeFactor
         from apps.procure.models import GBid, GContract, GOrder, GRequisition, GSupplier
         from apps.project.models import EProject, EProgressReport, EMilestone, ETask
@@ -1087,5 +1087,75 @@ class Command(BaseCommand):
             {"content": "贵单位资质已通过审核，账号已激活；可在门户查看本单位相关数据与已发布指南。",
              "biz_ref": f"partner-org:{ptn_a.id}", "channel": "BOTH",
              "creator_id": C1}, "partner")
+
+        # ---- M2-b：开放课题全流程（C2）-----------------------------------
+        # 演示链路：机构 A → 一条待处理指南建议 → 一条外部申报（PUBLISHED）
+        #          → 任务书（仅 PI 已签，留管理端签署演示）→ 立项项目（ext_org_id=机构A）+ 1 条阶段汇报
+        if ptn_a is not None and partner_user is not None:
+            sug = put(PGuideSuggestion,
+                      {"tenant_id": T1, "title": "开放课题：智能育种方向建议（演示）"},
+                      {"org_id": ptn_a.id, "proposer_user_id": partner_user.id,
+                       "background": "面向 2030 的育种智能化需求，建议设立开放课题方向。",
+                       "objective": "构建表型-基因型联合建模方法并开源工具链。",
+                       "expected_output": "方法论文 2 篇、开源工具 1 套、示范数据集 1 个。",
+                       "contact_name": "张联系", "contact_phone": "13800000001",
+                       "contact_email": "partner@example.edu.cn",
+                       "status": "PENDING", "creator_id": partner_user.id}, "p")
+            if not sug.code:
+                sug.code = f"SUG-{today.year}-{sug.id:06d}"
+                sug.save(update_fields=["code"])
+
+            ext_app = put(PApplication,
+                          {"tenant_id": T1, "code": "APP-DEMO-M2B-01"},
+                          {"guideline_id": gl.id, "title": "智能育种联合建模（外部机构申报·演示）",
+                           "project_type": "开放课题", "pi_user_id": partner_user.id,
+                           "status": "PUBLISHED", "creator_id": partner_user.id,
+                           "applicant_org_id": ptn_a.id, "applicant_type": "EXTERNAL",
+                           "duration_months": 24, "total_budget": 300000,
+                           "abstract": "面向智能育种的表型-基因型联合建模与工具链建设。",
+                           "is_horizontal": False}, "p")
+
+            ext_prj = put(EProject,
+                          {"tenant_id": T1, "code": "PRJ-DEMO-M2B-01"},
+                          {"application_id": ext_app.id,
+                           "title": "智能育种联合建模（外部机构·演示）",
+                           "project_type": "开放课题", "pi_user_id": partner_user.id,
+                           "member_ids": [partner_user.id], "department_id": 1,
+                           "legal_entity_id": ent.id, "ext_org_id": ptn_a.id,
+                           "start_date": today - timedelta(days=30),
+                           "end_date": today + timedelta(days=700),
+                           "total_budget": 300000, "received_amount": 150000,
+                           "spent_amount": 40000, "health_score": 85, "risk_level": "LOW",
+                           "status": "ACTIVE", "security_level": "PUBLIC",
+                           "creator_id": partner_user.id}, "project")
+            tb_seed = put(PTaskBook,
+                          {"tenant_id": T1, "application_id": ext_app.id},
+                          {"status": "DRAFT", "creator_id": partner_user.id,
+                           "project_id": ext_prj.id,
+                           "print_template_code": "TPL-TASKBK-OPEN",
+                           "sign_records": [{"signerId": partner_user.id, "role": "PI",
+                                             "signedAt": now.isoformat(), "result": "OK"}],
+                           "content_snapshot": {
+                               "title": ext_app.title, "project_type": ext_app.project_type,
+                               "pi_user_id": ext_app.pi_user_id,
+                               "applicant_org_id": ptn_a.id,
+                               "total_budget": "300000.00",
+                               "duration_months": 24,
+                               "research_target": "表型-基因型联合建模方法",
+                               "technical_route": "多组学特征融合 + 迁移学习",
+                               "expected_output": "论文 2 篇、工具链 1 套",
+                               "frozen_at": now.isoformat(),
+                           }}, "p")
+            if not tb_seed.code:
+                tb_seed.code = f"PRJ-{today.year}-{tb_seed.id:06d}"
+                tb_seed.save(update_fields=["code"])
+
+            put(EProgressReport,
+                {"tenant_id": T1, "project": ext_prj, "period": "2026Q1"},
+                {"report_type": "QUARTERLY", "progress_percent": 30,
+                 "content_rich": "已完成数据接入与基线模型复现，进入特征融合阶段。",
+                 "next_plan": "完成融合模型训练与首轮验证。",
+                 "status": "SUBMITTED", "submitted_at": now,
+                 "creator_id": partner_user.id}, "project")
 
         return cnt
