@@ -7,12 +7,23 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from django.db import transaction
 from django.http import HttpRequest
 from django.utils import timezone as dj_tz
 
 from apps.expertreview.models import NReviewInvitation, NReviewScore, NReviewTask
-from apps.p.mappings import num2, to_api_application, to_api_guideline
-from apps.p.models import PApplication, PApplicationDoc, PGuideline
+from apps.p.mappings import (
+    num2,
+    to_api_application,
+    to_api_guide_suggestion,
+    to_api_guideline,
+)
+from apps.p.models import (
+    PApplication,
+    PApplicationDoc,
+    PGuideSuggestion,
+    PGuideline,
+)
 from core.approval import has_role
 from core.auth.deps import domain_from
 from core.org_scope import current_org_id, is_external_only
@@ -664,3 +675,151 @@ def score_review_task(request: HttpRequest, id: int):
         "id": score.id, "task_id": id, "expert_id": d.user_id,
         "total_score": f"{score.total_score:.2f}", "status": score.status,
     })
+
+
+# ---------------------------------------------------------------------------
+# 指南建议（M2-b C2）：外部机构提交选题建议 → 管理端采纳转指南草稿 / 驳回
+# ---------------------------------------------------------------------------
+def _guide_suggestion_or_404(tenant_id: int, sid: int) -> PGuideSuggestion:
+    s = PGuideSuggestion.objects.filter(
+        id=sid, tenant_id=tenant_id, deleted=0
+    ).first()
+    if s is None:
+        raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
+    return s
+
+
+def _partner_suggestion_or_404(d, sid: int) -> PGuideSuggestion:
+    s = _guide_suggestion_or_404(d.tenant_id, sid)
+    org = current_org_id(d)
+    if s.org_id is None or org is None or s.org_id != org:
+        raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
+    return s
+
+
+def list_guide_suggestions(request: HttpRequest):
+    """GET /apply/guide-suggestions —— 外部机构只见本机构；内部角色可筛 status/org_id。"""
+    d = domain_from(request)
+    page, size, limit, offset = page_args(request)
+    qs = PGuideSuggestion.objects.filter(tenant_id=d.tenant_id, deleted=0)
+    if is_external_only(d):
+        qs = qs.filter(org_id=current_org_id(d))
+    elif request.GET.get("org_id"):
+        qs = qs.filter(org_id=request.GET["org_id"])
+    if request.GET.get("status"):
+        qs = qs.filter(status=request.GET["status"])
+    total = qs.count()
+    rows = qs.order_by("-id")[offset:offset + limit]
+    return ok(request, {
+        "list": [to_api_guide_suggestion(s) for s in rows],
+        "total": total,
+        "page": page,
+        "size": size,
+    })
+
+
+def get_guide_suggestion(request: HttpRequest, id: int):
+    """GET /apply/guide-suggestions/{id} —— 跨租户/跨机构一律 404。"""
+    d = domain_from(request)
+    if is_external_only(d):
+        s = _partner_suggestion_or_404(d, id)
+    else:
+        s = _guide_suggestion_or_404(d.tenant_id, id)
+    return ok(request, to_api_guide_suggestion(s))
+
+
+def create_guide_suggestion(request: HttpRequest):
+    """POST /apply/guide-suggestions —— 外部用户的机构以本人机构为准，忽略请求体。"""
+    d = domain_from(request)
+    body = read_json(request)
+    title = (body.get("title") or "").strip()
+    if not title:
+        raise ApiError(400, CODE_BAD_REQUEST, "建议标题必填")
+    if len(title) > 256:
+        raise ApiError(400, CODE_BAD_REQUEST, "建议标题长度不能超过256")
+    org_id = current_org_id(d) if is_external_only(d) else body.get("org_id")
+    s = PGuideSuggestion.objects.create(
+        tenant_id=d.tenant_id,
+        creator_id=d.user_id,
+        org_id=org_id,
+        proposer_user_id=d.user_id,
+        title=title,
+        background=body.get("background"),
+        objective=body.get("objective"),
+        expected_output=body.get("expected_output"),
+        contact_name=body.get("contact_name"),
+        contact_phone=body.get("contact_phone"),
+        contact_email=body.get("contact_email"),
+        status="PENDING",
+    )
+    s.code = f"SUG-{dj_tz.localdate().year}-{s.id:06d}"
+    s.save(update_fields=["code"])
+    _notify_role(
+        d.tenant_id, "R-MANAGER", "TODO", "新的指南建议", title,
+        f"guide-suggestion:{s.id}",
+    )
+    return ok(request, to_api_guide_suggestion(s))
+
+
+def accept_guide_suggestion(request: HttpRequest, id: int):
+    """POST /apply/guide-suggestions/{id}:accept —— 生成 DRAFT 指南并回填 guideline_id。"""
+    d = domain_from(request)
+    with transaction.atomic():
+        s = (
+            PGuideSuggestion.objects.select_for_update()
+            .filter(id=id, tenant_id=d.tenant_id, deleted=0)
+            .first()
+        )
+        if s is None:
+            raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
+        if s.status != "PENDING":
+            raise ApiError(409, CODE_CONFLICT, "该建议已处理")
+        g = PGuideline.objects.create(
+            tenant_id=d.tenant_id,
+            creator_id=d.user_id,
+            title=s.title,
+            project_type="开放课题",
+            status="DRAFT",
+            content_rich=s.objective or s.background,
+            publish_at=None,
+        )
+        s.status = "ACCEPTED"
+        s.guideline_id = g.id
+        s.review_user_id = d.user_id
+        s.reviewed_at = dj_tz.now()
+        s.save(update_fields=["status", "guideline_id", "review_user_id", "reviewed_at"])
+    if s.proposer_user_id:
+        _notify(
+            s.proposer_user_id, "ANNOUNCE", "指南建议已采纳",
+            f"《{s.title}》已采纳，将纳入指南编制。", f"guide-suggestion:{s.id}",
+            d.tenant_id,
+        )
+    return ok(request, to_api_guide_suggestion(s))
+
+
+def reject_guide_suggestion(request: HttpRequest, id: int):
+    """POST /apply/guide-suggestions/{id}:reject —— 理由必填，落 reject_reason。"""
+    d = domain_from(request)
+    body = read_json(request)
+    reason = _require_reason(body)
+    with transaction.atomic():
+        s = (
+            PGuideSuggestion.objects.select_for_update()
+            .filter(id=id, tenant_id=d.tenant_id, deleted=0)
+            .first()
+        )
+        if s is None:
+            raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
+        if s.status != "PENDING":
+            raise ApiError(409, CODE_CONFLICT, "该建议已处理")
+        s.status = "REJECTED"
+        s.reject_reason = reason
+        s.review_user_id = d.user_id
+        s.reviewed_at = dj_tz.now()
+        s.save(update_fields=["status", "reject_reason", "review_user_id", "reviewed_at"])
+    if s.proposer_user_id:
+        _notify(
+            s.proposer_user_id, "ANNOUNCE", "指南建议未采纳",
+            f"《{s.title}》未采纳：{reason}", f"guide-suggestion:{s.id}", d.tenant_id,
+        )
+    return ok(request, to_api_guide_suggestion(s))

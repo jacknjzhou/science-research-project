@@ -109,6 +109,132 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /apply/guide-suggestions:
+    get:
+      tags: [guideline]
+      summary: 指南建议列表（M2-b C2）
+      description: 外部机构（仅持 R-PARTNER）只见本机构建议；内部角色可用 status/org_id 过滤。
+      operationId: listGuideSuggestions
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+        - { name: status, in: query, schema: { type: string, enum: [PENDING, ACCEPTED, REJECTED] } }
+        - { name: org_id, in: query, schema: { type: integer } }
+      responses:
+        '200':
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/GuideSuggestion' }
+                          total: { type: integer }
+                          page: { type: integer }
+                          size: { type: integer }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [guideline]
+      summary: 提交指南建议（M2-b C2）
+      description: 外部机构用户提交选题建议；机构归属以本人所属机构为准，请求体中的 org_id 被忽略。
+      operationId: createGuideSuggestion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GuideSuggestionRequest' }
+      responses:
+        '200':
+          description: 已提交
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/GuideSuggestion' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /apply/guide-suggestions/{id}:accept:
+    post:
+      tags: [guideline]
+      summary: 采纳指南建议（M2-b C2）
+      description: 仅 PENDING 可采纳（否则 409/40901）；生成 DRAFT 指南草稿并回填 guideline_id。
+      operationId: acceptGuideSuggestion
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        '200':
+          description: 已采纳
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/GuideSuggestion' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /apply/guide-suggestions/{id}:reject:
+    post:
+      tags: [guideline]
+      summary: 驳回指南建议（M2-b C2）
+      description: 理由必填（400/40001）；仅 PENDING 可驳回（409/40901）。
+      operationId: rejectGuideSuggestion
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GuideSuggestionRejectRequest' }
+      responses:
+        '200':
+          description: 已驳回
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/GuideSuggestion' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /apply/guide-suggestions/{id}:
+    get:
+      tags: [guideline]
+      summary: 指南建议详情（M2-b C2）
+      description: 外部机构用户读他机构建议返回 404（不泄露存在性）。
+      operationId: getGuideSuggestion
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        '200':
+          description: 详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/GuideSuggestion' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /apply/guidelines/{id}:publish:
     post:
       tags: [guideline]
@@ -1284,6 +1410,49 @@ components:
       type: string
       enum: [ASSIGNED, ACCEPTED, SCORING, SUBMITTED, RETURNED, EXPIRED]
 
+    GuideSuggestion:
+      type: object
+      description: 指南建议（M2-b C2）
+      properties:
+        id: { type: integer }
+        code: { type: string, nullable: true, description: 'SUG-年-序' }
+        tenant_id: { type: integer }
+        org_id: { type: integer, nullable: true, description: '提议机构 sys_partner_org(id)，空=院内' }
+        proposer_user_id: { type: integer, nullable: true }
+        title: { type: string }
+        background: { type: string, nullable: true }
+        objective: { type: string, nullable: true }
+        expected_output: { type: string, nullable: true }
+        contact_name: { type: string, nullable: true }
+        contact_phone: { type: string, nullable: true }
+        contact_email: { type: string, nullable: true }
+        status: { type: string, enum: [PENDING, ACCEPTED, REJECTED] }
+        review_user_id: { type: integer, nullable: true }
+        reviewed_at: { type: string, nullable: true }
+        reject_reason: { type: string, nullable: true }
+        guideline_id: { type: integer, nullable: true, description: '采纳后生成的 p_guideline(id)' }
+        deleted: { type: integer }
+        creator_id: { type: integer }
+        created_at: { type: string, nullable: true }
+        updated_at: { type: string, nullable: true }
+        remark: { type: string, nullable: true }
+    GuideSuggestionRequest:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string, maxLength: 256 }
+        background: { type: string }
+        objective: { type: string }
+        expected_output: { type: string }
+        contact_name: { type: string }
+        contact_phone: { type: string }
+        contact_email: { type: string }
+        org_id: { type: integer, description: '院内用户可指定；外部机构用户忽略（以本人机构为准）' }
+    GuideSuggestionRejectRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, maxLength: 512 }
     Guideline:
       type: object
       description: 申报指南（DDL p_guideline）。

@@ -63,3 +63,31 @@ def to_api_application(a: PApplication) -> dict[str, Any]:
         "created_at": fmt_ts(a.created_at),
         "updated_at": fmt_ts(a.updated_at),
     }
+
+
+def to_api_guide_suggestion(s: Any) -> dict[str, Any]:
+    """指南建议（M2-b）：snake_case 22 键，与 01-P 契约 GuideSuggestion 逐键一致。"""
+    return {
+        "id": s.id,
+        "code": s.code,
+        "tenant_id": s.tenant_id,
+        "org_id": s.org_id,
+        "proposer_user_id": s.proposer_user_id,
+        "title": s.title,
+        "background": s.background,
+        "objective": s.objective,
+        "expected_output": s.expected_output,
+        "contact_name": s.contact_name,
+        "contact_phone": s.contact_phone,
+        "contact_email": s.contact_email,
+        "status": s.status,
+        "review_user_id": s.review_user_id,
+        "reviewed_at": fmt_ts(s.reviewed_at),
+        "reject_reason": s.reject_reason,
+        "guideline_id": s.guideline_id,
+        "deleted": s.deleted,
+        "creator_id": s.creator_id,
+        "created_at": fmt_ts(s.created_at),
+        "updated_at": fmt_ts(s.updated_at),
+        "remark": s.remark,
+    }

@@ -84,6 +84,22 @@ api.post("/apply/guidelines/{id}:close", auth=ark_auth, tags=["p"])(
     p_api.close_guideline
 )
 api.get("/apply/guidelines/{id}", auth=ark_auth, tags=["p"])(p_api.get_guideline)
+# —— M2-b 指南建议（外部提交 → 管理端采纳/驳回；动作段必须先于 {id} 注册）——
+api.post("/apply/guide-suggestions/{id}:accept", auth=ark_auth, tags=["p"])(
+    p_api.accept_guide_suggestion
+)
+api.post("/apply/guide-suggestions/{id}:reject", auth=ark_auth, tags=["p"])(
+    p_api.reject_guide_suggestion
+)
+api.get("/apply/guide-suggestions/{id}", auth=ark_auth, tags=["p"])(
+    p_api.get_guide_suggestion
+)
+api.get("/apply/guide-suggestions", auth=ark_auth, tags=["p"])(
+    p_api.list_guide_suggestions
+)
+api.post("/apply/guide-suggestions", auth=ark_auth, tags=["p"])(
+    p_api.create_guide_suggestion
+)
 
 # —— P 申报书（p 模块直建，DRAFT）——
 api.get("/apply/applications", auth=ark_auth, tags=["p"])(p_api.list_applications)
