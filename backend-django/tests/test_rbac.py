@@ -544,3 +544,24 @@ def test_m2b_partner_denied_admin_and_secret_domains():
                  "/api/v1/project/1/board", "/api/v1/funding/expenses"):
         for (pth, _act) in partner:
             assert not key_match2(path, pth), f"{path} 不应被 {pth} 匹配"
+
+
+# ===========================================================================
+# M2-b 终审补口：评审决议 + 领导签署（I1/I4）
+# ===========================================================================
+def test_m2b_decision_and_leader_sign_rows():
+    rows = _policy_p_rows()
+    assert ("R-MANAGER", "/api/v1/apply/applications/*:decide", "POST") in rows
+    assert ("R-LEADER", "/api/v1/apply/applications/*:decide", "POST") in rows
+    assert ("R-LEADER", "/api/v1/apply/task-books/*:sign", "POST") in rows
+    # 外部角色不得决议；内部角色不得签 MANAGER/LEADER
+    from casbin.util import key_match2
+
+    def allow(role, path, act):
+        return any(
+            s == role and a == act and key_match2(path, o)
+            for s, o, a in rows
+        )
+
+    assert not allow("R-PARTNER", "/api/v1/apply/applications/1:decide", "POST")
+    assert allow("R-PARTNER", "/api/v1/apply/task-books/1:sign", "POST")

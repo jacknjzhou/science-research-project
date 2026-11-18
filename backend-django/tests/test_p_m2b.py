@@ -377,3 +377,213 @@ def test_partner_applies_final_accept_and_gets_notified(seed_auth, mailoutbox):
     assert SysNotification.objects.filter(user_id=ua.id).exists()
     assert mailoutbox and "结题" in mailoutbox[-1].subject
     assert mailoutbox[-1].to == ["org-a@example.com"]
+
+
+# ===========================================================================
+# 终审 M2-b 修复回归：C1 子资源跨机构 / C2 签署身份 / C3 状态机 / C4 空机构 / I1 决议 / I4 角色
+# ===========================================================================
+def _org_app(org, uid, status="DRAFT"):
+    from apps.p.models import PApplication
+
+    return PApplication.objects.create(
+        tenant_id=1, creator_id=uid, title=f"{org.name} 申报", project_type="开放课题",
+        pi_user_id=uid, status=status, applicant_org_id=org.id, applicant_type="EXTERNAL",
+        total_budget=1000)
+
+
+def test_c1_application_subresources_are_org_scoped(seed_auth):
+    """机构 B 对机构 A 的 documents/budget/sections/submit/withdraw/terminate 必须 404。"""
+    org_a, org_b, ua, ub = _partner_users(seed_auth)
+    a = _org_app(org_a, ua.id)
+    as_b = ("R-PARTNER",)
+    assert _get(f"/api/v1/apply/applications/{a.id}/documents", roles=as_b, uid=ub.id).status_code == 404
+    assert _get(f"/api/v1/apply/applications/{a.id}/budget", roles=as_b, uid=ub.id).status_code == 404
+    assert _put(f"/api/v1/apply/applications/{a.id}/sections/background",
+                {"content_rich": "B 写入"}, roles=as_b, uid=ub.id).status_code == 404
+    assert _post(f"/api/v1/apply/applications/{a.id}/budget",
+                 {"subject_code": "01", "amount": "1.00"}, roles=as_b, uid=ub.id).status_code == 404
+    assert _post(f"/api/v1/apply/applications/{a.id}/submit",
+                 {}, roles=as_b, uid=ub.id).status_code == 404
+    # withdraw/terminate 外部角色在策略层也没有授权 → 403 亦可接受（两者都代表拒绝）
+    assert _post(f"/api/v1/apply/applications/{a.id}:withdraw",
+                 {"reason": "x"}, roles=as_b, uid=ub.id).status_code in (403, 404)
+    assert _post(f"/api/v1/apply/applications/{a.id}:terminate",
+                 {"reason": "x"}, roles=as_b, uid=ub.id).status_code in (403, 404)
+    # 本机构自己正常
+    assert _get(f"/api/v1/apply/applications/{a.id}/documents",
+                roles=as_b, uid=ua.id).status_code == 200
+
+
+def test_c2_sign_requires_identity_and_role(seed_auth):
+    """外部可签 PI（本人）；不得签 MANAGER；signer_id 被忽略；R-STAFF 不得签 MANAGER。"""
+    from apps.p.models import PApplication, PTaskBook
+
+    org_a, org_b, ua, ub = _partner_users(seed_auth)
+    m = _manager_user(seed_auth)
+    a = PApplication.objects.create(
+        tenant_id=1, creator_id=ua.id, title="双签", project_type="开放课题",
+        pi_user_id=ua.id, status="PUBLISHED", applicant_org_id=org_a.id,
+        applicant_type="EXTERNAL", total_budget=1000)
+    tb = PTaskBook.objects.create(tenant_id=1, creator_id=ua.id, application_id=a.id)
+
+    # 跨机构他人：连任务书都不可见 → 404（不泄露存在性）
+    r = _post(f"/api/v1/apply/task-books/{tb.id}:sign", {"role": "PI"},
+              roles=("R-PARTNER",), uid=ub.id)
+    assert r.status_code == 404, r.content
+    # 同机构他人签 PI → 403（可见但非 PI 本人）
+    from apps.sysadmin.models import SysUser, SysUserRole
+
+    ua2 = SysUser.objects.create(
+        username="pa2", real_name="A2", password_hash="x", status="ACTIVE",
+        tenant_id=1, creator_id=1, org_id=org_a.id, user_source="EXTERNAL")
+    SysUserRole.objects.create(user=ua2, role=seed_auth["roles"]["R-PARTNER"], tenant_id=1)
+    r = _post(f"/api/v1/apply/task-books/{tb.id}:sign", {"role": "PI"},
+              roles=("R-PARTNER",), uid=ua2.id)
+    assert r.status_code == 403, r.content
+    # 外部签 MANAGER → 403（即便伪造 signer_id）
+    r = _post(f"/api/v1/apply/task-books/{tb.id}:sign",
+              {"role": "MANAGER", "signer_id": 999999}, roles=("R-PARTNER",), uid=ua.id)
+    assert r.status_code == 403, r.content
+    # R-STAFF 不在策略内 → 403（策略层或 handler 层均可）
+    r = _post(f"/api/v1/apply/task-books/{tb.id}:sign", {"role": "MANAGER"},
+              roles=("R-STAFF",), uid=m.id)
+    assert r.status_code in (403,), r.content
+    # PI 本人签署 → 200，签署人恒为本人（忽略 body.signer_id）
+    r = _post(f"/api/v1/apply/task-books/{tb.id}:sign",
+              {"role": "PI", "signer_id": 424242}, roles=("R-PARTNER",), uid=ua.id)
+    assert r.status_code == 200, r.content
+    recs = _data(r)["sign_records"]
+    assert [x["signerId"] for x in recs] == [ua.id]
+    # 管理端签署 → 200，签署人为调用者本人
+    r = _post(f"/api/v1/apply/task-books/{tb.id}:sign",
+              {"role": "MANAGER", "signer_id": 777}, roles=("R-MANAGER",), uid=m.id)
+    assert r.status_code == 200, r.content
+    assert _data(r)["status"] == "SIGNED"
+    assert [x["signerId"] for x in _data(r)["sign_records"]] == [ua.id, m.id]
+
+
+def test_c3_sign_and_terminate_respect_state_machine(seed_auth):
+    """REJECTED 不可签署；已签/执行中不可终止（都要 409）。"""
+    from apps.p.models import PApplication, PTaskBook
+    from apps.project.models import EProject
+
+    org_a, org_b, ua, ub = _partner_users(seed_auth)
+    m = _manager_user(seed_auth)
+    a = PApplication.objects.create(
+        tenant_id=1, creator_id=ua.id, title="已终止", project_type="开放课题",
+        pi_user_id=ua.id, status="REJECTED", applicant_org_id=org_a.id,
+        applicant_type="EXTERNAL", total_budget=1000)
+    tb = PTaskBook.objects.create(tenant_id=1, creator_id=ua.id, application_id=a.id)
+    assert _post(f"/api/v1/apply/task-books/{tb.id}:sign", {"role": "PI"},
+                 roles=("R-PARTNER",), uid=ua.id).status_code == 409
+
+    # 签后终止 → 409 且项目状态不变
+    b = PApplication.objects.create(
+        tenant_id=1, creator_id=ua.id, title="将立项", project_type="开放课题",
+        pi_user_id=ua.id, status="PUBLISHED", applicant_org_id=org_a.id,
+        applicant_type="EXTERNAL", total_budget=1000)
+    tb2 = PTaskBook.objects.create(tenant_id=1, creator_id=ua.id, application_id=b.id)
+    assert _post(f"/api/v1/apply/task-books/{tb2.id}:sign", {"role": "PI"},
+                 roles=("R-PARTNER",), uid=ua.id).status_code == 200
+    assert _post(f"/api/v1/apply/task-books/{tb2.id}:sign", {"role": "MANAGER"},
+                 roles=("R-MANAGER",), uid=m.id).status_code == 200
+    b.refresh_from_db()
+    assert b.status == "EXECUTING"
+    r = _post(f"/api/v1/apply/applications/{b.id}:terminate",
+              {"reason": "终止"}, roles=("R-MANAGER",), uid=m.id)
+    assert r.status_code == 409, r.content
+    b.refresh_from_db()
+    assert b.status == "EXECUTING"
+    assert EProject.objects.filter(application_id=b.id, status="EXECUTING").exists()
+
+
+def test_c4_orgless_partner_sees_nothing(seed_auth):
+    """org_id 为空的外部账号：列表空、子资源 404（不能命中院内 applicant_org_id IS NULL）。"""
+    from apps.p.models import PApplication
+    from apps.sysadmin.models import SysUser, SysUserRole
+
+    internal = PApplication.objects.create(
+        tenant_id=1, creator_id=1, title="院内申报", project_type="ZIGE", pi_user_id=1)
+    role = seed_auth["roles"]["R-PARTNER"]
+    u = SysUser.objects.create(
+        username="nullorg", real_name="无机构", password_hash="x", status="ACTIVE",
+        tenant_id=1, creator_id=1, org_id=None, user_source="EXTERNAL")
+    SysUserRole.objects.create(user=u, role=role, tenant_id=1)
+
+    page = _data(_get("/api/v1/apply/applications", roles=("R-PARTNER",), uid=u.id))
+    assert page["total"] == 0 and page["list"] == []
+    assert _get(f"/api/v1/apply/applications/{internal.id}/documents",
+                roles=("R-PARTNER",), uid=u.id).status_code == 404
+    # 指南建议列表同款守卫
+    assert _data(_get("/api/v1/apply/guide-suggestions",
+                      roles=("R-PARTNER",), uid=u.id))["total"] == 0
+
+
+def test_c4_create_user_rejects_bad_partner_grant(seed_auth):
+    """管理端建号：R-PARTNER 必须带有效机构，且不得与内部角色共存。"""
+    from apps.sysadmin.models import SysPartnerOrg
+
+    org = SysPartnerOrg.objects.create(
+        tenant_id=1, creator_id=1, name="机构C", credit_code="91310000MA1K3XY11C",
+        org_type="COLLAB", status="APPROVED")
+    base = {"username": "newp", "real_name": "新人", "password": "Abcdef@123"}
+    # 无机构 → 400
+    r = _post("/api/v1/admin/users", {**base, "roles": ["R-PARTNER"]}, roles=("R-ADMIN",), uid=1)
+    assert r.status_code == 400, r.content
+    # 混合内部角色 → 400
+    r = _post("/api/v1/admin/users", {**base, "roles": ["R-PARTNER", "R-STAFF"], "org_id": org.id},
+              roles=("R-ADMIN",), uid=1)
+    assert r.status_code == 400, r.content
+    # 合规：带机构且只有 R-PARTNER → 200 且 user_source=EXTERNAL
+    r = _post("/api/v1/admin/users", {**base, "roles": ["R-PARTNER"], "org_id": org.id},
+              roles=("R-ADMIN",), uid=1)
+    assert r.status_code == 200, r.content
+    assert _data(r)["user_source"] == "EXTERNAL" and _data(r)["org_id"] == org.id
+
+
+def test_i1_decide_application_publishes_and_unblocks_task_book(seed_auth):
+    """I1：SUBMITTED →（:decide）PUBLISHED → 可生成任务书；外部用户无权决议。"""
+    from apps.p.models import PApplication
+
+    org_a, org_b, ua, ub = _partner_users(seed_auth)
+    m = _manager_user(seed_auth)
+    a = PApplication.objects.create(
+        tenant_id=1, creator_id=ua.id, title="待决议", project_type="开放课题",
+        pi_user_id=ua.id, status="SUBMITTED", applicant_org_id=org_a.id,
+        applicant_type="EXTERNAL", total_budget=1000)
+    # 外部 / R-STAFF 均 403
+    assert _post(f"/api/v1/apply/applications/{a.id}:decide", {"decision": "PUBLISHED"},
+                 roles=("R-PARTNER",), uid=ua.id).status_code == 403
+    # 非法 decision → 400
+    assert _post(f"/api/v1/apply/applications/{a.id}:decide", {"decision": "FOO"},
+                 roles=("R-MANAGER",), uid=m.id).status_code == 400
+    r = _post(f"/api/v1/apply/applications/{a.id}:decide", {"decision": "PUBLISHED"},
+              roles=("R-MANAGER",), uid=m.id)
+    assert r.status_code == 200, r.content
+    assert _data(r)["status"] == "PUBLISHED"
+    # 决议后才可生成任务书
+    r = _post("/api/v1/apply/task-books", {"application_id": a.id}, roles=("R-MANAGER",), uid=m.id)
+    assert r.status_code == 200, r.content
+    # 再决议 → 409
+    assert _post(f"/api/v1/apply/applications/{a.id}:decide", {"decision": "DECIDED"},
+                 roles=("R-MANAGER",), uid=m.id).status_code == 409
+
+
+def test_i4_leader_can_sign_manager_cannot_be_partner(seed_auth):
+    """I4：R-LEADER 具备签署策略；R-PARTNER 永远不能签 MANAGER/LEADER。"""
+    from apps.p.models import PApplication, PTaskBook
+
+    org_a, org_b, ua, ub = _partner_users(seed_auth)
+    a = PApplication.objects.create(
+        tenant_id=1, creator_id=ua.id, title="领导签", project_type="开放课题",
+        pi_user_id=ua.id, status="PUBLISHED", applicant_org_id=org_a.id,
+        applicant_type="EXTERNAL", total_budget=1000)
+    tb = PTaskBook.objects.create(tenant_id=1, creator_id=ua.id, application_id=a.id)
+    assert _post(f"/api/v1/apply/task-books/{tb.id}:sign", {"role": "PI"},
+                 roles=("R-PARTNER",), uid=ua.id).status_code == 200
+    r = _post(f"/api/v1/apply/task-books/{tb.id}:sign", {"role": "LEADER"},
+              roles=("R-LEADER",), uid=3)
+    assert r.status_code == 200, r.content
+    assert _data(r)["status"] == "SIGNED"
+    assert _post(f"/api/v1/apply/task-books/{tb.id}:sign", {"role": "LEADER"},
+                 roles=("R-PARTNER",), uid=ua.id).status_code in (403, 409)

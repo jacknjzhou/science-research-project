@@ -78,6 +78,12 @@ def to_api_progress_report(r: EProgressReport) -> dict[str, Any]:
         "content_rich": r.content_rich, "progress_percent": r.progress_percent,
         "issues_text": r.issues_text, "next_plan": r.next_plan,
         "attachment_ids": r.attachment_ids or [], "submitted_at": fmt_ts(r.submitted_at),
+        # 02-E 契约键（camelCase）别名：契约 EProgressReport/EProgressReportCreate 用 camelCase，
+        # 后端历史序列化器统一 snake_case，这里同时给出两种拼写，避免契约与实现各说一套。
+        "projectId": r.project_id, "reportType": r.report_type,
+        "contentRich": r.content_rich, "progressPercent": r.progress_percent,
+        "issuesText": r.issues_text, "nextPlan": r.next_plan,
+        "attachmentIds": r.attachment_ids or [], "submittedAt": fmt_ts(r.submitted_at),
     }
 
 
@@ -131,6 +137,11 @@ def to_api_final_accept(r: EFinalAccept) -> dict[str, Any]:
         "template_id": r.template_id, "approval_doc_id": r.approval_doc_id,
         "templateId": r.template_id, "approvalDocId": r.approval_doc_id,
         "attachment_ids": r.attachment_ids or [], "archive_checklist_id": r.archive_checklist_id,
+        # 02-E 契约键（camelCase）别名（终审 M2-b I3）
+        "projectId": r.project_id, "applyAt": fmt_ts(r.apply_at), "acceptAt": fmt_ts(r.accept_at),
+        "outputSummary": r.output_summary, "financeReportId": r.finance_report_id,
+        "expertIds": r.expert_ids or [], "attachmentIds": r.attachment_ids or [],
+        "archiveChecklistId": r.archive_checklist_id, "outputSummaryText": r.output_summary,
     }
 
 

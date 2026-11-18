@@ -328,13 +328,19 @@ def test_partner_cannot_read_draft_or_cross_tenant(seed_auth):
                  **bearer(1, ["R-STAFF"])).status_code == 404
 
 
-def test_auditor_and_mixed_roles_not_restricted(seed_auth):
-    """终审 N-1：R-AUDITOR 等内部只读角色不受外部收口影响；混合角色也不收口。"""
+def test_auditor_restricted_only_when_partner(seed_auth):
+    """M2-a N-1 + M2-b I2：内部只读角色不受收口影响；**含 R-PARTNER 的混合角色按外部口径**。
+
+    终审 M2-b I2 实测过 `R-PARTNER + R-STAFF` 会走内部分支并伪造 pi_user_id/org，
+    因此 `is_external_only` 改为 fail-closed（只要持有 R-PARTNER 即按外部处理）。
+    """
     _pub, draft = _two_guidelines()
     c = _c()
     assert c.get(f"/api/v1/apply/guidelines/{draft.id}",
                  **bearer(1, ["R-AUDITOR"])).status_code == 200
     mixed = c.get(f"/api/v1/apply/guidelines/{draft.id}", **bearer(2, ["R-PARTNER", "R-STAFF"]))
-    assert mixed.status_code == 200  # 同时持有内部角色 → 按内部口径
+    assert mixed.status_code == 404  # 收口优先于内部角色（fail-closed）
     pure = c.get(f"/api/v1/apply/guidelines/{draft.id}", **bearer(2, ["R-PARTNER"]))
     assert pure.status_code == 404
+    listed = c.get("/api/v1/apply/guidelines", **bearer(2, ["R-PARTNER", "R-STAFF"]))
+    assert all(g["status"] == "PUBLISHED" for g in listed.json()["data"]["list"])
