@@ -5,6 +5,7 @@ from typing import Any
 
 from apps.project.models import (
     EChangeRequest,
+    EEvalTemplate,
     EFinalAccept,
     EMidCheck,
     EMilestone,
@@ -113,6 +114,18 @@ def to_api_final_accept(r: EFinalAccept) -> dict[str, Any]:
         "output_summary": r.output_summary, "finance_report_id": r.finance_report_id,
         "expert_ids": r.expert_ids or [], "conclusion": r.conclusion,
         "attachment_ids": r.attachment_ids or [], "archive_checklist_id": r.archive_checklist_id,
+    }
+
+
+def to_api_eval_template(r: EEvalTemplate) -> dict[str, Any]:
+    """B3 统一评估模板（新端点为 camelCase，对齐 02-E 契约）。"""
+    return {
+        "id": r.id, "code": r.code, "name": r.name, "scene": r.scene,
+        "sections": r.sections or [], "scoreRubric": r.score_rubric or {},
+        "status": r.status, "deleted": r.deleted,
+        "creatorId": r.creator_id, "modifierId": r.modifier_id,
+        "createdAt": fmt_ts(r.created_at), "updatedAt": fmt_ts(r.updated_at),
+        "remark": r.remark,
     }
 
 

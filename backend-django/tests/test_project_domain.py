@@ -497,3 +497,125 @@ def test_m1d_board_members_and_404(seed_auth):
     r2 = c.get("/api/v1/project/999999/board", **bearer(1, ["R-MANAGER"]))
     assert r2.status_code == 404
     assert r2.json()["code"] == 40401
+
+
+# ---------------------------------------------------------------------------
+# M1-d B3：统一评估模板（一套模板支撑中检与验收）
+# ---------------------------------------------------------------------------
+def _mk_tpl(c, **body):
+    return c.post(
+        "/api/v1/project/eval-templates",
+        data=json.dumps(body), content_type="application/json",
+        **bearer(1, ["R-MANAGER"]),
+    )
+
+
+def test_m1d_eval_template_crud(seed_auth):
+    from apps.project.models import EEvalTemplate
+
+    c = _c()
+    r = _mk_tpl(c, name="中检模板A", scene="MID_CHECK",
+                sections=[{"key": "progress", "label": "进度完成情况", "weight": 40}],
+                scoreRubric={"max": 100})
+    assert r.status_code == 200
+    d = r.json()["data"]
+    # 新端点一律 camelCase（契约 02-E 为准）
+    assert set(d) >= {"id", "name", "scene", "status", "sections", "scoreRubric", "createdAt"}
+    assert d["name"] == "中检模板A"
+    assert d["scene"] == "MID_CHECK"
+    assert d["status"] == "ACTIVE"
+    assert d["sections"][0]["weight"] == 40
+    assert d["scoreRubric"] == {"max": 100}
+
+    # 列表 + scene 过滤
+    _mk_tpl(c, name="验收模板B", scene="FINAL_ACCEPT")
+    r = c.get("/api/v1/project/eval-templates?scene=FINAL_ACCEPT", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 200
+    rows = r.json()["data"]["list"]
+    assert [x["name"] for x in rows] == ["验收模板B"]
+    assert rows[0]["scene"] == "FINAL_ACCEPT"
+
+    # 部分更新：只改 name，scene/sections 不动
+    r = c.put(
+        f"/api/v1/project/eval-templates/{d['id']}",
+        data=json.dumps({"name": "中检模板A2"}), content_type="application/json",
+        **bearer(1, ["R-MANAGER"]),
+    )
+    assert r.status_code == 200
+    assert r.json()["data"]["name"] == "中检模板A2"
+    assert r.json()["data"]["sections"][0]["weight"] == 40
+
+    # 软删：列表不再出现，但行仍在（deleted=1）
+    r = c.delete(f"/api/v1/project/eval-templates/{d['id']}", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 200
+    r = c.get("/api/v1/project/eval-templates", **bearer(1, ["R-MANAGER"]))
+    assert [x["name"] for x in r.json()["data"]["list"]] == ["验收模板B"]
+    assert EEvalTemplate.objects.filter(id=d["id"], deleted=1).exists()
+
+
+def test_m1d_eval_template_validation_and_404(seed_auth):
+    c = _c()
+    # 缺 name → 40001
+    r = _mk_tpl(c, scene="MID_CHECK")
+    assert r.status_code == 400 and r.json()["code"] == 40001
+    # 非法 scene → 40001
+    r = _mk_tpl(c, name="X", scene="ANNUAL")
+    assert r.status_code == 400 and r.json()["code"] == 40001
+    # 更新/删除不存在的模板 → 40401
+    r = c.put("/api/v1/project/eval-templates/999999", data=json.dumps({"name": "Y"}),
+              content_type="application/json", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 404 and r.json()["code"] == 40401
+    r = c.delete("/api/v1/project/eval-templates/999999", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 404 and r.json()["code"] == 40401
+
+
+def test_m1d_eval_template_not_swallowed_by_project_detail(seed_auth):
+    """路由顺序：/project/eval-templates 必须先于 /project/{id}（否则被详情吞掉）。"""
+    c = _c()
+    r = c.get("/api/v1/project/eval-templates", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 200
+    assert "list" in r.json()["data"]
+
+
+def test_m1d_mid_check_binds_template(seed_auth):
+    from apps.project.models import EMidCheck
+
+    c = _c()
+    t = _mk_tpl(c, name="中检模板", scene="MID_CHECK").json()["data"]
+    p = _project()
+    # 契约拼写 templateId
+    r = c.post(f"/api/v1/project/{p.id}/mid-check",
+               data=json.dumps({"checkRound": 1, "templateId": t["id"]}),
+               content_type="application/json", **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 200
+    mc = EMidCheck.objects.get(id=r.json()["data"]["id"])
+    assert mc.template_id == t["id"]
+    assert mc.check_round == 1
+
+    # 旧 snake_case 拼写仍兼容
+    r = c.post(f"/api/v1/project/{p.id}/mid-check",
+               data=json.dumps({"check_round": 2, "template_id": t["id"]}),
+               content_type="application/json", **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 200
+    assert EMidCheck.objects.get(id=r.json()["data"]["id"]).template_id == t["id"]
+
+    # 不传模板仍可创建（template 可选，旧调用方不破）
+    r = c.post(f"/api/v1/project/{p.id}/mid-check",
+               data=json.dumps({"checkRound": 3}),
+               content_type="application/json", **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 200
+    assert EMidCheck.objects.get(id=r.json()["data"]["id"]).template_id is None
+
+
+def test_m1d_final_accept_binds_template(seed_auth):
+    from apps.project.models import EFinalAccept
+
+    c = _c()
+    t = _mk_tpl(c, name="验收模板", scene="FINAL_ACCEPT").json()["data"]
+    p = _project()
+    r = c.post(f"/api/v1/project/{p.id}/final-accept",
+               data=json.dumps({"templateId": t["id"], "outputSummary": {"papers": 2}}),
+               content_type="application/json", **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 200
+    fa = EFinalAccept.objects.get(id=r.json()["data"]["id"])
+    assert fa.template_id == t["id"]

@@ -205,7 +205,7 @@ CREATE TABLE E_MID_CHECK (
   check_round      INT          NOT NULL DEFAULT 1,                 -- 中检轮次
   check_date       DATE,
   plan_id          BIGINT,                                          -- 逻辑外键：中检计划/模板（sys_dict / policy_pack，E-06/E-USR-07）
-  template_id      BIGINT,                                          -- 逻辑外键：评分表模板配置（按 project_type）
+  template_id      BIGINT,                                          -- 逻辑外键：E_EVAL_TEMPLATE.id（B3 统一评估模板，scene=MID_CHECK）
   expert_ids       JSONB        NOT NULL DEFAULT '[]'::jsonb,       -- 评审专家 user_id 数组（R-EXPERT，在线打分）
   conclusion       VARCHAR(32)
                    CHECK (conclusion IN ('CONTINUE','CORRECT','TERMINATE')), -- 中检结论（README §4）
@@ -340,11 +340,13 @@ CREATE TABLE E_FINAL_ACCEPT (
   conclusion       VARCHAR(32)
                    CHECK (conclusion IN ('PASS','PASS_WITH_CONDITIONS','FAIL')), -- 结题结论（README §4）
   attachment_ids   JSONB        NOT NULL DEFAULT '[]'::jsonb,       -- E_PROJECT_DOC.id 数组
+  template_id      BIGINT,                                          -- 逻辑外键：E_EVAL_TEMPLATE.id（B3 统一评估模板，scene=FINAL_ACCEPT）
   archive_checklist_id BIGINT                                       -- 同模块物理外键：归档清单校验实例（E-15）；FK 由文末 ALTER TABLE 后加，避免前向引用
 );
 COMMENT ON TABLE  E_FINAL_ACCEPT IS '结题申请与验收（E-08），技术验收与财务验收并行';
 COMMENT ON COLUMN E_FINAL_ACCEPT.conclusion IS 'PASS/PASS_WITH_CONDITIONS/FAIL（README §4 结题结论）';
 COMMENT ON COLUMN E_FINAL_ACCEPT.finance_report_id IS '逻辑外键 03 F 决算；project.completed 事件触发决算';
+COMMENT ON COLUMN E_FINAL_ACCEPT.template_id IS '验收依据的统一评估模板 E_EVAL_TEMPLATE.id（B3，scene=FINAL_ACCEPT）';
 COMMENT ON COLUMN E_FINAL_ACCEPT.archive_checklist_id IS '归档清单校验通过方可验收（缺项拦截，E-15）';
 
 CREATE UNIQUE INDEX uk_e_final_code ON E_FINAL_ACCEPT(tenant_id, code) WHERE deleted = 0;

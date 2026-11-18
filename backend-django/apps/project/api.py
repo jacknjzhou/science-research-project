@@ -19,6 +19,7 @@ from apps.notify.models import SysNotification
 from apps.project.mappings import (
     _num2,
     to_api_category,
+    to_api_eval_template,
     to_api_change_request,
     to_api_final_accept,
     to_api_milestone,
@@ -32,6 +33,7 @@ from apps.project.models import (
     EApplyPlan,
     EArchiveChecklist,
     EChangeRequest,
+    EEvalTemplate,
     EFinalAccept,
     EHealthHistory,
     EMidCheck,
@@ -267,13 +269,16 @@ def create_mid_check(request: HttpRequest, id: int):
     d = domain_from(request)
     _get_project_or_404(id)
     body = read_json(request)
-    check_round = body.get("check_round")
+    # 契约 camelCase（checkRound/templateId）与既有 snake_case 双读，兼容老调用方
+    check_round = body.get("checkRound", body.get("check_round"))
     if check_round is None:
         raise ApiError(400, CODE_BAD_REQUEST, "请求参数错误")
     r = EMidCheck.objects.create(
         tenant_id=d.tenant_id, creator_id=d.user_id, project_id=id,
-        check_round=check_round, check_date=_parse_date(body.get("check_date")),
-        plan_id=body.get("plan_id"), template_id=body.get("template_id"),
+        check_round=check_round,
+        check_date=_parse_date(body.get("checkDate") or body.get("check_date")),
+        plan_id=body.get("planId", body.get("plan_id")),
+        template_id=_resolve_template_id(d.tenant_id, body, "MID_CHECK"),
         expert_ids=[],
     )
     return ok(request, to_api_mid_check(r))
@@ -380,10 +385,124 @@ def create_final_accept(request: HttpRequest, id: int):
     body = read_json(request)
     r = EFinalAccept.objects.create(
         tenant_id=d.tenant_id, creator_id=d.user_id, project_id=id,
-        finance_report_id=body.get("finance_report_id"),
+        finance_report_id=body.get("financeReportId", body.get("finance_report_id")),
+        template_id=_resolve_template_id(d.tenant_id, body, "FINAL_ACCEPT"),
+        output_summary=body.get("outputSummary", body.get("output_summary")),
         apply_at=dj_tz.now(),
     )
     return ok(request, to_api_final_accept(r))
+
+
+# ---------------------------------------------------------------------------
+# M1-d B3：统一评估模板（一套配置支撑中检与验收）
+# ---------------------------------------------------------------------------
+_EVAL_SCENES = ("MID_CHECK", "FINAL_ACCEPT")
+_EVAL_TEMPLATE_STATUSES = ("ACTIVE", "DISABLED")
+
+
+def _resolve_template_id(tenant_id: int, body: dict, scene: str) -> int | None:
+    """校验并归一 templateId（可选）：必须存在、未删、同租户、场景匹配。
+
+    场景不匹配即 40001——一套模板只服务一种评估，跨场景复用会把评分项带错。
+    """
+    raw = body.get("templateId", body.get("template_id"))
+    if raw is None or raw == "":
+        return None
+    try:
+        tid = int(raw)
+    except (TypeError, ValueError):
+        raise ApiError(400, CODE_BAD_REQUEST, "templateId 须为整数")
+    tpl = EEvalTemplate.objects.filter(
+        id=tid, tenant_id=tenant_id, deleted=0, status="ACTIVE"
+    ).first()
+    if tpl is None:
+        raise ApiError(404, CODE_NOT_FOUND, "评估模板不存在")
+    if tpl.scene != scene:
+        raise ApiError(400, CODE_BAD_REQUEST, "评估模板场景不匹配")
+    return tid
+
+
+def _get_eval_template_or_404(tenant_id: int, template_id: int) -> EEvalTemplate:
+    t = EEvalTemplate.objects.filter(id=template_id, tenant_id=tenant_id, deleted=0).first()
+    if t is None:
+        raise ApiError(404, CODE_NOT_FOUND, "评估模板不存在")
+    return t
+
+
+def list_eval_templates(request: HttpRequest):
+    d = domain_from(request)
+    qs = EEvalTemplate.objects.filter(tenant_id=d.tenant_id, deleted=0)
+    if request.GET.get("scene"):
+        qs = qs.filter(scene=request.GET["scene"])
+    if request.GET.get("status"):
+        qs = qs.filter(status=request.GET["status"])
+    rows = [to_api_eval_template(t) for t in qs.order_by("-id")]
+    return ok(request, {"list": rows})
+
+
+def create_eval_template(request: HttpRequest):
+    d = domain_from(request)
+    body = read_json(request)
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise ApiError(400, CODE_BAD_REQUEST, "请求参数错误（name 必填）")
+    scene = body.get("scene") or "MID_CHECK"
+    if scene not in _EVAL_SCENES:
+        raise ApiError(400, CODE_BAD_REQUEST, "scene 须为 MID_CHECK/FINAL_ACCEPT")
+    sections = body.get("sections")
+    if sections is not None and not isinstance(sections, list):
+        raise ApiError(400, CODE_BAD_REQUEST, "sections 须为数组")
+    rubric = body.get("scoreRubric", body.get("score_rubric"))
+    if rubric is not None and not isinstance(rubric, dict):
+        raise ApiError(400, CODE_BAD_REQUEST, "scoreRubric 须为对象")
+    r = EEvalTemplate.objects.create(
+        tenant_id=d.tenant_id, creator_id=d.user_id, name=name, scene=scene,
+        sections=sections or [], score_rubric=rubric or {},
+        status=body.get("status") or "ACTIVE", remark=body.get("remark"),
+    )
+    return ok(request, to_api_eval_template(r))
+
+
+def update_eval_template(request: HttpRequest, id: int):
+    d = domain_from(request)
+    t = _get_eval_template_or_404(d.tenant_id, id)
+    body = read_json(request)
+    if "name" in body:
+        name = (body.get("name") or "").strip()
+        if not name:
+            raise ApiError(400, CODE_BAD_REQUEST, "name 不能为空")
+        t.name = name
+    if "scene" in body:
+        if body["scene"] not in _EVAL_SCENES:
+            raise ApiError(400, CODE_BAD_REQUEST, "scene 须为 MID_CHECK/FINAL_ACCEPT")
+        t.scene = body["scene"]
+    if "sections" in body:
+        if not isinstance(body["sections"], list):
+            raise ApiError(400, CODE_BAD_REQUEST, "sections 须为数组")
+        t.sections = body["sections"]
+    rubric = body.get("scoreRubric", body.get("score_rubric"))
+    if rubric is not None:
+        if not isinstance(rubric, dict):
+            raise ApiError(400, CODE_BAD_REQUEST, "scoreRubric 须为对象")
+        t.score_rubric = rubric
+    if "status" in body:
+        if body["status"] not in _EVAL_TEMPLATE_STATUSES:
+            raise ApiError(400, CODE_BAD_REQUEST, "status 须为 ACTIVE/DISABLED")
+        t.status = body["status"]
+    if "remark" in body:
+        t.remark = body["remark"]
+    t.modifier_id = d.user_id
+    t.save()
+    return ok(request, to_api_eval_template(t))
+
+
+def delete_eval_template(request: HttpRequest, id: int):
+    d = domain_from(request)
+    t = _get_eval_template_or_404(d.tenant_id, id)
+    t.deleted = 1
+    t.modifier_id = d.user_id
+    t.save(update_fields=["deleted", "modifier_id", "updated_at"])
+    return ok(request, {"id": t.id})
 
 
 # ---------------------------------------------------------------------------

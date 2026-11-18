@@ -73,6 +73,103 @@ paths:
                                 items: { $ref: '#/components/schemas/EProject' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
+  /project/eval-templates:
+    get:
+      tags: [EvalTemplate]
+      summary: 统一评估模板列表（B3）
+      description: 一套模板配置支撑中期检查与结题验收两种场景（scene 区分）；软删行不返回。
+      operationId: listEvalTemplates
+      parameters:
+        - { in: query, name: scene, schema: { type: string, enum: [MID_CHECK, FINAL_ACCEPT] } }
+        - { in: query, name: status, schema: { type: string, enum: [ACTIVE, DISABLED] } }
+      responses:
+        '200':
+          description: 模板列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/EvalTemplate' }
+    post:
+      tags: [EvalTemplate]
+      summary: 新建评估模板（B3；仅 R-MANAGER）
+      description: scene 缺省 MID_CHECK；sections 为评分章节数组，scoreRubric 为评分规则对象。
+      operationId: createEvalTemplate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EvalTemplateRequest' }
+      responses:
+        '200':
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/EvalTemplate' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /project/eval-templates/{id}:
+    put:
+      tags: [EvalTemplate]
+      summary: 维护评估模板（B3；部分更新，仅 R-MANAGER）
+      description: 仅传入的字段被更新；sections 整体替换。
+      operationId: updateEvalTemplate
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: integer, format: int64 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EvalTemplateRequest' }
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/EvalTemplate' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [EvalTemplate]
+      summary: 停用并软删评估模板（B3；仅 R-MANAGER）
+      operationId: deleteEvalTemplate
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        '200':
+          description: 已软删
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id: { type: integer, format: int64 }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /project/{id}:
     get:
       tags: [Project]
@@ -971,6 +1068,7 @@ components:
         checkRound: { type: integer }
         checkDate: { type: string, format: date }
         planId: { type: integer, format: int64 }
+        templateId: { type: integer, format: int64, description: 依据的评估模板（B3，E_EVAL_TEMPLATE.id，scene=MID_CHECK） }
         expertIds: { type: array, items: { type: integer, format: int64 } }
         conclusion: { $ref: '#/components/schemas/MidCheckConclusion' }
         scoreDetail: { type: object }
@@ -1031,6 +1129,7 @@ components:
         applyAt: { type: string, format: date-time }
         acceptAt: { type: string, format: date-time }
         outputSummary: { type: object, description: 成果清单汇总（只读引用 04 R） }
+        templateId: { type: integer, format: int64, description: 验收依据的评估模板（B3，E_EVAL_TEMPLATE.id，scene=FINAL_ACCEPT） }
         financeReportId: { type: integer, format: int64 }
         expertIds: { type: array, items: { type: integer, format: int64 } }
         conclusion: { $ref: '#/components/schemas/FinalConclusion' }
@@ -1092,6 +1191,40 @@ components:
         completeness: { type: string, description: 'NUMERIC(6,4) 完成度' }
         blockedItems: { type: array, items: { type: string }, description: 缺项清单（拦截依据） }
         status: { type: string, enum: [TEMPLATE, IN_PROGRESS, PASSED, BLOCKED] }
+
+    EvalTemplate:
+      type: object
+      description: 统一项目评估模板（B3，E_EVAL_TEMPLATE）；一套配置支撑中检与验收
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string, nullable: true }
+        name: { type: string }
+        scene: { type: string, enum: [MID_CHECK, FINAL_ACCEPT] }
+        sections:
+          type: array
+          description: 评分章节数组，元素形如 {key,label,weight,desc}
+          items: { type: object }
+        scoreRubric: { type: object, description: 评分规则（及格式、权重合计、合格线） }
+        status: { type: string, enum: [ACTIVE, DISABLED] }
+        deleted: { type: integer }
+        creatorId: { type: integer, format: int64 }
+        modifierId: { type: integer, format: int64, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        remark: { type: string, nullable: true }
+
+    EvalTemplateRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        scene: { type: string, enum: [MID_CHECK, FINAL_ACCEPT], default: MID_CHECK }
+        sections:
+          type: array
+          items: { type: object }
+        scoreRubric: { type: object }
+        status: { type: string, enum: [ACTIVE, DISABLED] }
+        remark: { type: string }
 
     ProjectBoard:
       type: object

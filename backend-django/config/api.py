@@ -105,6 +105,19 @@ api.post(
 
 # —— E 项目：静态路由必须先于 {id} 注册 ——
 api.get("/project/mine", auth=ark_auth, tags=["project"])(project_api.list_my_projects)
+# —— M1-d B3 统一评估模板（静态段，必须注册在 /project/{id} 之前，否则被详情路由吞掉）——
+api.get("/project/eval-templates", auth=ark_auth, tags=["project"])(
+    project_api.list_eval_templates
+)
+api.post("/project/eval-templates", auth=ark_auth, tags=["project"])(
+    project_api.create_eval_template
+)
+api.put("/project/eval-templates/{id}", auth=ark_auth, tags=["project"])(
+    project_api.update_eval_template
+)
+api.delete("/project/eval-templates/{id}", auth=ark_auth, tags=["project"])(
+    project_api.delete_eval_template
+)
 api.get("/project/{id}", auth=ark_auth, tags=["project"])(project_api.get_project)
 api.get("/project/{id}/tasks", auth=ark_auth, tags=["project"])(project_api.list_tasks)
 api.get("/project/{id}/milestones", auth=ark_auth, tags=["project"])(project_api.list_milestones)

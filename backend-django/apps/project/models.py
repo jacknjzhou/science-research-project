@@ -237,6 +237,8 @@ class EFinalAccept(models.Model):
     project = models.ForeignKey(EProject, on_delete=models.CASCADE, db_column="project_id")
     apply_at = models.DateTimeField(null=True, blank=True)
     accept_at = models.DateTimeField(null=True, blank=True)
+    # B3：验收所依据的统一评估模板（同租户 E_EVAL_TEMPLATE.id，逻辑引用；可选）
+    template_id = models.BigIntegerField(null=True, blank=True)
     output_summary = models.JSONField(null=True, blank=True)
     finance_report_id = models.BigIntegerField(null=True, blank=True)
     expert_ids = models.JSONField(default=list)
