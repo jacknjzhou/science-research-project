@@ -61,15 +61,16 @@ def test_change_request_approve_one_step(seed_auth):
     c = _c()
     r = c.post(
         f"/api/v1/project/{p.id}/change-request",
-        data=json.dumps({"change_type": "DATE", "old_value": "2026-01",
-                         "new_value": "2026-06", "reason": "延期"}),
+        data=json.dumps({"change_type": "DATE", "severity": "MAJOR",
+                         "old_value": "2026-01",
+                         "new_value": {"endDate": "2026-06-30"}, "reason": "延期"}),
         content_type="application/json",
         **bearer(2, ["R-STAFF"]),
     )
     assert r.status_code == 200
     cr = r.json()["data"]
     assert cr["status"] == "SUBMITTED"
-    assert cr["code"].startswith("CR-")  # 自动编号
+    assert cr["code"].startswith("CHG-")  # 自动编号（M1-d 起统一 CHG-年-序）
 
     r = c.post(
         f"/api/v1/project/{p.id}/change-request/{cr['id']}/approve",
@@ -687,3 +688,151 @@ def test_m1d_conclude_notify_failure_does_not_block(seed_auth, monkeypatch):
     mc.refresh_from_db()
     assert mc.approval_doc_id is not None
     assert EReport.objects.filter(mid_check_id=mc.id, deleted=0).count() == 1
+
+
+# ---------------------------------------------------------------------------
+# M1-d B4：变更分流（重大审批/一般备案）+ 冲突回退 + 生效回写 + 版本快照 + 预算联动
+# ---------------------------------------------------------------------------
+def _budget(project_id, total="100000.00", mode="预算制"):
+    from apps.funding.models import FBudget
+    return FBudget.objects.create(
+        code=f"BUD-M1D-{project_id}", tenant_id=1, creator_id=1,
+        project_id=project_id, legal_entity_id=1, mode=mode,
+        total_approved=total, status="APPROVED",
+    )
+
+
+def test_m1d_change_general_takes_effect_without_approval(seed_auth):
+    """一般变更：提交即备案生效（单步），并回写 EProject。"""
+    p = _project(title="旧题目")
+    c = _c()
+    r = c.post(
+        f"/api/v1/project/{p.id}/change-request",
+        data=json.dumps({"change_type": "TITLE", "severity": "GENERAL",
+                         "new_value": {"title": "新题目"}, "reason": "题目微调"}),
+        content_type="application/json",
+        **bearer(2, ["R-STAFF"]),
+    )
+    assert r.status_code == 200
+    cr = r.json()["data"]
+    assert cr["status"] == "EFFECTIVE"
+    assert cr["code"].startswith("CHG-")
+    p.refresh_from_db()
+    assert p.title == "新题目"
+    from core.approval import SysApprovalLog
+    assert SysApprovalLog.objects.filter(biz_type="CHANGE_REQUEST", biz_id=cr["id"]).count() == 1
+
+
+def test_m1d_change_major_goes_through_approval(seed_auth):
+    """重大变更：仍走审批链，批准后才生效。"""
+    p = _project(title="旧题目")
+    c = _c()
+    r = c.post(
+        f"/api/v1/project/{p.id}/change-request",
+        data=json.dumps({"change_type": "TITLE", "severity": "MAJOR",
+                         "new_value": {"title": "重大改名"}, "reason": "方向调整"}),
+        content_type="application/json",
+        **bearer(2, ["R-STAFF"]),
+    )
+    assert r.status_code == 200
+    cr = r.json()["data"]
+    assert cr["status"] == "SUBMITTED"
+    p.refresh_from_db()
+    assert p.title == "旧题目"  # 未生效
+
+    r = c.post(
+        f"/api/v1/project/{p.id}/change-request/{cr['id']}/approve",
+        data=json.dumps({"comment": "同意"}),
+        content_type="application/json",
+        **bearer(1, ["R-ADMIN"]),
+    )
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "EFFECTIVE"
+    p.refresh_from_db()
+    assert p.title == "重大改名"
+
+
+def test_m1d_change_budget_conflict_rolls_back(seed_auth):
+    """预算变更降到已支出以下 → 冲突标记 + ROLLED_BACK（一般备案与重大审批两条路径都拦）。"""
+    p = _project(spent_amount="8000.00")
+    c = _c()
+    body = {"change_type": "BUDGET", "severity": "GENERAL",
+            "new_value": {"totalBudget": "5000.00"}, "reason": "压缩预算"}
+
+    r = c.post(f"/api/v1/project/{p.id}/change-request", data=json.dumps(body),
+               content_type="application/json", **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 409
+    cr = EChangeRequest.objects.filter(project_id=p.id).first()
+    assert cr.conflict_flag == 1
+    assert cr.status == "ROLLED_BACK"
+    p.refresh_from_db()
+    assert str(p.total_budget) in ("100000.00", "0.00")  # 未回写
+
+    # 重大变更走审批，同样在生效前被拦
+    r = c.post(f"/api/v1/project/{p.id}/change-request",
+               data=json.dumps({**body, "severity": "MAJOR", "new_value": {"totalBudget": "4000.00"}}),
+               content_type="application/json", **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 200
+    cid = r.json()["data"]["id"]
+    r = c.post(f"/api/v1/project/{p.id}/change-request/{cid}/approve",
+               data=json.dumps({"comment": "同意"}), content_type="application/json",
+               **bearer(1, ["R-ADMIN"]))
+    assert r.status_code == 409
+    row = EChangeRequest.objects.get(id=cid)
+    assert row.status == "ROLLED_BACK"
+    assert row.conflict_flag == 1
+
+
+def test_m1d_change_budget_effective_syncs_funding(seed_auth):
+    """预算变更生效：EProject.total_budget 与 FBudget.total_approved 同步，快照留调剂记录。"""
+    from apps.funding.models import FBudget
+    p = _project(total_budget="100000.00")
+    b = _budget(p.id, "100000.00")
+    c = _c()
+    r = c.post(
+        f"/api/v1/project/{p.id}/change-request",
+        data=json.dumps({"changeType": "BUDGET", "severity": "GENERAL",
+                         "newValue": {"totalBudget": "120000.00"}, "reason": "追加经费"}),
+        content_type="application/json",
+        **bearer(2, ["R-STAFF"]),
+    )
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "EFFECTIVE"
+    p.refresh_from_db()
+    b.refresh_from_db()
+    assert str(p.total_budget) == "120000.00"
+    assert str(b.total_approved) == "120000.00"
+
+    from apps.project.models import EChangeVersion
+    v = EChangeVersion.objects.filter(change_id=r.json()["data"]["id"]).first()
+    assert v is not None
+    assert v.snapshot["budgetAdjustment"]["delta"] == "20000.00"
+
+
+def test_m1d_change_versions_endpoint(seed_auth):
+    """版本快照：每次提交落一行，versions 端点按 versionNo 升序返回。"""
+    p = _project(title="V0")
+    c = _c()
+    ids = []
+    for i, t in enumerate(["V1", "V2"], start=1):
+        r = c.post(f"/api/v1/project/{p.id}/change-request",
+                   data=json.dumps({"change_type": "TITLE", "severity": "MAJOR",
+                                    "new_value": {"title": t}, "reason": f"第{i}次"}),
+                   content_type="application/json", **bearer(2, ["R-STAFF"]))
+        assert r.status_code == 200
+        ids.append(r.json()["data"]["id"])
+
+    r = c.get(f"/api/v1/project/{p.id}/change-request/{ids[0]}/versions",
+              **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 200
+    rows = r.json()["data"]["list"]
+    assert len(rows) == 1
+    assert rows[0]["versionNo"] == 1
+    assert rows[0]["snapshot"]["title"] == "V0"
+    assert "createdAt" in rows[0]
+
+    # 详情在别的项目下取版本 → 404（跨项目不串）
+    other = _project(title="别的项目")
+    r = c.get(f"/api/v1/project/{other.id}/change-request/{ids[0]}/versions",
+              **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 404

@@ -134,6 +134,9 @@ api.post(
 api.post(
     "/project/{id}/change-request", auth=ark_auth, tags=["project"]
 )(project_api.create_change_request)
+api.get(
+    "/project/{id}/change-request/{change_id}/versions", auth=ark_auth, tags=["project"]
+)(project_api.get_change_versions)
 api.post(
     "/project/{id}/change-request/{change_id}/approve", auth=ark_auth, tags=["project"]
 )(project_api.approve_change_request)

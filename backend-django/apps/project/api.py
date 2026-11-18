@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import time
 from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from django.http import HttpRequest
@@ -21,6 +22,7 @@ from apps.project.mappings import (
     to_api_category,
     to_api_eval_template,
     to_api_change_request,
+    to_api_change_version,
     to_api_final_accept,
     to_api_milestone,
     to_api_mid_check,
@@ -33,6 +35,7 @@ from apps.project.models import (
     EApplyPlan,
     EArchiveChecklist,
     EChangeRequest,
+    EChangeVersion,
     EEvalTemplate,
     EReport,
     EFinalAccept,
@@ -286,19 +289,160 @@ def create_mid_check(request: HttpRequest, id: int):
     return ok(request, to_api_mid_check(r))
 
 
+_CHANGE_SEVERITIES = ("GENERAL", "MAJOR")
+
+
+def _change_new_value(body: dict) -> dict | None:
+    v = body.get("newValue", body.get("new_value"))
+    return v if isinstance(v, dict) else v
+
+
+def _change_conflict(p: EProject, change_type: str, new_value: Any) -> bool:
+    """生效前冲突检查：预算变更后额度低于已支出即冲突（detail 4.4）。"""
+    if change_type != "BUDGET" or not isinstance(new_value, dict):
+        return False
+    raw = new_value.get("totalBudget", new_value.get("total_budget"))
+    if raw is None:
+        return False
+    try:
+        target = Decimal(str(raw))
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+    return target < (p.spent_amount or Decimal("0.00"))
+
+
+def _change_snapshot(p: EProject) -> dict:
+    """变更前项目快照（版本留痕：回滚/审计据此还原）。"""
+    return {
+        "title": p.title,
+        "endDate": p.end_date.isoformat() if p.end_date else None,
+        "memberIds": list(p.member_ids or []),
+        "totalBudget": str(p.total_budget or "0.00"),
+    }
+
+
+def _change_version(tenant_id: int, user_id: int, change: EChangeRequest, p: EProject) -> EChangeVersion:
+    """提交时落版本快照（version_no 自增 per 变更单）。"""
+    last = EChangeVersion.objects.filter(change=change, deleted=0).order_by("-version_no").first()
+    return EChangeVersion.objects.create(
+        tenant_id=tenant_id, creator_id=user_id, change=change,
+        version_no=(last.version_no + 1) if last else 1,
+        snapshot=_change_snapshot(p),
+    )
+
+
+def _apply_change(p: EProject, row: EChangeRequest) -> dict | None:
+    """生效回写（P-7 映射）：DELAY→end_date / TITLE→title / MEMBER→member_ids / BUDGET→预算。
+
+    BUDGET 额外同步 F 域预算：活跃 FBudget.total_approved 按差额调整、首条预算行
+    amount_adjusted 记增量；返回调剂明细（落版本快照 budgetAdjustment）。
+    """
+    nv = row.new_value if isinstance(row.new_value, dict) else {}
+    fields: list[str] = []
+    if row.change_type == "TITLE":
+        new_title = nv.get("title")
+        if new_title:
+            p.title = str(new_title)[:256]
+            fields.append("title")
+    elif row.change_type == "DELAY":
+        raw = nv.get("endDate", nv.get("end_date"))
+        if raw:
+            p.end_date = _parse_date(raw)
+            fields.append("end_date")
+    elif row.change_type == "MEMBER":
+        members = nv.get("memberIds", nv.get("member_ids"))
+        if isinstance(members, list):
+            p.member_ids = members
+            fields.append("member_ids")
+    elif row.change_type == "BUDGET":
+        raw = nv.get("totalBudget", nv.get("total_budget"))
+        if raw is not None:
+            try:
+                target = Decimal(str(raw))
+            except (InvalidOperation, TypeError, ValueError):
+                target = None
+            if target is not None:
+                old_total = p.total_budget or Decimal("0.00")
+                delta = (target - old_total).quantize(Decimal("0.01"))
+                p.total_budget = target.quantize(Decimal("0.01"))
+                fields.append("total_budget")
+                if fields:
+                    p.save(update_fields=fields + ["updated_at"])
+                    fields = []
+                return _sync_change_budget(row.project_id, row.tenant_id, delta, str(target))
+    if fields:
+        p.save(update_fields=fields + ["updated_at"])
+    return None
+
+
+def _sync_change_budget(project_id: int, tenant_id: int, delta: Decimal, target: str) -> dict:
+    """预算调剂联动 F 域：活跃 FBudget 与首条预算行同步（F 域单据表 M2 补，先以快照承载）。"""
+    from apps.funding.models import FBudget, FBudgetLine
+
+    b = FBudget.objects.filter(
+        project_id=project_id, tenant_id=tenant_id, deleted=0
+    ).exclude(status="CLOSED").order_by("-id").first()
+    if b is None:
+        return {"budget": None, "delta": str(delta), "target": target}
+    b.total_approved = (b.total_approved or Decimal("0.00")) + delta
+    b.save(update_fields=["total_approved", "updated_at"])
+    line = FBudgetLine.objects.filter(budget_id=b.id, deleted=0).order_by("id").first()
+    if line is not None:
+        line.amount_adjusted = (line.amount_adjusted or Decimal("0.00")) + delta
+        line.save(update_fields=["amount_adjusted", "updated_at"])
+    return {
+        "budget": b.code, "delta": str(delta), "target": target,
+        "budgetLineId": line.id if line is not None else None,
+    }
+
+
 def create_change_request(request: HttpRequest, id: int):
     d = domain_from(request)
-    _get_project_or_404(id)
+    p = _get_project_or_404(id)
     body = read_json(request)
-    change_type = body.get("change_type")
+    change_type = body.get("changeType") or body.get("change_type")
     if not change_type:
         raise ApiError(400, CODE_BAD_REQUEST, "请求参数错误")
-    code = body.get("code") or f"CR-{dj_tz.localdate():%Y%m%d}-{time.time_ns() % 1000000:06d}"
+    severity = body.get("severity") or "GENERAL"
+    if severity not in _CHANGE_SEVERITIES:
+        raise ApiError(400, CODE_BAD_REQUEST, "severity 须为 GENERAL/MAJOR")
+    new_value = _change_new_value(body)
     r = EChangeRequest.objects.create(
-        code=code, tenant_id=d.tenant_id, creator_id=d.user_id, project_id=id,
-        change_type=change_type, old_value=body.get("old_value"),
-        new_value=body.get("new_value"), reason=body.get("reason"),
+        code=body.get("code"), tenant_id=d.tenant_id, creator_id=d.user_id, project_id=id,
+        change_type=change_type, severity=severity,
+        old_value=body.get("oldValue", body.get("old_value")),
+        new_value=new_value, reason=body.get("reason"),
         status="SUBMITTED",
+    )
+    if not r.code:
+        r.code = code_of("CHG", r.id)
+        r.save(update_fields=["code"])
+
+    v = _change_version(d.tenant_id, d.user_id, r, p)
+    r.snapshot_ref = f"E_CHANGE_VERSION#{v.id}"
+    r.save(update_fields=["snapshot_ref"])
+
+    if severity == "MAJOR":
+        return ok(request, to_api_change_request(r))
+
+    # GENERAL：内部备案，冲突先拦（顺序=先 conflict 再 log/生效，Review Focus 2）
+    if _change_conflict(p, change_type, new_value):
+        r.conflict_flag = 1
+        r.status = "ROLLED_BACK"
+        r.save(update_fields=["conflict_flag", "status", "updated_at"])
+        raise ApiError(409, CODE_CONFLICT, "预算冲突：变更后预算低于已支出，已回退")
+
+    adjusted = _apply_change(p, r)
+    r.status = "EFFECTIVE"
+    r.approved_at = dj_tz.now()
+    r.approval_status = "APPROVED"
+    if adjusted is not None:
+        v.snapshot = {**v.snapshot, "budgetAdjustment": adjusted}
+        v.save(update_fields=["snapshot"])
+    r.save(update_fields=["status", "approved_at", "approval_status", "updated_at"])
+    approval.log(
+        d.tenant_id, "CHANGE_REQUEST", r.id, 1, d.user_id,
+        approval.first_role_of(d.roles), "EFFECTIVE", "一般变更内部备案",
     )
     return ok(request, to_api_change_request(r))
 
@@ -332,16 +476,53 @@ def _advance_change(d, project_id: int, change_id: int, to_status: str, comment:
             return 409, "状态不允许驳回"
         to_status, step = "REJECTED", 1
 
+    # 生效前冲突检查（P-6：必须先于 approval.log 与状态推进，否则冲突变更会被审批生效）
+    p = EProject.objects.filter(id=project_id, deleted=0).first()
+    if to_status == "EFFECTIVE" and p is not None and _change_conflict(
+        p, row.change_type, row.new_value
+    ):
+        EChangeRequest.objects.filter(id=change_id).update(
+            status="ROLLED_BACK", conflict_flag=1, updated_at=dj_tz.now()
+        )
+        return 409, "预算冲突：变更后预算低于已支出，已回退"
+
     n = EChangeRequest.objects.filter(id=change_id, project_id=project_id, status=row.status).update(
         status=to_status, updated_at=dj_tz.now()
     )
     if n == 0:
         return 409, "状态不允许或变更单不存在"
+    adjusted = None
+    if to_status == "EFFECTIVE" and p is not None:
+        adjusted = _apply_change(p, row)
+        if adjusted is not None:
+            ver = EChangeVersion.objects.filter(change=row, deleted=0).order_by("-version_no").first()
+            if ver is not None:
+                ver.snapshot = {**(ver.snapshot or {}), "budgetAdjustment": adjusted}
+                ver.save(update_fields=["snapshot"])
+        EChangeRequest.objects.filter(id=change_id).update(
+            approved_at=dj_tz.now(), approval_status="APPROVED"
+        )
     approval.log(
         d.tenant_id, "CHANGE_REQUEST", change_id, step, d.user_id,
         approval.first_role_of(d.roles), action, comment,
     )
     return EChangeRequest.objects.get(id=change_id)
+
+
+def get_change_versions(request: HttpRequest, id: int, change_id: int):
+    """变更版本快照列表（M1-d B4）；跨项目/不存在一律 404。"""
+    d = domain_from(request)
+    _get_project_or_404(id)
+    row = EChangeRequest.objects.filter(
+        id=change_id, project_id=id, tenant_id=d.tenant_id, deleted=0
+    ).first()
+    if row is None:
+        raise ApiError(404, CODE_NOT_FOUND, "变更单不存在")
+    rows = [
+        to_api_change_version(v) for v in
+        EChangeVersion.objects.filter(change=row, deleted=0).order_by("version_no")
+    ]
+    return ok(request, {"list": rows})
 
 
 def approve_change_request(request: HttpRequest, id: int, change_id: int):

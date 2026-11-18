@@ -302,6 +302,33 @@ paths:
                       data: { $ref: '#/components/schemas/EChangeRequest' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /project/{id}/change-request/{changeId}/versions:
+    get:
+      tags: [Change]
+      summary: 变更版本快照列表（B4）
+      description: 每次提交落一行版本快照，按 versionNo 升序；跨项目/不存在 404。
+      operationId: listChangeVersions
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: integer, format: int64 } }
+        - { in: path, name: changeId, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        '200':
+          description: 版本列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          list:
+                            type: array
+                            items: { $ref: '#/components/schemas/EChangeVersion' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /project/{id}/change-request/{changeId}/approve:
     post:
       tags: [Change]
@@ -1086,6 +1113,11 @@ components:
         newValue: { type: object, description: 变更后值 }
         reason: { type: string }
         effectiveFrom: { type: string, format: date }
+        severity:
+          type: string
+          enum: [GENERAL, MAJOR]
+          default: GENERAL
+          description: GENERAL=一般变更（内部备案，提交即生效）；MAJOR=重大变更（走审批链）
 
     EChangeRequest:
       type: object
@@ -1108,7 +1140,22 @@ components:
             milestoneImpact: { type: array, items: { type: object } }
             resignTaskBook: { type: boolean, description: 是否需重新签订任务书 }
         conflictFlag: { type: integer, description: '1=预算变更与实支出冲突，阻止生效并回退' }
+        severity: { type: string, enum: [GENERAL, MAJOR], description: 重大/一般变更分流（B4） }
+        snapshotRef: { type: string, nullable: true, description: 版本快照引用，形如 E_CHANGE_VERSION#42 }
         status: { type: string, enum: [DRAFT, SUBMITTED, APPROVING, APPROVED, REJECTED, RETURNED, ROLLED_BACK, EFFECTIVE] }
+
+    EChangeVersion:
+      type: object
+      description: 变更版本快照（B4，E_CHANGE_VERSION）；提交时落行，versionNo 按变更单自增
+      properties:
+        id: { type: integer, format: int64 }
+        changeId: { type: integer, format: int64 }
+        versionNo: { type: integer }
+        snapshot:
+          type: object
+          description: 变更前项目字段快照（title/endDate/memberIds/totalBudget），预算变更另含 budgetAdjustment
+        createdAt: { type: string, format: date-time }
+        creatorId: { type: integer, format: int64 }
 
     EFinalAcceptSubmit:
       type: object

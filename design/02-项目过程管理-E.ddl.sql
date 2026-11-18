@@ -510,7 +510,7 @@ ALTER TABLE E_FINAL_ACCEPT
 
 -- =============================================================================
 -- 备注：
---   0a) M1-d 增补：单号前缀 RPT 已在 00-common.sql `seq_prefix_registry` 登记（owner=E，v1.2）。
+--   0a) M1-d 增补：单号前缀 RPT（评估批文）、CHG（项目变更）已在 00-common.sql `seq_prefix_registry` 登记（owner=E，v1.2）。
 -- =============================================================================
 -- 引用说明（不在本文件建表）：
 --   e_trace_node 追溯节点（E-17）已在 00-common.sql 定义，object_type/object_id 指向 E_* 与 PRJ 编号，

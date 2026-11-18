@@ -5,6 +5,7 @@ from typing import Any
 
 from apps.project.models import (
     EChangeRequest,
+    EChangeVersion,
     EEvalTemplate,
     EFinalAccept,
     EMidCheck,
@@ -101,7 +102,19 @@ def to_api_change_request(r: EChangeRequest) -> dict[str, Any]:
         "new_value": r.new_value, "reason": r.reason, "effective_from": _date(r.effective_from),
         "approval_status": r.approval_status, "approved_at": fmt_ts(r.approved_at),
         "impact_analysis": r.impact_analysis, "conflict_flag": r.conflict_flag,
-        "snapshot_ref": r.snapshot_ref,
+        "snapshot_ref": r.snapshot_ref, "severity": r.severity,
+    }
+
+
+def to_api_change_version(v: EChangeVersion) -> dict[str, Any]:
+    """变更版本快照（M1-d B4）：camelCase，snapshot 原样透出。"""
+    return {
+        "id": v.id,
+        "changeId": v.change_id,
+        "versionNo": v.version_no,
+        "snapshot": v.snapshot or {},
+        "createdAt": fmt_ts(v.created_at),
+        "creatorId": v.creator_id,
     }
 
 
