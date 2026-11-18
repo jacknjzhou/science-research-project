@@ -404,6 +404,10 @@ def _conclude_writeback(biz_type: str, target_id: int, project_id: int,
             conclude_final_accept(target_id, status)
     elif biz_type == "OUTPUT_EVAL":
         conclude_output_eval(target_id, conclusion == "PASS")
+    elif biz_type == "GUIDE":
+        from apps.p.api import conclude_guide_review
+
+        conclude_guide_review(target_id)
     # PROJECT_APPLY/OTHER 暂无被写对象，no-op
 
 

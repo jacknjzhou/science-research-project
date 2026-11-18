@@ -65,6 +65,14 @@ api.post("/notifications/{id}/read", auth=ark_auth, tags=["notify"])(notify_api.
 # —— P 申报指南 ——
 api.get("/apply/guidelines", auth=ark_auth, tags=["p"])(p_api.list_guidelines)
 api.post("/apply/guidelines", auth=ark_auth, tags=["p"])(p_api.upsert_guideline)
+# —— M1-d B5 指南征集动作：`:publish`/`:close` 必须先于 `/apply/guidelines/{id}` 注册，
+#    否则被详情动态段先匹配（GET 命中后 POST → 405 Method Not Allowed，M1-a 同款教训）——
+api.post("/apply/guidelines/{id}:publish", auth=ark_auth, tags=["p"])(
+    p_api.publish_guideline
+)
+api.post("/apply/guidelines/{id}:close", auth=ark_auth, tags=["p"])(
+    p_api.close_guideline
+)
 api.get("/apply/guidelines/{id}", auth=ark_auth, tags=["p"])(p_api.get_guideline)
 
 # —— P 申报书（p 模块直建，DRAFT）——

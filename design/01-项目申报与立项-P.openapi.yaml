@@ -109,6 +109,50 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /apply/guidelines/{id}:publish:
+    post:
+      tags: [guideline]
+      summary: 发布指南征集通知（B5）
+      description: DRAFT→PUBLISHED 并记 publish_at，向 R-STAFF 广播征集通知；已发布重复调用幂等 200；已关闭 409。
+      operationId: publishGuideline
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        '200':
+          description: 已发布
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Guideline' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /apply/guidelines/{id}:close:
+    post:
+      tags: [guideline]
+      summary: 关闭指南征集（B5）
+      description: 仅 PUBLISHED→CLOSED（幂等）；非已发布状态 409（40901）。
+      operationId: closeGuideline
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        '200':
+          description: 已关闭
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Guideline' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
   /apply/guidelines/{id}:
     get:
       tags: [guideline]

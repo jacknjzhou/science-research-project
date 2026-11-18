@@ -18,6 +18,7 @@ from core.httpx import (
     ApiError,
     CODE_BAD_REQUEST,
     CODE_CONFLICT,
+    CODE_CONFLICT_REF,
     CODE_FORBIDDEN,
     CODE_NOT_FOUND,
     CODE_UNKNOWN_PARAM,
@@ -116,6 +117,96 @@ def upsert_guideline(request: HttpRequest):
     g.modifier_id = d.user_id
     g.save()
     return ok(request, to_api_guideline(g))
+
+
+# ---------------------------------------------------------------------------
+# M1-d B5：指南征集动作（发布 / 关闭）+ 专家论证评审入库
+# ---------------------------------------------------------------------------
+def _notify(user_id: int, typ: str, title: str, content: str, biz_ref: str, tenant_id: int):
+    """通知触达（best-effort：永不阻断业务，对齐 funding/api.py:116）。"""
+    if user_id and user_id > 0:
+        try:
+            from apps.notify.models import SysNotification
+            SysNotification.objects.create(
+                tenant_id=tenant_id, user_id=user_id, typ=typ,
+                title=title, content=content, biz_ref=biz_ref)
+        except Exception:
+            pass
+
+
+def _notify_role(tenant_id: int, role: str, typ: str, title: str, content: str, biz_ref: str):
+    """按角色广播（best-effort，镜像 funding/api.py:122-137）。"""
+    try:
+        from apps.sysadmin.models import SysRole, SysUser, SysUserRole
+        r = SysRole.objects.filter(code=role, tenant_id=tenant_id).first()
+        if r is None:
+            return
+        uids = list(SysUserRole.objects.filter(role=r).values_list("user_id", flat=True))
+        for uid in SysUser.objects.filter(id__in=uids, status="ACTIVE").values_list("id", flat=True):
+            _notify(uid, typ, title, content, biz_ref, tenant_id)
+    except Exception:
+        pass
+
+
+def _get_guideline_or_404(tenant_id: int, guideline_id: int) -> PGuideline:
+    g = PGuideline.objects.filter(id=guideline_id, tenant_id=tenant_id, deleted=0).first()
+    if g is None:
+        raise ApiError(404, CODE_NOT_FOUND, "指南不存在")
+    return g
+
+
+def publish_guideline(request: HttpRequest, id: int):
+    """发布征集通知：DRAFT→PUBLISHED（幂等；已发布不重复推送）。"""
+    d = domain_from(request)
+    g = _get_guideline_or_404(d.tenant_id, id)
+    if g.status == "CLOSED":
+        raise ApiError(409, CODE_CONFLICT, "已关闭的指南不可发布")
+    if g.status == "PUBLISHED":
+        return ok(request, to_api_guideline(g))
+    g.status = "PUBLISHED"
+    if g.publish_at is None:
+        g.publish_at = dj_tz.now()
+    g.modifier_id = d.user_id
+    g.save(update_fields=["status", "publish_at", "modifier_id", "updated_at"])
+    _notify_role(g.tenant_id, "R-STAFF", "GUIDELINE", "指南征集通知",
+                 f"《{g.title}》已发布，可在线填报", f"guideline:{g.id}")
+    return ok(request, to_api_guideline(g))
+
+
+def close_guideline(request: HttpRequest, id: int):
+    """关闭征集：仅 PUBLISHED→CLOSED（幂等）；DRAFT 关闭 40901。"""
+    d = domain_from(request)
+    g = _get_guideline_or_404(d.tenant_id, id)
+    if g.status == "CLOSED":
+        return ok(request, to_api_guideline(g))
+    if g.status != "PUBLISHED":
+        raise ApiError(409, CODE_CONFLICT, "仅已发布指南可关闭")
+    g.status = "CLOSED"
+    g.modifier_id = d.user_id
+    g.save(update_fields=["status", "modifier_id", "updated_at"])
+    return ok(request, to_api_guideline(g))
+
+
+def conclude_guide_review(n_task_id: int) -> None:
+    """N 域论证评审回写单一写者：通过→指南入库发布，不通过→保持 DRAFT。"""
+    from apps.expertreview.models import NReviewTask
+
+    t = NReviewTask.objects.filter(id=n_task_id, deleted=0).first()
+    if t is None or not t.target_id:
+        return
+    g = PGuideline.objects.filter(id=t.target_id, deleted=0).first()
+    if g is None:
+        return
+    if t.conclusion not in ("PASS", "APPROVED"):
+        return
+    if g.status != "DRAFT":
+        return
+    g.status = "PUBLISHED"
+    if g.publish_at is None:
+        g.publish_at = dj_tz.now()
+    g.save(update_fields=["status", "publish_at", "updated_at"])
+    _notify_role(g.tenant_id, "R-STAFF", "GUIDELINE", "指南入库发布",
+                 f"《{g.title}》已通过专家论证并入库发布", f"guideline:{g.id}")
 
 
 # ---------------------------------------------------------------------------

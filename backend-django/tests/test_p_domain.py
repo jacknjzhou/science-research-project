@@ -176,3 +176,99 @@ def test_withdraw_reason_required_400(seed_auth):
         **bearer(2, ["R-STAFF"]),
     )
     assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# M1-d B5：指南征集发布/关闭动作 + 专家论证评审入库推送
+# ---------------------------------------------------------------------------
+def _guideline(**kw):
+    base = dict(code="GUIDE-M1D-1", tenant_id=1, creator_id=1, title="M1-d 指南",
+                project_type="VERTICAL", status="DRAFT")
+    base.update(kw)
+    return PGuideline.objects.create(**base)
+
+
+def test_m1d_guideline_publish_action_notifies_staff(seed_auth):
+    """发布动作：DRAFT→PUBLISHED + publish_at + 推送 R-STAFF；重复发布幂等。"""
+    from apps.notify.models import SysNotification
+
+    g = _guideline()
+    c = _c()
+    r = c.post(f"/api/v1/apply/guidelines/{g.id}:publish", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "PUBLISHED"
+    g.refresh_from_db()
+    assert g.publish_at is not None
+    assert SysNotification.objects.filter(tenant_id=1, user_id=2).exists()  # staff 用户 2
+
+    # 重复发布：幂等 200，publish_at 不变
+    at = g.publish_at
+    r = c.post(f"/api/v1/apply/guidelines/{g.id}:publish", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 200
+    g.refresh_from_db()
+    assert g.publish_at == at
+
+
+def test_m1d_guideline_close_action(seed_auth):
+    """关闭：仅 PUBLISHED 可关；DRAFT 直接关 40901。"""
+    g = _guideline(status="PUBLISHED")
+    draft = _guideline(code="GUIDE-M1D-2", status="DRAFT")
+    c = _c()
+    r = c.post(f"/api/v1/apply/guidelines/{g.id}:close", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "CLOSED"
+
+    r = c.post(f"/api/v1/apply/guidelines/{draft.id}:close", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 409
+    assert r.json()["code"] == 40901
+
+
+def test_m1d_guide_review_conclude_publishes_guideline(seed_auth):
+    """论证评审通过 → 指南入库发布（DRAFT→PUBLISHED）；不通过保持 DRAFT。"""
+    from apps.expertreview.models import NReviewTask
+
+    g = _guideline(code="GUIDE-M1D-3")
+    g2 = _guideline(code="GUIDE-M1D-4")
+    c = _c()
+    rid = c.post(
+        "/api/v1/reviews",
+        data=json.dumps({"biz_type": "GUIDE", "target_id": g.id, "title": "指南论证"}),
+        content_type="application/json", **bearer(1, ["R-ADMIN"]),
+    ).json()["data"]["id"]
+    rid2 = c.post(
+        "/api/v1/reviews",
+        data=json.dumps({"biz_type": "GUIDE", "target_id": g2.id, "title": "指南论证2"}),
+        content_type="application/json", **bearer(1, ["R-ADMIN"]),
+    ).json()["data"]["id"]
+
+    r = c.post(f"/api/v1/reviews/{rid}/conclude",
+               data=json.dumps({"conclusion": "PASS"}), content_type="application/json",
+               **bearer(1, ["R-ADMIN"]))
+    assert r.status_code == 200
+    g.refresh_from_db()
+    assert g.status == "PUBLISHED"
+    assert g.publish_at is not None
+
+    r = c.post(f"/api/v1/reviews/{rid2}/conclude",
+               data=json.dumps({"conclusion": "REJECT"}), content_type="application/json",
+               **bearer(1, ["R-ADMIN"]))
+    assert r.status_code == 200
+    g2.refresh_from_db()
+    assert g2.status == "DRAFT"
+
+
+def test_m1d_expertreview_does_not_import_p_at_top_level():
+    """N 域不得顶层 import P 域（跨模块写纪律：延迟 import）。"""
+    import ast
+    import io as _io
+    import pathlib
+
+    src = pathlib.Path("apps/expertreview/api.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    top_imports = []
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module:
+            top_imports.append(node.module)
+        elif isinstance(node, ast.Import):
+            top_imports.extend(a.name for a in node.names)
+    assert not [m for m in top_imports if m.startswith("apps.p")], top_imports
