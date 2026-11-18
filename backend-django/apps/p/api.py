@@ -12,17 +12,20 @@ from django.http import HttpRequest
 from django.utils import timezone as dj_tz
 
 from apps.expertreview.models import NReviewInvitation, NReviewScore, NReviewTask
+from apps.funding.mappings import code_of
 from apps.p.mappings import (
     num2,
     to_api_application,
     to_api_guide_suggestion,
     to_api_guideline,
+    to_api_task_book,
 )
 from apps.p.models import (
     PApplication,
     PApplicationDoc,
     PGuideSuggestion,
     PGuideline,
+    PTaskBook,
 )
 from core.approval import has_role
 from core.auth.deps import domain_from
@@ -448,6 +451,7 @@ def upsert_budget_line(request: HttpRequest, id: int):
     """
     d = domain_from(request)
     a = _get_app_or_404(d.tenant_id, id)
+    _assert_application_mutable(a)
     body = read_json(request)
     subject_code = body.get("subject_code")
     amount = body.get("amount")
@@ -476,6 +480,7 @@ def save_application_section(request: HttpRequest, id: int, code: str):
     """PUT /apply/applications/{id}/sections/{code} —— 分节 upsert，版本自增。"""
     d = domain_from(request)
     a = _get_app_or_404(d.tenant_id, id)
+    _assert_application_mutable(a)
     if code not in SECTION_CODES:
         raise ApiError(400, CODE_UNKNOWN_PARAM, f"未知分节码：{code}")
     body = read_json(request)
@@ -503,6 +508,7 @@ def submit_application(request: HttpRequest, id: int):
     d = domain_from(request)
     body = read_json(request)
     a = _get_app_or_404(d.tenant_id, id)
+    _assert_application_mutable(a)
     if a.status != "DRAFT":
         raise ApiError(409, CODE_CONFLICT, "仅草稿状态可提交")
     if a.ai_draft_marked and not body.get("confirm_ai_watermark"):
@@ -832,3 +838,186 @@ def reject_guide_suggestion(request: HttpRequest, id: int):
             f"《{s.title}》未采纳：{reason}", f"guide-suggestion:{s.id}", d.tenant_id,
         )
     return ok(request, to_api_guide_suggestion(s))
+
+
+# ---------------------------------------------------------------------------
+# 任务书（M2-b C2）：立项通过后生成 → 双签签订 → 立项建项
+# ---------------------------------------------------------------------------
+_TASK_BOOK_GENERATABLE = ("PUBLISHED", "DECIDED")
+_SIGN_ROLES = ("PI", "MANAGER", "LEADER")
+
+
+def _task_book_snapshot(a: PApplication) -> dict:
+    """任务书内容快照：生成时冻结（目标/考核指标/预算/机构），签后不可改。"""
+    return {
+        "title": a.title,
+        "project_type": a.project_type,
+        "pi_user_id": a.pi_user_id,
+        "applicant_org_id": a.applicant_org_id,
+        "applicant_type": a.applicant_type,
+        "total_budget": num2(a.total_budget),
+        "duration_months": a.duration_months,
+        "abstract": a.abstract,
+        "research_target": a.research_target,
+        "technical_route": a.technical_route,
+        "expected_output": a.expected_output,
+        "guideline_id": a.guideline_id,
+        "frozen_at": dj_tz.now().isoformat(),
+    }
+
+
+def _task_book_visible(d, tb: PTaskBook) -> bool:
+    """外部机构用户只能看本机构申报的任务书。"""
+    if not is_external_only(d):
+        return True
+    a = PApplication.objects.filter(
+        id=tb.application_id, tenant_id=d.tenant_id, deleted=0
+    ).first()
+    if a is None:
+        return False
+    org = current_org_id(d)
+    return a.applicant_org_id is not None and org is not None and a.applicant_org_id == org
+
+
+def generate_task_book(request: HttpRequest):
+    """POST /apply/task-books —— 立项通过（PUBLISHED/DECIDED）后生成，按申报幂等。"""
+    d = domain_from(request)
+    body = read_json(request)
+    aid = body.get("application_id")
+    if not aid:
+        raise ApiError(400, CODE_BAD_REQUEST, "application_id 必填")
+    with transaction.atomic():
+        a = (
+            PApplication.objects.select_for_update()
+            .filter(id=int(aid), tenant_id=d.tenant_id, deleted=0)
+            .first()
+        )
+        if a is None:
+            raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
+        exist = PTaskBook.objects.filter(
+            application_id=a.id, tenant_id=d.tenant_id, deleted=0
+        ).first()
+        if exist is not None:
+            return ok(request, to_api_task_book(exist))
+        if a.status not in _TASK_BOOK_GENERATABLE:
+            raise ApiError(409, CODE_CONFLICT, "仅立项通过（PUBLISHED/DECIDED）的申报可生成任务书")
+        tb = PTaskBook.objects.create(
+            tenant_id=d.tenant_id,
+            creator_id=d.user_id,
+            application_id=a.id,
+            status="DRAFT",
+            content_snapshot=_task_book_snapshot(a),
+            print_template_code=body.get("print_template_code") or "TASK_BOOK",
+        )
+        tb.code = code_of("PRJ", tb.id)
+        tb.save(update_fields=["code"])
+    _notify_role(
+        d.tenant_id, "R-MANAGER", "TODO", "任务书待核对", a.title, f"task-book:{tb.id}"
+    )
+    return ok(request, to_api_task_book(tb))
+
+
+def get_task_book(request: HttpRequest, id: int):
+    """GET /apply/task-books/{id} —— 外部机构只能读本机构。"""
+    d = domain_from(request)
+    tb = PTaskBook.objects.filter(id=id, tenant_id=d.tenant_id, deleted=0).first()
+    if tb is None or not _task_book_visible(d, tb):
+        raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
+    return ok(request, to_api_task_book(tb))
+
+
+def sign_task_book(request: HttpRequest, id: int):
+    """POST /apply/task-books/{id}:sign —— PI + (MANAGER|LEADER) 双签即立项建项。"""
+    d = domain_from(request)
+    body = read_json(request)
+    role = (body.get("role") or "").strip().upper()
+    if role not in _SIGN_ROLES:
+        raise ApiError(400, CODE_BAD_REQUEST, "role 须为 PI/MANAGER/LEADER")
+    with transaction.atomic():
+        tb = (
+            PTaskBook.objects.select_for_update()
+            .filter(id=id, tenant_id=d.tenant_id, deleted=0)
+            .first()
+        )
+        if tb is None or not _task_book_visible(d, tb):
+            raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
+        if tb.status in ("SIGNED", "EXECUTING"):
+            raise ApiError(409, CODE_CONFLICT, "任务书已签订")
+        a = (
+            PApplication.objects.select_for_update()
+            .filter(id=tb.application_id, tenant_id=d.tenant_id, deleted=0)
+            .first()
+        )
+        if a is None:
+            raise ApiError(404, CODE_NOT_FOUND, "申报不存在")
+        records = [r for r in (tb.sign_records or []) if isinstance(r, dict)]
+        if any(r.get("role") == role for r in records):
+            raise ApiError(409, CODE_CONFLICT, "该角色已签署")
+        if role == "PI":
+            signer_id = a.pi_user_id  # PI 必须是申报负责人本人，忽略请求体
+        else:
+            signer_id = body.get("signer_id") or d.user_id
+        records.append({
+            "role": role,
+            "signerId": signer_id,
+            "signedAt": dj_tz.now().isoformat(),
+            "result": body.get("sig_result") or "OK",
+        })
+        tb.sign_records = records
+        roles_signed = {r.get("role") for r in records}
+        complete = "PI" in roles_signed and (
+            "MANAGER" in roles_signed or "LEADER" in roles_signed
+        )
+        if complete:
+            project = _create_project_from_task_book(d, a, tb)
+            tb.status = "SIGNED"
+            tb.effective_date = dj_tz.localdate()
+            tb.project_id = project.id
+            a.status = "EXECUTING"
+            a.save(update_fields=["status", "updated_at"])
+        tb.save()
+    if complete:
+        _notify(
+            a.pi_user_id, "ANNOUNCE", "任务书已签订",
+            f"《{a.title}》任务书已签订，项目已立项进入执行。",
+            f"task-book:{tb.id}", d.tenant_id,
+        )
+    return ok(request, to_api_task_book(tb))
+
+
+def _create_project_from_task_book(d, a: PApplication, tb: PTaskBook):
+    """双签后立项建项：与申报 1:1（application_id），外部课题带 ext_org_id。"""
+    from apps.project.models import EProject
+
+    exist = EProject.objects.filter(
+        application_id=a.id, tenant_id=d.tenant_id, deleted=0
+    ).first()
+    if exist is not None:  # 幂等兜底：同申报不重复建项
+        return exist
+    project = EProject.objects.create(
+        tenant_id=d.tenant_id,
+        creator_id=d.user_id,
+        application_id=a.id,
+        title=a.title,
+        project_type=a.project_type,
+        pi_user_id=a.pi_user_id,
+        member_ids=a.member_ids or [],
+        department_id=a.department_id,
+        legal_entity_id=1,
+        total_budget=a.total_budget or 0,
+        status="EXECUTING",
+        ext_org_id=a.applicant_org_id,
+        security_level="INTERNAL",
+    )
+    project.code = code_of("PRJ", project.id)
+    project.save(update_fields=["code"])
+    return project
+
+
+def _assert_application_mutable(a: PApplication) -> None:
+    """任务书签订后申报内容冻结（分节/预算/再提交一律 40901）。"""
+    if PTaskBook.objects.filter(
+        application_id=a.id, tenant_id=a.tenant_id, deleted=0,
+        status__in=("SIGNED", "EXECUTING"),
+    ).exists():
+        raise ApiError(409, CODE_CONFLICT, "任务书已签订，申报内容不可修改")

@@ -93,3 +93,26 @@ def to_api_guide_suggestion(s: Any) -> dict[str, Any]:
         "updated_at": fmt_ts(s.updated_at),
         "remark": s.remark,
     }
+
+
+def to_api_task_book(t: Any) -> dict[str, Any]:
+    """任务书（M2-b）：snake_case，与 01-P 契约 TaskBook 逐键一致。"""
+    return {
+        "id": t.id,
+        "code": t.code,
+        "tenant_id": t.tenant_id,
+        "status": t.status,
+        "deleted": t.deleted,
+        "creator_id": t.creator_id,
+        "modifier_id": t.modifier_id,
+        "created_at": fmt_ts(t.created_at),
+        "updated_at": fmt_ts(t.updated_at),
+        "remark": t.remark,
+        "application_id": t.application_id,
+        "content_snapshot": t.content_snapshot or {},
+        "print_template_code": t.print_template_code,
+        "signed_pdf_url": t.signed_pdf_url,
+        "sign_records": t.sign_records or [],
+        "effective_date": t.effective_date.isoformat() if t.effective_date else None,
+        "project_id": t.project_id,
+    }

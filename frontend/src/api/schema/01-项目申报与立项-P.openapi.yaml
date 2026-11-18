@@ -1010,6 +1010,8 @@ paths:
                   - type: object
                     properties:
                       data: { $ref: '#/components/schemas/TaskBook' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
 
   /apply-plans:
@@ -1820,15 +1822,23 @@ components:
         signed_pdf_url: { type: string, nullable: true }
         sign_records:  { type: array, items: { type: object } }
         effective_date: { type: string, format: date, nullable: true }
-        project_id:    { type: integer, format: int64, nullable: true, description: "立项回填 → 02 E_PROJECT(id)" }
+        project_id:    { type: integer, format: int64, nullable: true, description: "签订后回填 E_PROJECT(id)；外部课题该项目带 ext_org_id（M2-b）" }
         status:        { type: string, enum: [DRAFT, SIGNED, EXECUTING] }
+        tenant_id:     { type: integer, format: int64 }
+        deleted:       { type: integer }
+        creator_id:    { type: integer, format: int64 }
+        modifier_id:   { type: integer, format: int64, nullable: true }
+        created_at:    { type: string, format: date-time }
+        updated_at:    { type: string, format: date-time }
+        remark:        { type: string, nullable: true }
 
     SignRequest:
       type: object
-      required: [signer_id, role]
+      required: [role]
+      description: 电子签章请求（M2-b）；role=PI 时 signer_id 强制取申报负责人本人，忽略请求体。
       properties:
-        signer_id:  { type: integer, format: int64 }
-        role:       { type: string, description: "签署方角色：PI/MANAGER/LEADER 等" }
+        signer_id:  { type: integer, format: int64, description: "内部角色可指定；PI 由服务端取申报负责人" }
+        role:       { type: string, enum: [PI, MANAGER, LEADER], description: "签署方角色" }
         signed_at:  { type: string, format: date-time }
         sig_result: { type: string }
     ApplyPlan:

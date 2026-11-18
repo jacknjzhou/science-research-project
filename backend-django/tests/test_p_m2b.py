@@ -46,6 +46,13 @@ def _get(url, roles=("R-STAFF",), uid=2):
     return Client().get(url, **bearer(uid, list(roles)))
 
 
+def _put(url, body, roles=("R-STAFF",), uid=2):
+    return Client().put(
+        url, data=json.dumps(body), content_type="application/json",
+        **bearer(uid, list(roles))
+    )
+
+
 def _post(url, body, roles=("R-STAFF",), uid=2):
     return Client().post(
         url, data=json.dumps(body), content_type="application/json",
@@ -186,3 +193,109 @@ def test_internal_application_stays_internal(seed_auth):
                     roles=("R-STAFF",), uid=2))
     assert d["applicant_type"] == "INTERNAL" and d["applicant_org_id"] is None
     assert d["pi_user_id"] == 2
+
+
+# ===========================================================================
+# Task 5：任务书生成 / 签章 / 立项建项 + 签订后冻结
+# ===========================================================================
+def _party(seed):
+    from apps.p.models import PApplication
+
+    org_a, org_b, ua, ub = _partner_users(seed)
+
+    def make(user, org, status="PUBLISHED", title="开放课题甲"):
+        return PApplication.objects.create(
+            tenant_id=1, creator_id=user.id, title=title, project_type="开放课题",
+            pi_user_id=user.id, applicant_org_id=org.id, applicant_type="EXTERNAL",
+            status=status, total_budget="100000.00",
+        )
+
+    return org_a, org_b, ua, ub, make
+
+
+def test_task_book_sign_creates_project_once(seed_auth):
+    from apps.project.models import EProject
+
+    org_a, _org_b, ua, _ub, make = _party(seed_auth)
+    aid = make(ua, org_a).id
+    tb = _data(_post("/api/v1/apply/task-books", {"application_id": aid},
+                     roles=("R-MANAGER",)))
+    assert tb["status"] == "DRAFT"
+    assert tb["content_snapshot"]["pi_user_id"] == ua.id
+    assert tb["content_snapshot"]["total_budget"] == "100000.00"
+    # 幂等：同申报再生成拿回同一份
+    assert _data(_post("/api/v1/apply/task-books", {"application_id": aid},
+                       roles=("R-MANAGER",)))["id"] == tb["id"]
+    # PI 单签：仍 DRAFT
+    s1 = _data(_post(f"/api/v1/apply/task-books/{tb['id']}:sign", {"role": "PI"},
+                     roles=("R-PARTNER",), uid=ua.id))
+    assert s1["status"] == "DRAFT" and len(s1["sign_records"]) == 1
+    assert s1["sign_records"][0]["signerId"] == ua.id
+    # 管理端签 → SIGNED + 立项
+    s2 = _data(_post(f"/api/v1/apply/task-books/{tb['id']}:sign", {"role": "MANAGER"},
+                     roles=("R-MANAGER",)))
+    assert s2["status"] == "SIGNED" and s2["project_id"]
+    proj = EProject.objects.get(id=s2["project_id"])
+    assert proj.ext_org_id == org_a.id and proj.pi_user_id == ua.id
+    assert proj.status == "EXECUTING" and proj.application_id == aid
+    # 再签 409，且只有一个项目
+    again = _post(f"/api/v1/apply/task-books/{tb['id']}:sign", {"role": "MANAGER"},
+                  roles=("R-MANAGER",))
+    assert again.status_code == 409 and json.loads(again.content)["code"] == 40901
+    assert EProject.objects.filter(application_id=aid).count() == 1
+
+
+def test_application_is_frozen_after_task_book_signed(seed_auth):
+    org_a, _org_b, ua, _ub, make = _party(seed_auth)
+    aid = make(ua, org_a).id
+    tb = _data(_post("/api/v1/apply/task-books", {"application_id": aid},
+                     roles=("R-MANAGER",)))
+    _post(f"/api/v1/apply/task-books/{tb['id']}:sign", {"role": "PI"},
+          roles=("R-PARTNER",), uid=ua.id)
+    _post(f"/api/v1/apply/task-books/{tb['id']}:sign", {"role": "MANAGER"},
+          roles=("R-MANAGER",))
+
+    sec = _put(f"/api/v1/apply/applications/{aid}/sections/GOAL",
+               {"content_rich": "签后偷偷改"}, roles=("R-PARTNER",), uid=ua.id)
+    assert sec.status_code == 409 and json.loads(sec.content)["code"] == 40901
+    bud = _post(f"/api/v1/apply/applications/{aid}/budget",
+                {"subject_code": "7201", "amount": "1000.00"},
+                roles=("R-PARTNER",), uid=ua.id)
+    assert bud.status_code == 409
+    sub = _post(f"/api/v1/apply/applications/{aid}/submit", {},
+                roles=("R-PARTNER",), uid=ua.id)
+    assert sub.status_code == 409
+
+
+def test_task_book_requires_published_and_partner_cannot_see_others(seed_auth):
+    org_a, _org_b, ua, ub, make = _party(seed_auth)
+    draft = make(ua, org_a, status="DRAFT", title="草稿课题")
+    r = _post("/api/v1/apply/task-books", {"application_id": draft.id},
+              roles=("R-MANAGER",))
+    assert r.status_code == 409 and json.loads(r.content)["code"] == 40901
+
+    aid = make(ua, org_a).id
+    tb = _data(_post("/api/v1/apply/task-books", {"application_id": aid},
+                     roles=("R-MANAGER",)))
+    # 机构 B 读不到
+    assert _get(f"/api/v1/apply/task-books/{tb['id']}",
+                roles=("R-PARTNER",), uid=ub.id).status_code == 404
+    # 本机构 PI 可读
+    assert _get(f"/api/v1/apply/task-books/{tb['id']}",
+                roles=("R-PARTNER",), uid=ua.id).status_code == 200
+
+
+def test_task_book_sign_role_validation(seed_auth):
+    org_a, _org_b, ua, _ub, make = _party(seed_auth)
+    aid = make(ua, org_a).id
+    tb = _data(_post("/api/v1/apply/task-books", {"application_id": aid},
+                     roles=("R-MANAGER",)))
+    bad = _post(f"/api/v1/apply/task-books/{tb['id']}:sign", {"role": "BOSS"},
+                roles=("R-MANAGER",))
+    assert bad.status_code == 400 and json.loads(bad.content)["code"] == 40001
+    # 同角色重复签 40901
+    _post(f"/api/v1/apply/task-books/{tb['id']}:sign", {"role": "PI"},
+          roles=("R-PARTNER",), uid=ua.id)
+    dup = _post(f"/api/v1/apply/task-books/{tb['id']}:sign", {"role": "PI"},
+                roles=("R-PARTNER",), uid=ua.id)
+    assert dup.status_code == 409 and json.loads(dup.content)["code"] == 40901

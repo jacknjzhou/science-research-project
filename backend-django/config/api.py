@@ -97,6 +97,10 @@ api.get("/apply/guide-suggestions/{id}", auth=ark_auth, tags=["p"])(
 api.get("/apply/guide-suggestions", auth=ark_auth, tags=["p"])(
     p_api.list_guide_suggestions
 )
+# —— M2-b 任务书（生成/详情/签章；:sign 必须先于 {id} 注册）——
+api.post("/apply/task-books", auth=ark_auth, tags=["p"])(p_api.generate_task_book)
+api.post("/apply/task-books/{id}:sign", auth=ark_auth, tags=["p"])(p_api.sign_task_book)
+api.get("/apply/task-books/{id}", auth=ark_auth, tags=["p"])(p_api.get_task_book)
 api.post("/apply/guide-suggestions", auth=ark_auth, tags=["p"])(
     p_api.create_guide_suggestion
 )
