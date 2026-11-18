@@ -116,6 +116,9 @@ api.post(
 api.post(
     "/apply/applications/{id}:terminate", auth=ark_auth, tags=["p"]
 )(p_api.terminate_application)
+api.post(
+    "/apply/applications/{id}:decide", auth=ark_auth, tags=["p"]
+)(p_api.decide_application)
 api.get("/apply/applications/{id}", auth=ark_auth, tags=["p"])(p_api.get_application)
 
 # —— P 申报书分节/预算/提交 + AI 起草 + 申报评审（EditorView/ReviewView 契约）——
