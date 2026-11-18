@@ -14,7 +14,10 @@ import bcrypt
 from django.core.management.base import BaseCommand
 from django.utils import timezone as dj_tz
 
-from apps.sysadmin.models import PageGrant, SysDict, SysDictItem, SysLegalEntity, SysOrg, SysRole, SysUser, SysUserRole
+from apps.sysadmin.models import (
+    PageGrant, SysDict, SysDictItem, SysLegalEntity, SysOrg, SysPartnerOrg, SysRole,
+    SysUser, SysUserRole,
+)
 
 ROLES = [
     ("R-STAFF", "科研人员"),
@@ -104,6 +107,9 @@ PAGE_GRANTS = [
     # 由 R-MANAGER/R-FINANCE 既有 /incomes/* 通配覆盖，R-LEADER 无）
     ("funding-disburse", "R-MANAGER"), ("funding-disburse", "R-FINANCE"), ("funding-disburse", "R-LEADER"),
     ("funding-income", "R-MANAGER"), ("funding-income", "R-FINANCE"), ("funding-income", "R-LEADER"),
+    # M2-a：外部机构门户（R-PARTNER）与资质审核台（R-MANAGER/R-ADMIN；镜像 auth.ts PAGE_GRANTS）
+    ("portal", "R-PARTNER"),
+    ("admin-partner-orgs", "R-MANAGER"), ("admin-partner-orgs", "R-ADMIN"),
 ]
 
 
@@ -1037,5 +1043,49 @@ class Command(BaseCommand):
              "apply_end_at": now + timedelta(days=90),
              "funding_source": "院自主部署", "total_envelope": 3000000,
              "content_rich": "## 征集方向\n1. 新能源材料\n2. 智能装备",}, "p")
+
+        # ---- M2-a：外部机构（C1）-----------------------------------------
+        ptn_a = put(SysPartnerOrg, {"tenant_id": T1, "code": "PTN-2026-000001"},
+                    {"name": "合作示例大学", "short_name": "示例大",
+                     "credit_code": "91310000MA1K3XY12A", "org_type": "UNIVERSITY",
+                     "contact_name": "张联系", "contact_phone": "13800000001",
+                     "contact_email": "partner@example.edu.cn",
+                     "address": "上海市杨浦区示例路 1 号", "status": "APPROVED",
+                     "audit_user_id": 2, "audited_at": now,
+                     "qualification_json": [{"name": "事业单位法人证书", "no": "12310000425000000X"}],
+                     "creator_id": C1, "remark": "M2-a 演示：已通过审核的外部机构"}, "partner")
+        ptn_b = put(SysPartnerOrg, {"tenant_id": T1, "code": "PTN-2026-000002"},
+                    {"name": "待审核协作单位", "credit_code": "91110000MA2C4AB34B",
+                     "org_type": "COLLAB", "contact_name": "李经办",
+                     "contact_phone": "13800000002",
+                     "contact_email": "pending@example.com", "status": "PENDING",
+                     "creator_id": C1, "remark": "M2-a 演示：待审核（审核台有数据可操作）"}, "partner")
+        partner_user, created = SysUser.objects.get_or_create(
+            username="partner", tenant_id=T1,
+            defaults={
+                "real_name": "合作单位联系人", "email": "partner@example.edu.cn",
+                "security_level": "INTERNAL", "status": "ACTIVE",
+                "password_hash": bcrypt.hashpw(b"Partner@123456", bcrypt.gensalt()).decode(),
+                "org_id": ptn_a.id, "user_source": "EXTERNAL", "creator_id": C1,
+            },
+        )
+        cnt["partner"] = cnt.get("partner", 0) + int(created)
+        # 已存在则补归属列（幂等修数，不改密码/状态）
+        if not created and (partner_user.org_id != ptn_a.id or partner_user.user_source != "EXTERNAL"):
+            partner_user.org_id = ptn_a.id
+            partner_user.user_source = "EXTERNAL"
+            partner_user.save(update_fields=["org_id", "user_source"])
+        r_partner = SysRole.objects.filter(tenant_id=T1, code="R-PARTNER").first()
+        if r_partner is not None:
+            _, c = SysUserRole.objects.get_or_create(
+                user=partner_user, role=r_partner, tenant_id=T1
+            )
+            cnt["partner"] = cnt.get("partner", 0) + int(c)
+        # 门户公告（演示：机构登录即见审核通过与指南推送）
+        put(SysNotification, {"tenant_id": T1, "user_id": partner_user.id,
+                              "typ": "ANNOUNCE", "title": "机构资质审核通过"},
+            {"content": "贵单位资质已通过审核，账号已激活；可在门户查看本单位相关数据与已发布指南。",
+             "biz_ref": f"partner-org:{ptn_a.id}", "channel": "BOTH",
+             "creator_id": C1}, "partner")
 
         return cnt

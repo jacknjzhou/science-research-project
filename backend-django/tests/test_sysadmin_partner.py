@@ -266,3 +266,32 @@ def test_portal_is_org_scoped(seed_auth):
 def test_internal_user_without_org_is_denied(seed_auth):
     r = _get("/api/v1/portal/org", ("R-STAFF",), 2)
     assert r.status_code == 403
+
+
+def test_seed_partner_account_can_browse_portal(db):
+    """种子演示闭环：已审机构账号可登录门户（C1 验收口径）。"""
+    from django.core.management import call_command
+
+    call_command("seed_demo")
+    org = SysPartnerOrg.objects.get(code="PTN-2026-000001")
+    assert org.status == "APPROVED"
+    assert SysPartnerOrg.objects.filter(code="PTN-2026-000002", status="PENDING").exists()
+    u = SysUser.objects.get(username="partner")
+    assert u.status == "ACTIVE" and u.user_source == "EXTERNAL" and u.org_id == org.id
+
+    c = Client()
+    r = c.post("/api/v1/auth/login",
+               data=json.dumps({"username": "partner", "password": "Partner@123456"}),
+               content_type="application/json")
+    assert r.status_code == 200, r.content
+    tok = _data(r)["access_token"]
+    home = c.get("/api/v1/portal/home", HTTP_AUTHORIZATION="Bearer " + tok)
+    assert home.status_code == 200, home.content
+    d = _data(home)
+    assert d["org"]["code"] == "PTN-2026-000001"
+    titles = [g["title"] for g in d["guidelines"]]
+    assert titles and all("征集" not in t for t in titles)  # 种子里的 DRAFT 指南不外泄
+    assert d["todos"]["unread_notifications"] >= 1
+    # 涉密域默认全拒（验收：外部身份进不了经费/项目/采购）
+    for path in ("/api/v1/expenses", "/api/v1/partner-orgs"):
+        assert c.get(path, HTTP_AUTHORIZATION="Bearer " + tok).status_code == 403
