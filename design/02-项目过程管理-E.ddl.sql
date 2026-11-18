@@ -64,7 +64,8 @@ CREATE TABLE E_PROJECT (
   ethics_case_id   BIGINT,                                   -- 逻辑外键 -> 05/06 C 模块伦理审查案件（单号前缀 ETH）
   policy_pack_id   BIGINT,                                   -- 命中制度包快照 -> common sys_policy_pack.id（复算依据，PRD 2.10）
   security_level   VARCHAR(16)  NOT NULL DEFAULT 'INTERNAL'
-                   CHECK (security_level IN ('PUBLIC','INTERNAL','SECRET','TOP_SECRET')) -- 涉密等级（PRD 2.13）
+                   CHECK (security_level IN ('PUBLIC','INTERNAL','SECRET','TOP_SECRET')), -- 涉密等级（PRD 2.13）
+  ext_org_id       BIGINT                                   -- 外部合作机构 → sys_partner_org(id)，空=院内自建（M2-b）
 );
 COMMENT ON TABLE  E_PROJECT IS '执行态项目主表；与 01 P_APPLICATION 1:1 继承，project_id 全局拥有方';
 COMMENT ON COLUMN E_PROJECT.application_id IS '逻辑外键 01 P_APPLICATION.id，立项来源';
@@ -520,3 +521,5 @@ ALTER TABLE E_FINAL_ACCEPT
 --   GET /project/{id}/trace 通过 e_trace_node(trace_id, node_seq) 组织端到端有向链，本模块仅引用不重复建表。
 --   外协台账（E-16）统一在 09 G 的 G_OUTSOURCE/G_CONTRACT，本模块只以 contract_id/outsource_unit_id 逻辑引用与视图展示。
 -- =============================================================================
+
+-- M2-b 增补：E_PROJECT.ext_org_id 记录外部合作机构归属（sys_partner_org.id），用于机构级数据隔离

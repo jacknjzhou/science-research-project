@@ -33,6 +33,7 @@ class EProject(models.Model):
     policy_pack_id = models.BigIntegerField(null=True, blank=True)
     security_level = models.CharField(max_length=16, default="INTERNAL")
     category_id = models.BigIntegerField(null=True, blank=True)
+    ext_org_id = models.BigIntegerField(null=True, blank=True)  # 外部合作机构 → sys_partner_org(id)
 
     class Meta:
         db_table = "E_PROJECT"

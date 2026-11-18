@@ -310,6 +310,7 @@ CREATE INDEX idx_trace_chain ON e_trace_node(trace_id, node_seq);
 -- =============================================================================
 INSERT INTO seq_prefix_registry (prefix, biz_object, owner_module, introduced_ver, per_entity) VALUES
   ('PRJ','项目/立项','P/E','v1.0',TRUE),
+  ('SUG','指南建议','P','v1.2',TRUE),
   ('BUD','预算','F','v1.0',TRUE),
   ('EXP','报销单','F','v1.0',TRUE),
   ('DISB','外拨经费','F','v1.1',TRUE),

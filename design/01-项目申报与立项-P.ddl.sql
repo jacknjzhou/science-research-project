@@ -156,6 +156,9 @@ CREATE TABLE p_application (
   is_horizontal     BOOLEAN      NOT NULL DEFAULT FALSE,      -- 是否横向/委托课题（P-18）
   funding_channel   VARCHAR(64),                    -- 经费来源渠道（横向委托，字典 item_code）
   ai_draft_marked   BOOLEAN      NOT NULL DEFAULT FALSE,      -- 是否含 AI 起草水印段落（PRD 8.1 合规标记）
+  applicant_org_id  BIGINT,                         -- 外部机构 → sys_partner_org(id)，空=院内（M2-b）
+  applicant_type    VARCHAR(16)  NOT NULL DEFAULT 'INTERNAL'
+                    CHECK (applicant_type IN ('INTERNAL','EXTERNAL')),  -- 申报主体类型（M2-b）
   submit_at         TIMESTAMPTZ,                    -- 提交时间
   withdraw_at       TIMESTAMPTZ,                    -- 撤回/终止时间
   withdraw_reason   VARCHAR(512)                    -- 撤回/终止理由（进入评审后必填，PRD §11）
@@ -376,3 +379,44 @@ COMMENT ON COLUMN p_task_book.status      IS 'DRAFT=待核对/SIGNED=已签订/E
 COMMENT ON COLUMN p_task_book.content_snapshot IS '任务书内容快照 JSON，生成时冻结，保证归档一致性（PRD 2.14）';
 COMMENT ON COLUMN p_task_book.sign_records IS '电子签章记录 JSON：[{"signerId":1,"role":"PI","signedAt":"...","result":"OK"}]';
 COMMENT ON COLUMN p_task_book.project_id  IS '立项建项后回填，逻辑外键 → E_PROJECT(id)（02 模块，仅存 id 不建物理外键）';
+
+-- ============================================================================
+-- p_guide_suggestion 指南建议（M2-b C2：外部机构/院内提出选题建议 → 管理端审核采纳转指南草稿）
+-- ============================================================================
+CREATE TABLE p_guide_suggestion (
+  id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  code              VARCHAR(64),                    -- SUG-年-序
+  tenant_id         BIGINT NOT NULL,
+  org_id            BIGINT,                         -- 提议机构 → sys_partner_org(id)，空=院内
+  proposer_user_id  BIGINT,                         -- 建议人
+  title             VARCHAR(256) NOT NULL,
+  background        TEXT,                           -- 研究背景与必要性
+  objective         TEXT,                           -- 研究目标
+  expected_output   TEXT,                           -- 预期成果
+  contact_name      VARCHAR(64),
+  contact_phone     VARCHAR(32),
+  contact_email     VARCHAR(128),
+  status            VARCHAR(32) NOT NULL DEFAULT 'PENDING'
+                    CHECK (status IN ('PENDING','ACCEPTED','REJECTED')),
+  review_user_id    BIGINT,                         -- 审核人
+  reviewed_at       TIMESTAMPTZ,
+  reject_reason     VARCHAR(512),
+  guideline_id      BIGINT,                         -- 采纳后生成的 p_guideline(id)
+  deleted           SMALLINT NOT NULL DEFAULT 0,
+  creator_id        BIGINT NOT NULL,
+  modifier_id       BIGINT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  remark            TEXT
+);
+CREATE UNIQUE INDEX uk_p_guides_code      ON p_guide_suggestion(tenant_id, code) WHERE deleted = 0;
+CREATE INDEX idx_p_guides_tenant_st       ON p_guide_suggestion(tenant_id, status);
+CREATE INDEX idx_p_guides_org             ON p_guide_suggestion(org_id);
+CREATE INDEX idx_p_guides_guideline       ON p_guide_suggestion(guideline_id);
+
+COMMENT ON TABLE  p_guide_suggestion IS '指南建议：征集期选题建议，审核采纳后生成指南草稿（M2-b C2）';
+COMMENT ON COLUMN p_guide_suggestion.org_id       IS '提议机构 → sys_partner_org(id)，空=院内提出';
+COMMENT ON COLUMN p_guide_suggestion.status       IS 'PENDING=待审/ACCEPTED=已采纳/REJECTED=未采纳';
+COMMENT ON COLUMN p_guide_suggestion.guideline_id IS '采纳后生成的 p_guideline(id)（逻辑外键，同模块）';
+
+-- 0a) M2-b 增补：单号前缀 SUG 已在 00-common.sql seq_prefix_registry 登记（owner=P，v1.2）
