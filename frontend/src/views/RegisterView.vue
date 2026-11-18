@@ -6,7 +6,7 @@ import { api, ApiError } from '@/api/client'
 // 外部机构自助注册（M2-a C1）：公开页，无需登录。
 // 字段对齐契约 12-U `PartnerOrgRegisterRequest`（required 9 键，全 snake_case）。
 interface RegisterForm {
-  name: string
+  org_name: string
   credit_code: string
   org_type: string
   contact_name: string
@@ -14,7 +14,7 @@ interface RegisterForm {
   contact_email: string
   username: string
   password: string
-  short_name: string
+  real_name: string
 }
 
 const ORG_TYPES = [
@@ -26,9 +26,9 @@ const ORG_TYPES = [
 
 const router = useRouter()
 const form = reactive<RegisterForm>({
-  name: '', credit_code: '', org_type: 'COLLAB',
+  org_name: '', credit_code: '', org_type: 'COLLAB',
   contact_name: '', contact_phone: '', contact_email: '',
-  username: '', password: '', short_name: '',
+  username: '', password: '', real_name: '',
 })
 const submitting = ref(false)
 const done = ref(false)
@@ -44,9 +44,12 @@ const pwdHint = computed(() => {
   if (!/[A-Za-z]/.test(p)) return '需含字母'
   return ''
 })
+const phoneOk = computed(() => /^[0-9\-+ ]{6,32}$/.test(form.contact_phone.trim()))
+const emailOk = computed(() => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(form.contact_email.trim()))
 const ready = computed(() =>
-  !!form.name.trim() && creditOk.value && !!form.contact_name.trim() &&
-  !!form.username.trim() && !pwdHint.value && !!form.password,
+  !!form.org_name.trim() && creditOk.value && !!form.contact_name.trim() &&
+  phoneOk.value && emailOk.value &&
+  !!form.username.trim() && !!form.real_name.trim() && !pwdHint.value && !!form.password,
 )
 
 async function submit() {
@@ -88,7 +91,7 @@ async function submit() {
         <div class="reg-grid">
           <div class="cell span2">
             <label>机构全称 <i>*</i></label>
-            <input v-model="form.name" class="fg" placeholder="如：示例大学科学技术研究院" />
+            <input v-model="form.org_name" class="fg" placeholder="如：示例大学科学技术研究院" />
           </div>
           <div class="cell">
             <label>统一社会信用代码 <i>*</i></label>
@@ -96,8 +99,8 @@ async function submit() {
             <span v-if="form.credit_code && !creditOk" class="hint">须为 18 位</span>
           </div>
           <div class="cell">
-            <label>机构简称</label>
-            <input v-model="form.short_name" class="fg" placeholder="选填" />
+            <label>账号姓名 <i>*</i></label>
+            <input v-model="form.real_name" class="fg" placeholder="登录后显示的姓名" />
           </div>
           <div class="cell">
             <label>机构类型 <i>*</i></label>
@@ -110,11 +113,11 @@ async function submit() {
             <input v-model="form.contact_name" class="fg" placeholder="经办人姓名" />
           </div>
           <div class="cell">
-            <label>联系电话</label>
-            <input v-model="form.contact_phone" class="fg" placeholder="选填" />
+            <label>联系电话 <i>*</i></label>
+            <input v-model="form.contact_phone" class="fg" placeholder="审核联系用" />
           </div>
           <div class="cell">
-            <label>联系邮箱</label>
+            <label>联系邮箱 <i>*</i></label>
             <input v-model="form.contact_email" class="fg" placeholder="审核结果将发至该邮箱" />
           </div>
           <div class="cell">

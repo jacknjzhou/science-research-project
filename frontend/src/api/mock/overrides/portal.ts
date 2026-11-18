@@ -83,8 +83,8 @@ export const overrides: Record<string, unknown> = {
       ...ORGS[1],
       id: 99,
       code: 'PTN-2026-000099',
-      name: b.name || '新注册机构',
-      short_name: b.short_name ?? null,
+      name: b.org_name || '新注册机构',
+      short_name: null,
       credit_code: b.credit_code || '91310000MA1K3XY99Z',
       org_type: b.org_type || 'COLLAB',
       contact_name: b.contact_name || '—',
@@ -108,17 +108,33 @@ export const overrides: Record<string, unknown> = {
     return ORGS[0]
   }) as unknown,
 
-  'GET /partner-orgs': {
-    list: ORGS,
-    total: ORGS.length,
-    page: 1,
-    size: 20,
-  },
+  'GET /partner-orgs': ((url: string) => {
+    // 与后端一致：status/keyword 过滤，-id 倒序
+    const q = url.includes('?') ? new URLSearchParams(url.slice(url.indexOf('?') + 1)) : null
+    const status = q?.get('status') || ''
+    const kw = (q?.get('keyword') || '').toLowerCase()
+    let rows = ORGS.filter((o) => !status || o.status === status)
+    if (kw) {
+      rows = rows.filter(
+        (o) => o.name.toLowerCase().includes(kw) || o.credit_code.includes(kw),
+      )
+    }
+    rows = [...rows].sort((a, b) => b.id - a.id)
+    return { list: rows, total: rows.length, page: 1, size: 20 }
+  }) as unknown,
 
   'POST /partner-orgs/{id}/audit': ((url: string, ctx: { body: unknown }) => {
     const id = idOf(url)
     const o = ORGS.find((x) => x.id === id) || ORGS[1]
     const b = (ctx.body || {}) as Record<string, any>
+    if (o.status !== 'PENDING') {
+      // 与后端一致：同动作重放幂等；冲突动作不改变状态
+      // （mock 层只能回 200，真后端此处是 409/40901，演示模式下仅提示不改数据）
+      if ((b.action === 'APPROVE' && o.status === 'APPROVED') ||
+          (b.action === 'REJECT' && o.status === 'REJECTED')) return o
+      console.warn('[mock] 机构已审核完成，真后端返回 409/40901')
+      return o
+    }
     if (b.action === 'APPROVE') {
       o.status = 'APPROVED'
       o.audit_user_id = 2

@@ -837,6 +837,7 @@ paths:
                   - type: object
                     properties:
                       data: { $ref: '#/components/schemas/PortalHome' }
+        "403": { $ref: '#/components/responses/Forbidden' }
         "404": { $ref: '#/components/responses/NotFound' }
   /partner-orgs:
     get:
@@ -900,7 +901,9 @@ paths:
                     properties:
                       data: { $ref: '#/components/schemas/PartnerOrg' }
         "400": { $ref: '#/components/responses/BadRequest' }
+        "403": { $ref: '#/components/responses/Forbidden' }
         "404": { $ref: '#/components/responses/NotFound' }
+        "409": { $ref: '#/components/responses/Conflict' }
 
 components:
   securitySchemes:
@@ -924,7 +927,7 @@ components:
       description: 不存在（40401）
       content: { application/json: { schema: { $ref: '#/components/schemas/ApiResponse' } } }
     Conflict:
-      description: 冲突（40901 用户名重复；40902 角色已授予）
+      description: 冲突（40901 用户名/信用代码重复、状态不可再变更；40902 角色已授予）
       content: { application/json: { schema: { $ref: '#/components/schemas/ApiResponse' } } }
   schemas:
     ApiResponse:
@@ -972,7 +975,6 @@ components:
       type: object
       required: [org_name, credit_code, org_type, contact_name, contact_phone, contact_email, username, password, real_name]
       properties:
-        tenant_id: { type: integer, format: int64, description: 缺省 1（公开端点无登录态） }
         org_name: { type: string, maxLength: 256 }
         credit_code: { type: string, description: 18 位统一社会信用代码 }
         org_type:
