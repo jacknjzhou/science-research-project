@@ -899,3 +899,7 @@ p, R-MANAGER, /api/v1/apply/guide-suggestions/*:accept,POST
 p, R-MANAGER, /api/v1/apply/guide-suggestions/*:reject,POST
 p, R-MANAGER, /api/v1/apply/task-books,              POST
 p, R-MANAGER, /api/v1/apply/task-books/*,            GET
+# M2-b 终审补口：评审决议（PUBLISHED/DECIDED）+ 领导签署任务书（I1/I4）
+p, R-MANAGER, /api/v1/apply/applications/*:decide,   POST
+p, R-LEADER,  /api/v1/apply/applications/*:decide,   POST
+p, R-LEADER,  /api/v1/apply/task-books/*:sign,       POST

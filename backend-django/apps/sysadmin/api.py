@@ -125,6 +125,35 @@ def list_users(request: HttpRequest):
     )
 
 
+_EXTERNAL_ROLE_CODE = "R-PARTNER"
+
+
+def _assert_role_consistency(tenant_id: int, role_codes: list[str], org_id: int | None) -> None:
+    """R-PARTNER 与内部角色不可共存，且外部角色必须有机构（终审 M2-b C4/I2）。
+
+    混合角色会让 `is_external_only` 的历史精确比较失效（可伪造 PI/机构），
+    无机构的 R-PARTNER 则会在列表里以 `applicant_org_id IS NULL` 命中院内数据。
+    两条都在授权入口拦死，运行期再 fail-closed 兜一层。
+    """
+    codes = [c for c in (role_codes or []) if c]
+    if _EXTERNAL_ROLE_CODE not in codes:
+        return
+    others = [c for c in codes if c != _EXTERNAL_ROLE_CODE]
+    if others:
+        raise ApiError(
+            400, CODE_BAD_REQUEST,
+            f"外部机构角色 {_EXTERNAL_ROLE_CODE} 不能与内部角色共存：{','.join(others)}",
+        )
+    if not org_id:
+        raise ApiError(400, CODE_BAD_REQUEST, "外部机构角色必须绑定机构（org_id）")
+    from apps.sysadmin.models import SysPartnerOrg
+
+    if not SysPartnerOrg.objects.filter(
+        id=org_id, tenant_id=tenant_id, deleted=0
+    ).exists():
+        raise ApiError(400, CODE_BAD_REQUEST, "机构不存在或跨租户")
+
+
 def create_user(request: HttpRequest):
     d = domain_from(request)
     body = read_json(request)
@@ -135,6 +164,9 @@ def create_user(request: HttpRequest):
         raise ApiError(400, CODE_BAD_REQUEST, "请求参数错误")
     if SysUser.objects.filter(tenant_id=d.tenant_id, username=username, deleted=0).exists():
         raise ApiError(409, CODE_CONFLICT, "用户名已存在或写入冲突")
+    role_codes = [c for c in (body.get("roles") or []) if c]
+    org_id = body.get("org_id")
+    _assert_role_consistency(d.tenant_id, role_codes, org_id)
     u = SysUser.objects.create(
         username=username,
         real_name=real_name,
@@ -147,8 +179,13 @@ def create_user(request: HttpRequest):
         status="ACTIVE",
         tenant_id=d.tenant_id,
         creator_id=d.user_id,
+        org_id=int(org_id) if org_id else None,
+        user_source=(
+            "EXTERNAL" if _EXTERNAL_ROLE_CODE in role_codes
+            else (body.get("user_source") or "INTERNAL")
+        ),
     )
-    for code in body.get("roles") or []:
+    for code in role_codes:
         role = SysRole.objects.filter(tenant_id=d.tenant_id, code=code).first()
         if role is not None:  # 未知角色码忽略（对齐 Go）
             SysUserRole.objects.get_or_create(
@@ -261,6 +298,10 @@ def assign_role(request: HttpRequest, id: int):
     u = SysUser.objects.filter(id=id, tenant_id=d.tenant_id, deleted=0).first()
     if u is None:
         raise ApiError(404, CODE_NOT_FOUND, "用户不存在")
+    role = SysRole.objects.filter(id=role_id, tenant_id=d.tenant_id).first()
+    if role is not None and role.code == _EXTERNAL_ROLE_CODE:
+        existing = list(role_codes_of(id))
+        _assert_role_consistency(d.tenant_id, existing + [role.code], u.org_id)
     SysUserRole.objects.get_or_create(user_id=id, role_id=role_id, tenant_id=d.tenant_id)
     return ok(request, to_api_user(u, role_codes_of(id)))
 

@@ -82,7 +82,7 @@ def _guideline_status_scope(d) -> str | None:
     roles = [r for r in (getattr(d, "roles", None) or []) if r]
     if not roles:
         return "PUBLISHED"
-    if has_role(roles, _EXTERNAL_ROLE) and len(roles) == 1:
+    if has_role(roles, _EXTERNAL_ROLE):  # 含混合角色（fail-closed，见 core/org_scope）
         return "PUBLISHED"
     return None
 
@@ -255,7 +255,10 @@ def list_applications(request: HttpRequest):
     page, size, limit, offset = page_args(request)
     qs = PApplication.objects.filter(tenant_id=d.tenant_id, deleted=0)
     if is_external_only(d):
-        qs = qs.filter(applicant_org_id=current_org_id(d))
+        org = current_org_id(d)
+        if org is None:  # 外部账号缺机构：一律空集（否则 filter(org=None) 会命中院内申报）
+            return ok(request, {"list": [], "total": 0, "page": page, "size": size})
+        qs = qs.filter(applicant_org_id=org)
     if request.GET.get("status"):
         qs = qs.filter(status=request.GET["status"])
     if request.GET.get("project_type"):
@@ -313,7 +316,8 @@ def create_application(request: HttpRequest):
 # 可撤回状态：未进入评审（UNDER_REVIEW 及之后不可撤回）
 _WITHDRAWABLE = {"DRAFT", "SUBMITTED", "FORMAL_CHECK", "RECOMMENDED"}
 # 可终止状态：已进入评审及之后的流转中状态
-_TERMINABLE = {"UNDER_REVIEW", "INTERVIEWING", "DECIDED", "PUBLISHED", "SIGNED", "EXECUTING"}
+# 可终止状态：已进入评审、但**尚未立项**（SIGNED/EXECUTING 已立项，终止须走级联流程，见终审 M2-b C3）
+_TERMINABLE = {"UNDER_REVIEW", "INTERVIEWING", "DECIDED", "PUBLISHED"}
 
 
 def _get_app_or_404(tenant_id: int, app_id: int) -> PApplication:
@@ -332,6 +336,22 @@ def _partner_app_or_404(d, app_id: int) -> PApplication:
     return a
 
 
+def _app_scoped_or_404(d, app_id: int) -> PApplication:
+    """申报读写的**唯一**入口：租户 + 机构双重作用域，一票否决（终审 M2-b C1）。
+
+    detail 早已走 `_partner_app_or_404`，但 documents/budget/sections/submit/
+    withdraw/terminate 六个入口历史上只按 tenant 过滤，导致外部机构可跨机构
+    读正文/改预算/替他人提交。这里统一收口：外部身份（含混合角色，fail-closed）
+    必须 `applicant_org_id == current_org_id(d)`，且 org 为空一律 404。
+    """
+    a = _get_app_or_404(d.tenant_id, app_id)
+    if is_external_only(d):
+        org = current_org_id(d)
+        if org is None or a.applicant_org_id is None or a.applicant_org_id != org:
+            raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
+    return a
+
+
 def _require_reason(body: dict) -> str:
     reason = (body.get("reason") or "").strip()
     if not reason:
@@ -346,7 +366,7 @@ def withdraw_application(request: HttpRequest, id: int):
     d = domain_from(request)
     body = read_json(request)
     reason = _require_reason(body)
-    a = _get_app_or_404(d.tenant_id, id)
+    a = _app_scoped_or_404(d, id)
     if a.status not in _WITHDRAWABLE:
         raise ApiError(409, CODE_CONFLICT, "当前状态不可撤回，已进入评审的申报只能终止")
     a.status = "WITHDRAWN"
@@ -362,7 +382,8 @@ def terminate_application(request: HttpRequest, id: int):
     d = domain_from(request)
     body = read_json(request)
     reason = _require_reason(body)
-    a = _get_app_or_404(d.tenant_id, id)
+    a = _app_scoped_or_404(d, id)
+    _assert_application_mutable(a)
     if a.status not in _TERMINABLE:
         raise ApiError(409, CODE_CONFLICT, "当前状态不可终止，未进入评审的申报应使用撤回")
     a.status = "REJECTED"
@@ -419,7 +440,7 @@ def _doc_shape(a: PApplication, section_code: str, doc: PApplicationDoc | None) 
 def list_application_documents(request: HttpRequest, id: int):
     """GET /apply/applications/{id}/documents —— 9 节 Doc[]（doc 行 ∪ 旧字段）。"""
     d = domain_from(request)
-    a = _get_app_or_404(d.tenant_id, id)
+    a = _app_scoped_or_404(d, id)
     docs = {d.section_code: d for d in PApplicationDoc.objects.filter(application=a)}
     return ok(request, [_doc_shape(a, code, docs.get(code)) for code in SECTION_CODES])
 
@@ -427,7 +448,7 @@ def list_application_documents(request: HttpRequest, id: int):
 def get_application_budget(request: HttpRequest, id: int):
     """GET /apply/applications/{id}/budget —— 按 total_budget 确定性拆分 BudgetRow[]。"""
     d = domain_from(request)
-    a = _get_app_or_404(d.tenant_id, id)
+    a = _app_scoped_or_404(d, id)
     total = float(a.total_budget or 0)
     if total <= 0:
         return ok(request, [])
@@ -450,7 +471,7 @@ def upsert_budget_line(request: HttpRequest, id: int):
     确定性合规预检：单科目金额不得超过 total_budget；返回保存后的行。
     """
     d = domain_from(request)
-    a = _get_app_or_404(d.tenant_id, id)
+    a = _app_scoped_or_404(d, id)
     _assert_application_mutable(a)
     body = read_json(request)
     subject_code = body.get("subject_code")
@@ -479,7 +500,7 @@ def upsert_budget_line(request: HttpRequest, id: int):
 def save_application_section(request: HttpRequest, id: int, code: str):
     """PUT /apply/applications/{id}/sections/{code} —— 分节 upsert，版本自增。"""
     d = domain_from(request)
-    a = _get_app_or_404(d.tenant_id, id)
+    a = _app_scoped_or_404(d, id)
     _assert_application_mutable(a)
     if code not in SECTION_CODES:
         raise ApiError(400, CODE_UNKNOWN_PARAM, f"未知分节码：{code}")
@@ -507,7 +528,7 @@ def submit_application(request: HttpRequest, id: int):
     """
     d = domain_from(request)
     body = read_json(request)
-    a = _get_app_or_404(d.tenant_id, id)
+    a = _app_scoped_or_404(d, id)
     _assert_application_mutable(a)
     if a.status != "DRAFT":
         raise ApiError(409, CODE_CONFLICT, "仅草稿状态可提交")
@@ -543,7 +564,7 @@ def ai_draft(request: HttpRequest):
     section_code = body.get("section_code")
     if not app_id or not section_code:
         raise ApiError(400, CODE_BAD_REQUEST, "application_id 与 section_code 必填")
-    a = _get_app_or_404(d.tenant_id, int(app_id))
+    a = _app_scoped_or_404(d, int(app_id))
     if section_code not in SECTION_CODES:
         raise ApiError(400, CODE_UNKNOWN_PARAM, f"未知分节码：{section_code}")
     keywords = body.get("keywords") or ""
@@ -718,7 +739,10 @@ def list_guide_suggestions(request: HttpRequest):
     page, size, limit, offset = page_args(request)
     qs = PGuideSuggestion.objects.filter(tenant_id=d.tenant_id, deleted=0)
     if is_external_only(d):
-        qs = qs.filter(org_id=current_org_id(d))
+        org = current_org_id(d)
+        if org is None:
+            return ok(request, {"list": [], "total": 0, "page": page, "size": size})
+        qs = qs.filter(org_id=org)
     elif request.GET.get("org_id"):
         qs = qs.filter(org_id=request.GET["org_id"])
     if request.GET.get("status"):
@@ -917,6 +941,47 @@ def generate_task_book(request: HttpRequest):
     return ok(request, to_api_task_book(tb))
 
 
+_DECIDE_TARGETS = ("PUBLISHED", "DECIDED")
+_DECIDABLE = {"SUBMITTED", "FORMAL_CHECK", "RECOMMENDED", "UNDER_REVIEW", "INTERVIEWING"}
+
+
+def decide_application(request: HttpRequest, id: int):
+    """POST /apply/applications/{id}:decide —— 评审决议（终审 M2-b I1）。
+
+    契约里 PUBLISHED（拟资助公示）/DECIDED（已决）原本没有任何生产入口，任务书
+    在真实流程中不可达，只能靠 seed 直接写库。这里补一个受限推进端点：
+    仅 R-MANAGER/R-LEADER 可调用，decision ∈ {PUBLISHED, DECIDED}，仅评审中状态可推进。
+    """
+    d = domain_from(request)
+    body = read_json(request)
+    decision = (body.get("decision") or "").strip().upper()
+    if decision not in _DECIDE_TARGETS:
+        raise ApiError(400, CODE_BAD_REQUEST, "decision 须为 PUBLISHED 或 DECIDED")
+    roles = [r for r in (getattr(d, "roles", None) or []) if r]
+    if is_external_only(d) or not (has_role(roles, "R-MANAGER") or has_role(roles, "R-LEADER")):
+        raise ApiError(403, CODE_FORBIDDEN, "仅科研管理/院所领导可作出评审决议")
+    with transaction.atomic():
+        a = (
+            PApplication.objects.select_for_update()
+            .filter(id=id, tenant_id=d.tenant_id, deleted=0)
+            .first()
+        )
+        if a is None:
+            raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
+        if a.status not in _DECIDABLE:
+            raise ApiError(409, CODE_CONFLICT, "当前状态不可作出评审决议")
+        a.status = decision
+        a.modifier_id = d.user_id
+        a.save(update_fields=["status", "modifier_id", "updated_at"])
+    _notify(
+        a.pi_user_id, "ANNOUNCE",
+        "申报评审结果已发布" if decision == "PUBLISHED" else "申报已决议",
+        f"《{a.title}》评审状态更新为 {decision}，可生成任务书并签署立项。",
+        f"application:{a.id}", d.tenant_id,
+    )
+    return ok(request, to_api_application(a))
+
+
 def get_task_book(request: HttpRequest, id: int):
     """GET /apply/task-books/{id} —— 外部机构只能读本机构。"""
     d = domain_from(request)
@@ -950,13 +1015,23 @@ def sign_task_book(request: HttpRequest, id: int):
         )
         if a is None:
             raise ApiError(404, CODE_NOT_FOUND, "申报不存在")
+        # C3：只有评审通过（PUBLISHED/DECIDED）的申报可签署立项；已终止/草稿等一律 409
+        if a.status not in _TASK_BOOK_GENERATABLE:
+            raise ApiError(409, CODE_CONFLICT, "申报状态不允许立项")
         records = [r for r in (tb.sign_records or []) if isinstance(r, dict)]
         if any(r.get("role") == role for r in records):
             raise ApiError(409, CODE_CONFLICT, "该角色已签署")
+        # C2：签署人一律由服务端按身份认定，忽略请求体 signer_id
+        roles = [r for r in (getattr(d, "roles", None) or []) if r]
         if role == "PI":
-            signer_id = a.pi_user_id  # PI 必须是申报负责人本人，忽略请求体
+            if d.user_id != a.pi_user_id:
+                raise ApiError(403, CODE_FORBIDDEN, "仅申报负责人本人可签署 PI")
+            signer_id = a.pi_user_id
         else:
-            signer_id = body.get("signer_id") or d.user_id
+            need = "R-MANAGER" if role == "MANAGER" else "R-LEADER"
+            if is_external_only(d) or not has_role(roles, need):
+                raise ApiError(403, CODE_FORBIDDEN, f"仅 {need} 可签署 {role}")
+            signer_id = d.user_id
         records.append({
             "role": role,
             "signerId": signer_id,

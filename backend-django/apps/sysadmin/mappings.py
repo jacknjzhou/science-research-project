@@ -37,6 +37,9 @@ def to_api_user(u: SysUser, roles: list[str]) -> dict[str, Any]:
         "staff_no": u.staff_no,
         "remark": u.remark,
         "legal_entity_id": u.legal_entity_id,
+        # M2-b：外部机构归属（U 域 snake_case；契约 12-U User 同步补两键）
+        "org_id": u.org_id,
+        "user_source": u.user_source,
         "roles": roles,
         "created_at": fmt_ts(u.created_at),
         "updated_at": fmt_ts(u.updated_at),
