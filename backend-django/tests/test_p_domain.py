@@ -326,3 +326,15 @@ def test_partner_cannot_read_draft_or_cross_tenant(seed_auth):
                  **bearer(1, ["R-STAFF"])).status_code == 200
     assert c.get(f"/api/v1/apply/guidelines/{other.id}",
                  **bearer(1, ["R-STAFF"])).status_code == 404
+
+
+def test_auditor_and_mixed_roles_not_restricted(seed_auth):
+    """终审 N-1：R-AUDITOR 等内部只读角色不受外部收口影响；混合角色也不收口。"""
+    _pub, draft = _two_guidelines()
+    c = _c()
+    assert c.get(f"/api/v1/apply/guidelines/{draft.id}",
+                 **bearer(1, ["R-AUDITOR"])).status_code == 200
+    mixed = c.get(f"/api/v1/apply/guidelines/{draft.id}", **bearer(2, ["R-PARTNER", "R-STAFF"]))
+    assert mixed.status_code == 200  # 同时持有内部角色 → 按内部口径
+    pure = c.get(f"/api/v1/apply/guidelines/{draft.id}", **bearer(2, ["R-PARTNER"]))
+    assert pure.status_code == 404

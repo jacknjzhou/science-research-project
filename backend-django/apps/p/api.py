@@ -56,18 +56,20 @@ def _parse_dt(s):
 # ---------------------------------------------------------------------------
 # 申报指南（P-02）
 # ---------------------------------------------------------------------------
-#: 内部（非外部机构）角色：可看全部状态；其余只读已发布（M2-a C-2 收口）
-_INTERNAL_GUIDELINE_ROLES = ("R-ADMIN", "R-MANAGER", "R-LEADER", "R-STAFF")
+#: 纯外部身份判定：除 R-PARTNER 外**没有任何**其它角色时，才按外部口径收口。
+#: 这样 R-AUDITOR/R-FINANCE/R-EXPERT/R-ETHICS 等内部只读角色不受影响（fail-open 给内部，
+#: 但仍要求至少持有一个内部角色；无角色（异常态）按外部处理 = fail-closed）。
+_EXTERNAL_ROLE = "R-PARTNER"
 
 
 def _guideline_status_scope(d) -> str | None:
-    """外部机构角色（只有 R-PARTNER）强制只看 PUBLISHED；内部角色返回 None（不限制）。"""
-    roles = getattr(d, "roles", None) or []
+    """纯外部机构用户强制只看 PUBLISHED；其余（任一内部角色）返回 None（不限制）。"""
+    roles = [r for r in (getattr(d, "roles", None) or []) if r]
     if not roles:
         return "PUBLISHED"
-    if any(has_role(roles, r) for r in _INTERNAL_GUIDELINE_ROLES):
-        return None
-    return "PUBLISHED"
+    if has_role(roles, _EXTERNAL_ROLE) and len(roles) == 1:
+        return "PUBLISHED"
+    return None
 
 
 def list_guidelines(request: HttpRequest):

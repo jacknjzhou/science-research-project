@@ -629,7 +629,8 @@ def _validate_password(pwd: str) -> None:
 def register_partner(request: HttpRequest) -> object:
     """公开自助注册：建 PENDING 机构 + LOCKED 账号（未审核不可登录）。
 
-    无 domain 上下文（无登录态），tenant 取 body.tenant_id 或 1。
+    无 domain 上下文（无登录态）。租户取部署配置 PARTNER_SIGNUP_TENANT_ID，
+    **不接受**请求体 tenant_id（防止未认证跨租户灌数据）。
     """
     body = read_json(request)
     # 公开端点无登录态：租户由部署配置决定，**不接受**请求体指定（否则可跨租户灌数据）
