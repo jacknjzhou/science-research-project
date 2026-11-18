@@ -358,3 +358,53 @@ def test_attach_category_and_scan_warnings_dedupe(seed_auth):
     r = c.post("/api/v1/project-categories/scan-warnings", **bearer(1, ["R-ADMIN"]))
     assert r.json()["data"]["sent"] == 0
     assert SysNotification.objects.filter(user_id=2, typ="WARNING").count() == 1
+
+
+# ---------------------------------------------------------------------------
+# M1-d：评估模板 / 变更版本快照 / 变更分级（B3/B4 表结构）
+# ---------------------------------------------------------------------------
+def test_m1d_eval_template_model(seed_auth):
+    from apps.project.models import EEvalTemplate
+
+    t = EEvalTemplate.objects.create(
+        tenant_id=1, creator_id=1, name="中期检查模板A", scene="MID_CHECK",
+        sections=[{"key": "progress", "title": "进度达成"}, {"key": "finance", "title": "经费执行"}],
+        score_rubric={"total": 100},
+    )
+    got = EEvalTemplate.objects.get(pk=t.pk)
+    assert got.scene == "MID_CHECK"
+    assert got.status == "ACTIVE"
+    assert got.deleted == 0
+    assert [s["key"] for s in got.sections] == ["progress", "finance"]
+    assert got.score_rubric == {"total": 100}
+    assert EEvalTemplate._meta.db_table == "E_EVAL_TEMPLATE"
+
+
+def test_m1d_change_version_model(seed_auth):
+    from apps.project.models import EChangeRequest, EChangeVersion
+
+    p = _project()
+    ch = EChangeRequest.objects.create(
+        tenant_id=1, creator_id=1, project=p, change_type="TITLE", new_value={"title": "新题"}
+    )
+    v = EChangeVersion.objects.create(
+        tenant_id=1, creator_id=1, change=ch, version_no=1,
+        snapshot={"title": "旧题", "totalBudget": "100.00"},
+    )
+    got = EChangeVersion.objects.get(pk=v.pk)
+    assert got.version_no == 1
+    assert got.change_id == ch.id
+    assert got.snapshot["title"] == "旧题"
+    assert EChangeVersion._meta.db_table == "E_CHANGE_VERSION"
+
+
+def test_m1d_change_severity_default(seed_auth):
+    from apps.project.models import EChangeRequest
+
+    p = _project()
+    ch = EChangeRequest.objects.create(tenant_id=1, creator_id=1, project=p, change_type="TITLE")
+    assert ch.severity == "GENERAL"
+    ch2 = EChangeRequest.objects.create(
+        tenant_id=1, creator_id=1, project=p, change_type="BUDGET", severity="MAJOR"
+    )
+    assert ch2.severity == "MAJOR"

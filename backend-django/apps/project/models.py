@@ -166,9 +166,61 @@ class EChangeRequest(models.Model):
     impact_analysis = models.JSONField(null=True, blank=True)
     conflict_flag = models.SmallIntegerField(default=0)
     snapshot_ref = models.CharField(max_length=128, null=True, blank=True)
+    # MAJOR=重大变更（主管审批）/ GENERAL=一般变更（内部备案）
+    severity = models.CharField(max_length=8, default="GENERAL")
 
     class Meta:
         db_table = "E_CHANGE_REQUEST"
+
+
+class EChangeVersion(models.Model):
+    """变更版本快照（B4）：每次 submit 落一行，记录变更前 E_PROJECT 对应字段。"""
+
+    id = models.BigAutoField(primary_key=True)
+    code = models.CharField(max_length=64, null=True, blank=True)
+    tenant_id = models.BigIntegerField()
+    status = models.CharField(max_length=32, default="ACTIVE")
+    deleted = models.SmallIntegerField(default=0)
+    creator_id = models.BigIntegerField()
+    modifier_id = models.BigIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    remark = models.TextField(null=True, blank=True)
+    change = models.ForeignKey(EChangeRequest, on_delete=models.PROTECT, db_column="change_id",
+                               related_name="versions")
+    version_no = models.IntegerField(default=1)
+    snapshot = models.JSONField(default=dict)
+
+    class Meta:
+        db_table = "E_CHANGE_VERSION"
+        indexes = [
+            models.Index(fields=["tenant_id", "change"], name="idx_e_chgver_change"),
+        ]
+
+
+class EEvalTemplate(models.Model):
+    """统一项目评估模板（B3）：一套配置支撑中期检查与结题验收两种场景。"""
+
+    id = models.BigAutoField(primary_key=True)
+    code = models.CharField(max_length=64, null=True, blank=True)
+    tenant_id = models.BigIntegerField()
+    status = models.CharField(max_length=16, default="ACTIVE")  # ACTIVE/DISABLED
+    deleted = models.SmallIntegerField(default=0)
+    creator_id = models.BigIntegerField()
+    modifier_id = models.BigIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    remark = models.TextField(null=True, blank=True)
+    name = models.CharField(max_length=128)
+    scene = models.CharField(max_length=16, default="MID_CHECK")  # MID_CHECK/FINAL_ACCEPT
+    sections = models.JSONField(default=list)
+    score_rubric = models.JSONField(default=dict)
+
+    class Meta:
+        db_table = "E_EVAL_TEMPLATE"
+        indexes = [
+            models.Index(fields=["tenant_id", "scene", "status"], name="idx_e_evaltpl_scene"),
+        ]
 
 
 class EFinalAccept(models.Model):

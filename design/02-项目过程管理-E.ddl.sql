@@ -251,15 +251,69 @@ CREATE TABLE E_CHANGE_REQUEST (
   approved_at      TIMESTAMPTZ,
   impact_analysis  JSONB,                                           -- 影响分析结果（经费/进度/成员对比，E-07）
   conflict_flag    SMALLINT     NOT NULL DEFAULT 0,                 -- 预算变更与实支出冲突标记（1=阻止生效并回退）
-  snapshot_ref     VARCHAR(128)                                     -- 生效写入的历史快照引用（PRD 6.2 更新历史快照）
+  snapshot_ref     VARCHAR(128),                                    -- 生效写入的历史快照引用（PRD 6.2 更新历史快照）
+  severity         VARCHAR(8)   NOT NULL DEFAULT 'GENERAL'
+                   CHECK (severity IN ('MAJOR','GENERAL'))           -- 重大（主管审批）/一般（内部备案）
 );
 COMMENT ON TABLE  E_CHANGE_REQUEST IS '变更管理（E-07）';
 COMMENT ON COLUMN E_CHANGE_REQUEST.change_type IS 'DELAY/BUDGET/MEMBER/TITLE/SCOPE（README §4 无独立 token，采用 PRD §5.1）';
 COMMENT ON COLUMN E_CHANGE_REQUEST.conflict_flag IS '1=预算变更与经费实际支出冲突，阻止生效并回退（PRD 11 变更冲突）';
+COMMENT ON COLUMN E_CHANGE_REQUEST.severity IS 'MAJOR=重大变更（主管审批）；GENERAL=一般变更（内部备案直接生效，B4）';
 
 CREATE UNIQUE INDEX uk_e_change_code ON E_CHANGE_REQUEST(tenant_id, code) WHERE deleted = 0;
 CREATE INDEX idx_e_change_project ON E_CHANGE_REQUEST(project_id, change_type, approval_status);
 CREATE INDEX idx_e_change_tenant  ON E_CHANGE_REQUEST(tenant_id, status);
+
+
+-- -----------------------------------------------------------------------------
+-- 6.1) E_CHANGE_VERSION 变更版本快照（B4：每次提交留版本，可回溯）
+-- -----------------------------------------------------------------------------
+CREATE TABLE E_CHANGE_VERSION (
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  code             VARCHAR(64),
+  tenant_id        BIGINT       NOT NULL,
+  status           VARCHAR(32)  NOT NULL DEFAULT 'ACTIVE',
+  deleted          SMALLINT     NOT NULL DEFAULT 0,
+  creator_id       BIGINT       NOT NULL,
+  modifier_id      BIGINT,
+  created_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  remark           TEXT,
+  change_id        BIGINT       NOT NULL REFERENCES E_CHANGE_REQUEST(id),
+  version_no       INT          NOT NULL DEFAULT 1,                  -- 同一变更单内自增
+  snapshot         JSONB        NOT NULL DEFAULT '{}'::jsonb        -- 变更前 E_PROJECT 对应字段 + 预算调剂明细
+);
+COMMENT ON TABLE  E_CHANGE_VERSION IS '变更版本快照（B4：每次变更留版本，支持回溯与审计）';
+COMMENT ON COLUMN E_CHANGE_VERSION.snapshot IS '变更前值快照：{原字段映射} + budgetAdjustment(预算调剂前后对比)';
+
+CREATE INDEX idx_e_chgver_change ON E_CHANGE_VERSION(tenant_id, change_id, version_no);
+
+
+-- -----------------------------------------------------------------------------
+-- 6.2) E_EVAL_TEMPLATE 统一项目评估模板（B3：一套配置支撑中检与验收）
+-- -----------------------------------------------------------------------------
+CREATE TABLE E_EVAL_TEMPLATE (
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  code             VARCHAR(64),
+  tenant_id        BIGINT       NOT NULL,
+  status           VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE'
+                   CHECK (status IN ('ACTIVE','DISABLED')),
+  deleted          SMALLINT     NOT NULL DEFAULT 0,
+  creator_id       BIGINT       NOT NULL,
+  modifier_id      BIGINT,
+  created_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  remark           TEXT,
+  name             VARCHAR(128) NOT NULL,                            -- 模板名称
+  scene            VARCHAR(16)  NOT NULL DEFAULT 'MID_CHECK'
+                   CHECK (scene IN ('MID_CHECK','FINAL_ACCEPT')),    -- 适用场景
+  sections         JSONB        NOT NULL DEFAULT '[]'::jsonb,        -- 填报节/评审要素 [{key,title,weight,required}]
+  score_rubric     JSONB        NOT NULL DEFAULT '{}'::jsonb         -- 评分规则 {total,bands:[{min,max,conclusion}]}
+);
+COMMENT ON TABLE  E_EVAL_TEMPLATE IS '统一项目评估模板（B3：中期检查/结题验收共用一套配置）';
+COMMENT ON COLUMN E_EVAL_TEMPLATE.scene IS 'MID_CHECK=中期检查；FINAL_ACCEPT=结题验收';
+
+CREATE INDEX idx_e_evaltpl_scene ON E_EVAL_TEMPLATE(tenant_id, scene, status);
 
 
 -- -----------------------------------------------------------------------------
