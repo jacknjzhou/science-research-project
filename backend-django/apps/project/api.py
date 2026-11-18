@@ -603,7 +603,7 @@ def _advance_change(d, project_id: int, change_id: int, to_status: str, comment:
 def get_change_versions(request: HttpRequest, id: int, change_id: int):
     """变更版本快照列表（M1-d B4）；跨项目/不存在一律 404。"""
     d = domain_from(request)
-    _get_project_or_404(id)
+    _get_project_or_404_tenant(id, d.tenant_id)
     row = EChangeRequest.objects.filter(
         id=change_id, project_id=id, tenant_id=d.tenant_id, deleted=0
     ).first()
