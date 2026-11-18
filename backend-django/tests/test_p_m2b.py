@@ -330,7 +330,7 @@ def test_partner_submits_progress_report_within_own_org(seed_auth):
     _manager_user(seed_auth)
     proj = _ext_project(org_a, ua.id)
     r = _post(f"/api/v1/project/{proj.id}/progress-report",
-              {"period": "2026Q1", "report_type": "QUARTERLY", "progress_percent": 40},
+              {"period": "2026Q1", "report_type": "SELF", "progress_percent": 40},
               roles=("R-PARTNER",), uid=ua.id)
     assert r.status_code == 200, r.content
     assert _data(r)["period"] == "2026Q1"
@@ -340,7 +340,7 @@ def test_partner_submits_progress_report_within_own_org(seed_auth):
     assert lst["total"] == 1
     # 机构 B 提交/查看均 404
     assert _post(f"/api/v1/project/{proj.id}/progress-report",
-                 {"period": "2026Q1", "report_type": "QUARTERLY"},
+                 {"period": "2026Q1", "report_type": "SELF"},
                  roles=("R-PARTNER",), uid=ub.id).status_code == 404
     assert _get(f"/api/v1/project/{proj.id}/progress-report",
                 roles=("R-PARTNER",), uid=ub.id).status_code == 404
@@ -614,12 +614,17 @@ def test_r2c1_task_book_generation_is_org_scoped(seed_auth):
         tenant_id=1, creator_id=ua.id, title="机构A申报", project_type="开放课题",
         pi_user_id=ua.id, status="PUBLISHED", applicant_org_id=org_a.id,
         applicant_type="EXTERNAL", total_budget=1000)
-    # 混合账号属机构 B：机构 A 的申报生成任务书必须 404（且不落库）
+    # 混合账号属机构 B：令牌在鉴权入口即被裁剪为纯 R-PARTNER（终审 r3 N-2），
+    # 因而连生成端点都不再有权限（403），且无论如何不得落库。
     r = _post("/api/v1/apply/task-books", {"application_id": other.id},
               roles=("R-PARTNER", "R-STAFF"), uid=mixed.id)
-    assert r.status_code == 404, r.content
+    assert r.status_code in (403, 404), r.content
     from apps.p.models import PTaskBook
     assert not PTaskBook.objects.filter(application_id=other.id).exists()
+    # 并集越权已关闭：混合角色不再能读院内经费/人员/成果/预算
+    for _url in ("/api/v1/expenses", "/api/v1/staff",
+                 "/api/v1/output", "/api/v1/budgets"):
+        assert _get(_url, roles=("R-PARTNER", "R-STAFF"), uid=mixed.id).status_code == 403
     # 院内账号（无机构）正常可生成
     m = _manager_user(seed_auth)
     assert _post("/api/v1/apply/task-books", {"application_id": other.id},
@@ -672,12 +677,12 @@ def test_r2i2_progress_report_accepts_contract_camel_case(seed_auth):
     _manager_user(seed_auth)
     proj = _ext_project(org_a, ua.id)
     r = _post(f"/api/v1/project/{proj.id}/progress-report",
-              {"period": "2026Q1", "reportType": "QUARTERLY", "progressPercent": 55,
+              {"period": "2026Q1", "reportType": "SELF", "progressPercent": 55,
                "contentRich": "进展", "nextPlan": "下一步"},
               roles=("R-PARTNER",), uid=ua.id)
     assert r.status_code == 200, r.content
     d = _data(r)
-    assert d["progressPercent"] == 55 and d["reportType"] == "QUARTERLY"
+    assert d["progressPercent"] == 55 and d["reportType"] == "SELF"
 
 
 def test_r2i3_orgless_external_cannot_write(seed_auth):
@@ -703,3 +708,111 @@ def test_r2i4_pi_must_exist(seed_auth):
               {"title": "幽灵 PI", "project_type": "ZIGE", "pi_user_id": 999999},
               roles=("R-STAFF",), uid=2)
     assert r.status_code == 400, r.content
+
+
+def _internal_user(seed, name, status="ACTIVE"):
+    from apps.sysadmin.models import SysUser, SysUserRole
+
+    u = SysUser.objects.create(
+        username=name, real_name=name, password_hash="x", status=status,
+        tenant_id=1, creator_id=1, org_id=None, user_source="INTERNAL")
+    SysUserRole.objects.create(user=u, role=seed["roles"]["R-STAFF"], tenant_id=1)
+    return u
+
+
+def test_r3n1_pi_can_be_reassigned_before_signing(seed_auth):
+    """r3 N-1：PI 停用后申报不再永久死锁 —— 管理端可改派，改派后 PI 可正常签署。"""
+    from apps.p.models import PApplication, PTaskBook
+
+    org_a, _org_b, _ua, _ub, _make = _party(seed_auth)
+    m = _manager_user(seed_auth)
+    pi1 = _internal_user(seed_auth, "pi_old")
+    pi2 = _internal_user(seed_auth, "pi_new")
+    a = PApplication.objects.create(
+        tenant_id=1, creator_id=1, title="改派课题", project_type="ZIGE",
+        pi_user_id=pi1.id, status="PUBLISHED", total_budget=1000)
+    tb = PTaskBook.objects.create(tenant_id=1, creator_id=1, application_id=a.id)
+    # PI1 停用 → **无法登录**（真实死锁点：PI 拿不到令牌，签署这一步永远走不到）
+    from apps.sysadmin.api import hash_password
+
+    pi1.password_hash = hash_password("Abcdef@123")
+    pi1.save(update_fields=["password_hash"])
+    pi1.status = "DISABLED"
+    pi1.save(update_fields=["status"])
+    login = Client().post(
+        "/api/v1/auth/login",
+        data=json.dumps({"username": "pi_old", "password": "Abcdef@123"}),
+        content_type="application/json",
+    )
+    assert login.status_code == 403, login.content
+    assert json.loads(login.content)["code"] == 40302
+    # 外部/R-STAFF 不能改派
+    assert _post(f"/api/v1/apply/applications/{a.id}:change-pi", {"piUserId": pi2.id},
+                 roles=("R-STAFF",), uid=pi2.id).status_code == 403
+    # 管理端改派 → 200，PI 变更为 pi2
+    r = _post(f"/api/v1/apply/applications/{a.id}:change-pi", {"piUserId": pi2.id},
+              roles=("R-MANAGER",), uid=m.id)
+    assert r.status_code == 200, r.content
+    assert _data(r)["pi_user_id"] == pi2.id
+    # 新 PI 可签，签署记录为 pi2
+    r = _post(f"/api/v1/apply/task-books/{tb.id}:sign", {"role": "PI"},
+              roles=("R-STAFF",), uid=pi2.id)
+    assert r.status_code == 200, r.content
+    assert _data(r)["sign_records"][0]["signerId"] == pi2.id
+    # 改派到不存在的/停用的 PI → 400
+    assert _post(f"/api/v1/apply/applications/{a.id}:change-pi", {"piUserId": 999999},
+                 roles=("R-MANAGER",), uid=m.id).status_code == 400
+    assert _post(f"/api/v1/apply/applications/{a.id}:change-pi", {"piUserId": pi1.id},
+                 roles=("R-MANAGER",), uid=m.id).status_code == 400
+
+
+def test_r3n1b_create_rejects_inactive_or_external_pi(seed_auth):
+    """r3 N-1：建申报时 PI 必须 ACTIVE 且为内部账号。"""
+    off = _internal_user(seed_auth, "pi_off", status="DISABLED")
+    r = _post("/api/v1/apply/applications",
+              {"title": "停用 PI", "project_type": "ZIGE", "pi_user_id": off.id},
+              roles=("R-STAFF",), uid=2)
+    assert r.status_code == 400, r.content
+    ext = _internal_user(seed_auth, "pi_ext")
+    ext.user_source = "EXTERNAL"
+    ext.save(update_fields=["user_source"])
+    r = _post("/api/v1/apply/applications",
+              {"title": "外部 PI", "project_type": "ZIGE", "pi_user_id": ext.id},
+              roles=("R-STAFF",), uid=2)
+    assert r.status_code == 400, r.content
+
+
+def test_r3n3_progress_report_validates_fields(seed_auth):
+    """r3 N-3：reportType 枚举、progressPercent 0-100 整数，非法一律 400 不得 500。"""
+    org_a, _org_b, ua, _ub, _make = _party(seed_auth)
+    _manager_user(seed_auth)
+    proj = _ext_project(org_a, ua.id)
+    bad = [
+        {"period": "2026Q1", "reportType": "WHATEVER", "progressPercent": 10},
+        {"period": "2026Q1", "reportType": "SELF", "progressPercent": "abc"},
+        {"period": "2026Q1", "reportType": "SELF", "progressPercent": 150},
+        {"period": "2026Q1", "reportType": "SELF", "progressPercent": -5},
+    ]
+    for body in bad:
+        r = _post(f"/api/v1/project/{proj.id}/progress-report", body,
+                  roles=("R-PARTNER",), uid=ua.id)
+        assert r.status_code == 400, (body, r.content)
+
+
+def test_r3n4n5_user_org_and_source_guards(seed_auth):
+    """r3 N-4/N-5：外部账号只能持 R-PARTNER；任何绑定机构都必须已过审。"""
+    from apps.sysadmin.models import SysPartnerOrg
+
+    pend = SysPartnerOrg.objects.create(
+        tenant_id=1, creator_id=1, name="机构F", credit_code="91310000MA1K3XY11F",
+        org_type="COLLAB", status="PENDING")
+    base = {"username": "chk", "real_name": "查", "password": "Abcdef@123"}
+    # EXTERNAL + 空角色 → 400
+    assert _post("/api/v1/admin/users", {**base, "user_source": "EXTERNAL"},
+                 roles=("R-ADMIN",), uid=1).status_code == 400
+    # 院内账号绑 PENDING 机构 → 400
+    assert _post("/api/v1/admin/users", {**base, "roles": ["R-STAFF"], "org_id": pend.id},
+                 roles=("R-ADMIN",), uid=1).status_code == 400
+    # 院内账号绑不存在机构 → 400
+    assert _post("/api/v1/admin/users", {**base, "roles": ["R-STAFF"], "org_id": 99999},
+                 roles=("R-ADMIN",), uid=1).status_code == 400
