@@ -759,11 +759,9 @@ def test_r3n1_pi_can_be_reassigned_before_signing(seed_auth):
               roles=("R-STAFF",), uid=pi2.id)
     assert r.status_code == 200, r.content
     assert _data(r)["sign_records"][0]["signerId"] == pi2.id
-    # 改派到不存在的/停用的 PI → 400
-    assert _post(f"/api/v1/apply/applications/{a.id}:change-pi", {"piUserId": 999999},
-                 roles=("R-MANAGER",), uid=m.id).status_code == 400
-    assert _post(f"/api/v1/apply/applications/{a.id}:change-pi", {"piUserId": pi1.id},
-                 roles=("R-MANAGER",), uid=m.id).status_code == 400
+    # 已开始签署（上述 PI 单签）→ 改派一律 409（终审 r4 I-2）
+    assert _post(f"/api/v1/apply/applications/{a.id}:change-pi", {"piUserId": pi2.id},
+                 roles=("R-MANAGER",), uid=m.id).status_code == 409
 
 
 def test_r3n1b_create_rejects_inactive_or_external_pi(seed_auth):
@@ -816,3 +814,87 @@ def test_r3n4n5_user_org_and_source_guards(seed_auth):
     # 院内账号绑不存在机构 → 400
     assert _post("/api/v1/admin/users", {**base, "roles": ["R-STAFF"], "org_id": 99999},
                  roles=("R-ADMIN",), uid=1).status_code == 400
+
+
+
+def _app_with_pi(seed, pi):
+    from apps.p.models import PApplication
+
+    org_a, _org_b, ua, _ub, _make = _party(seed)
+    return PApplication.objects.create(
+        tenant_id=1, creator_id=ua.id, title="改派课题", project_type="开放课题",
+        pi_user_id=pi.id, applicant_org_id=org_a.id, applicant_type="EXTERNAL",
+        status="PUBLISHED", total_budget="100000.00",
+    ), org_a, ua
+
+
+def test_r4_change_pi_syncs_draft_snapshot(seed_auth):
+    """终审 r4 I-1：改派必须同步 DRAFT 任务书快照里的 pi_user_id。"""
+    from apps.p.models import PTaskBook
+
+    mgr = _manager_user(seed_auth)
+    pi1 = _internal_user(seed_auth, "pi_snap_old")
+    pi2 = _internal_user(seed_auth, "pi_snap_new")
+    a, _org, _ua = _app_with_pi(seed_auth, pi1)
+    tb = _data(_post("/api/v1/apply/task-books", {"application_id": a.id},
+                     roles=("R-MANAGER",), uid=mgr.id))
+    assert tb["content_snapshot"]["pi_user_id"] == pi1.id
+
+    r = _post(f"/api/v1/apply/applications/{a.id}:change-pi", {"piUserId": pi2.id},
+              roles=("R-MANAGER",), uid=mgr.id)
+    assert r.status_code == 200, r.content
+    row = PTaskBook.objects.get(id=tb["id"])
+    assert row.content_snapshot["pi_user_id"] == pi2.id
+    assert row.status == "DRAFT"
+
+
+def test_r4_change_pi_rejected_after_signing_started(seed_auth):
+    """终审 r4 I-2：任务书已开始签署（sign_records 非空）后不可改派。"""
+    from apps.p.models import PApplication, PTaskBook
+
+    mgr = _manager_user(seed_auth)
+    pi1 = _internal_user(seed_auth, "pi_sign_old")
+    pi2 = _internal_user(seed_auth, "pi_sign_new")
+    a, _org, _ua = _app_with_pi(seed_auth, pi1)
+    tb = _data(_post("/api/v1/apply/task-books", {"application_id": a.id},
+                     roles=("R-MANAGER",), uid=mgr.id))
+    signed = _post(f"/api/v1/apply/task-books/{tb['id']}:sign", {"role": "PI"},
+                   roles=("R-STAFF",), uid=pi1.id)
+    assert signed.status_code == 200, signed.content
+    assert PTaskBook.objects.get(id=tb["id"]).status == "DRAFT"  # 单签仍 DRAFT
+
+    r = _post(f"/api/v1/apply/applications/{a.id}:change-pi", {"piUserId": pi2.id},
+              roles=("R-MANAGER",), uid=mgr.id)
+    assert r.status_code == 409, r.content
+    assert PApplication.objects.get(id=a.id).pi_user_id == pi1.id
+
+
+def test_r4_change_pi_input_edges(seed_auth):
+    """终审 r4 M-1：布尔/小数/空白等边界入参一律 400，不静默转数字。"""
+    from apps.p.models import PApplication
+
+    mgr = _manager_user(seed_auth)
+    pi1 = _internal_user(seed_auth, "pi_edge_old")
+    a, _org, _ua = _app_with_pi(seed_auth, pi1)
+    # 不存在 / 停用 PI → 400（本条用例的申报尚未生成任务书）
+    assert _post(f"/api/v1/apply/applications/{a.id}:change-pi", {"piUserId": 999999},
+                 roles=("R-MANAGER",), uid=mgr.id).status_code == 400
+    for bad in (True, False, "abc", "   ", 1.5):
+        r = _post(f"/api/v1/apply/applications/{a.id}:change-pi", {"piUserId": bad},
+                  roles=("R-MANAGER",), uid=mgr.id)
+        assert r.status_code == 400, (bad, r.content)
+    assert PApplication.objects.get(id=a.id).pi_user_id == pi1.id
+
+
+def test_r4_progress_report_rejects_blank_and_fractional(seed_auth):
+    """终审 r4 M-3/M-4：全空格 period 与小数 progressPercent 一律 400。"""
+    pi = _internal_user(seed_auth, "pi_edge_report")
+    a, org_a, _ua = _app_with_pi(seed_auth, pi)
+    proj = _ext_project(org_a, pi.id)
+    for payload in (
+        {"period": "   ", "reportType": "SELF", "progressPercent": 10},
+        {"period": "2026Q1", "reportType": "SELF", "progressPercent": 55.7},
+    ):
+        r = _post(f"/api/v1/project/{proj.id}/progress-report", payload,
+                  roles=("R-STAFF",), uid=pi.id)
+        assert r.status_code == 400, (payload, r.content)

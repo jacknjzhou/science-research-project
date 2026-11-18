@@ -291,6 +291,10 @@ def create_progress_report(request: HttpRequest, id: int):
 
     period = _pick("period", "period")
     report_type = _pick("reportType", "report_type")
+    if isinstance(period, str):
+        period = period.strip()  # 先 strip 再判空，避免"全空格"落库成空串（终审 r4 M-3）
+    if isinstance(report_type, str):
+        report_type = report_type.strip()
     if not period or not report_type:
         raise ApiError(400, CODE_BAD_REQUEST, "请求参数错误")
     # 类型/枚举/范围校验（终审 r3 N-3）：原先 "abc" 会 ValueError→500、150 直接落库
@@ -302,8 +306,12 @@ def create_progress_report(request: HttpRequest, id: int):
             400, CODE_BAD_REQUEST,
             f"reportType 须为 {'/'.join(_REPORT_TYPES)}",
         )
+    raw_pct = _pick("progressPercent", "progress_percent", 0)
+    if isinstance(raw_pct, float) and not raw_pct.is_integer():
+        # 55.7 原先被 int() 截断成 55 静默落库（终审 r4 M-4）
+        raise ApiError(400, CODE_BAD_REQUEST, "progressPercent 必须为整数")
     try:
-        progress_percent = int(_pick("progressPercent", "progress_percent", 0) or 0)
+        progress_percent = int(raw_pct or 0)
     except (TypeError, ValueError):
         raise ApiError(400, CODE_BAD_REQUEST, "progressPercent 必须为整数") from None
     if not 0 <= progress_percent <= 100:

@@ -1038,6 +1038,9 @@ def change_application_pi(request: HttpRequest, id: int):
     raw = body.get("piUserId", body.get("pi_user_id"))
     if raw in (None, ""):
         raise ApiError(400, CODE_BAD_REQUEST, "piUserId 必填")
+    # True/False 会被 int() 静默转成 1/0，1.5 会被截断成 1（终审 r4 M-1）
+    if isinstance(raw, bool) or (isinstance(raw, float) and not raw.is_integer()):
+        raise ApiError(400, CODE_BAD_REQUEST, "piUserId 必须为整数")
     try:
         new_pi = int(raw)
     except (TypeError, ValueError):
@@ -1050,6 +1053,17 @@ def change_application_pi(request: HttpRequest, id: int):
         if a.status in ("SIGNED", "EXECUTING"):
             raise ApiError(409, CODE_CONFLICT, "申报已立项，不可改派负责人")
         _assert_application_mutable(a)
+        # 任务书只要开始签署（sign_records 非空或已离开 DRAFT），改派会把"签名人=旧 PI、
+        # 负责人=新 PI"钉死在立项记录里，故一律拒绝（终审 r4 I-2）。
+        tb_now = (
+            PTaskBook.objects.filter(application_id=a.id, deleted=0)
+            .order_by("-id")
+            .first()
+        )
+        if tb_now is not None and (
+            tb_now.status != "DRAFT" or (tb_now.sign_records or [])
+        ):
+            raise ApiError(409, CODE_CONFLICT, "任务书已开始签署，不可改派负责人")
         pi_user = SysUser.objects.filter(
             id=new_pi, tenant_id=d.tenant_id, deleted=0
         ).first()
@@ -1063,6 +1077,14 @@ def change_application_pi(request: HttpRequest, id: int):
         a.pi_user_id = new_pi
         a.modifier_id = d.user_id
         a.save(update_fields=["pi_user_id", "modifier_id", "updated_at"])
+        # DRAFT 任务书正文快照里也写着 PI，必须同步，否则打印出来的任务书仍是旧负责人
+        # （终审 r4 I-1）。
+        if tb_now is not None:
+            snap = dict(tb_now.content_snapshot or {})
+            snap["pi_user_id"] = new_pi
+            tb_now.content_snapshot = snap
+            tb_now.modifier_id = d.user_id
+            tb_now.save(update_fields=["content_snapshot", "modifier_id", "updated_at"])
     try:
         _notify(
             new_pi, "TODO", "您被指派为申报负责人",
