@@ -274,31 +274,37 @@ def _partner_project_or_404(d, project_id: int) -> EProject:
 def create_progress_report(request: HttpRequest, id: int):
     d = domain_from(request)
     if is_external_only(d):
-        _partner_project_or_404(d, id)
+        proj = _partner_project_or_404(d, id)
     else:
-        _get_project_or_404_tenant(id, d.tenant_id)
+        proj = _get_project_or_404_tenant(id, d.tenant_id)
     body = read_json(request)
-    period = body.get("period")
-    report_type = body.get("report_type")
+    # 入参双读（终审 r2 I-2）：契约 EProgressReportSubmit 是 camelCase，历史实现只认
+    # snake_case，导致按契约形状提交必 400。出参已在 I3 补了 camelCase 别名。
+    def _pick(camel: str, snake: str, default=None):
+        v = body.get(camel)
+        if v is None:
+            v = body.get(snake)
+        return default if v is None else v
+
+    period = _pick("period", "period")
+    report_type = _pick("reportType", "report_type")
     if not period or not report_type:
         raise ApiError(400, CODE_BAD_REQUEST, "请求参数错误")
-    project = EProject.objects.filter(
-        id=id, tenant_id=d.tenant_id, deleted=0
-    ).first()
     r = EProgressReport.objects.create(
         tenant_id=d.tenant_id, creator_id=d.user_id, project_id=id,
         period=period, report_type=report_type,
-        content_rich=body.get("content_rich"),
-        progress_percent=body.get("progress_percent") or 0,
-        issues_text=body.get("issues_text"), next_plan=body.get("next_plan"),
-        attachment_ids=body.get("attachment_ids") or [],
+        content_rich=_pick("contentRich", "content_rich"),
+        progress_percent=_pick("progressPercent", "progress_percent", 0) or 0,
+        issues_text=_pick("issuesText", "issues_text"),
+        next_plan=_pick("nextPlan", "next_plan"),
+        attachment_ids=_pick("attachmentIds", "attachment_ids", []) or [],
         submitted_at=dj_tz.now(),
     )
     # 外部机构 PI 的汇报要能让管理端看到（best-effort，不阻断业务）
     try:
         _notify_role(
             d.tenant_id, "R-MANAGER", "TODO", "阶段汇报已提交",
-            f"{(project.title if project else '')} · {period}",
+            f"{proj.title} · {period}",
             f"progress-report:{r.id}",
         )
     except Exception:  # noqa: BLE001 - 通知失败不影响汇报落库

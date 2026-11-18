@@ -27,6 +27,7 @@ from apps.p.models import (
     PGuideline,
     PTaskBook,
 )
+from apps.sysadmin.models import SysUser
 from core.approval import has_role
 from core.auth.deps import domain_from
 from core.org_scope import current_org_id, is_external_only
@@ -290,6 +291,22 @@ def create_application(request: HttpRequest):
         pi_user_id = body.get("pi_user_id")
     if not title or not project_type or pi_user_id is None:
         raise ApiError(400, CODE_BAD_REQUEST, "请求参数错误")
+    # 外部账号必须已挂机构：否则会写出 applicant_org_id=NULL 的"院内形状"数据，
+    # 且本人因机构收口也读不到（终审 r2 I-3）。
+    if external and current_org_id(d) is None:
+        raise ApiError(403, CODE_FORBIDDEN, "外部账号未绑定机构，无法申报")
+    # 院内 PI 必须真实存在且属于本租户（终审 r2 I-4：pi=999999 会让 PI 签署永久 403 卡死）
+    if not external:
+        try:
+            pi_int = int(pi_user_id)
+        except (TypeError, ValueError):
+            raise ApiError(400, CODE_BAD_REQUEST, "pi_user_id 必须为整数") from None
+        exists = SysUser.objects.filter(
+            id=pi_int, tenant_id=d.tenant_id, deleted=0
+        ).exists()
+        if not exists:
+            raise ApiError(400, CODE_BAD_REQUEST, "申报负责人不存在")
+        pi_user_id = pi_int
     total_budget = None
     if body.get("total_budget"):
         try:
@@ -776,7 +793,12 @@ def create_guide_suggestion(request: HttpRequest):
         raise ApiError(400, CODE_BAD_REQUEST, "建议标题必填")
     if len(title) > 256:
         raise ApiError(400, CODE_BAD_REQUEST, "建议标题长度不能超过256")
-    org_id = current_org_id(d) if is_external_only(d) else body.get("org_id")
+    if is_external_only(d):
+        org_id = current_org_id(d)
+        if org_id is None:  # 未绑机构的外部账号不得写 NULL-org 建议（终审 r2 I-3）
+            raise ApiError(403, CODE_FORBIDDEN, "外部账号未绑定机构，无法提交建议")
+    else:
+        org_id = body.get("org_id")
     s = PGuideSuggestion.objects.create(
         tenant_id=d.tenant_id,
         creator_id=d.user_id,
@@ -903,6 +925,25 @@ def _task_book_visible(d, tb: PTaskBook) -> bool:
     return a.applicant_org_id is not None and org is not None and a.applicant_org_id == org
 
 
+def _locked_scoped_app_or_404(d, app_id: int) -> PApplication:
+    """`_app_scoped_or_404` 的加锁版：事务内生成/改写类操作必须走这里（终审 r2 C-1）。
+
+    与只读版共用同一租户+机构作用域口径，避免"加锁查询顺手内联一份、漏掉机构过滤"。
+    """
+    a = (
+        PApplication.objects.select_for_update()
+        .filter(id=app_id, tenant_id=d.tenant_id, deleted=0)
+        .first()
+    )
+    if a is None:
+        raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
+    if is_external_only(d):
+        org = current_org_id(d)
+        if org is None or a.applicant_org_id is None or a.applicant_org_id != org:
+            raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
+    return a
+
+
 def generate_task_book(request: HttpRequest):
     """POST /apply/task-books —— 立项通过（PUBLISHED/DECIDED）后生成，按申报幂等。"""
     d = domain_from(request)
@@ -910,14 +951,12 @@ def generate_task_book(request: HttpRequest):
     aid = body.get("application_id")
     if not aid:
         raise ApiError(400, CODE_BAD_REQUEST, "application_id 必填")
+    try:
+        aid_int = int(aid)
+    except (TypeError, ValueError):
+        raise ApiError(400, CODE_BAD_REQUEST, "application_id 必须为整数") from None
     with transaction.atomic():
-        a = (
-            PApplication.objects.select_for_update()
-            .filter(id=int(aid), tenant_id=d.tenant_id, deleted=0)
-            .first()
-        )
-        if a is None:
-            raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
+        a = _locked_scoped_app_or_404(d, aid_int)
         exist = PTaskBook.objects.filter(
             application_id=a.id, tenant_id=d.tenant_id, deleted=0
         ).first()
@@ -960,19 +999,18 @@ def decide_application(request: HttpRequest, id: int):
     roles = [r for r in (getattr(d, "roles", None) or []) if r]
     if is_external_only(d) or not (has_role(roles, "R-MANAGER") or has_role(roles, "R-LEADER")):
         raise ApiError(403, CODE_FORBIDDEN, "仅科研管理/院所领导可作出评审决议")
+    comment = (body.get("comment") or "").strip()[:512]
     with transaction.atomic():
-        a = (
-            PApplication.objects.select_for_update()
-            .filter(id=id, tenant_id=d.tenant_id, deleted=0)
-            .first()
-        )
-        if a is None:
-            raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
+        a = _locked_scoped_app_or_404(d, id)
         if a.status not in _DECIDABLE:
             raise ApiError(409, CODE_CONFLICT, "当前状态不可作出评审决议")
         a.status = decision
         a.modifier_id = d.user_id
-        a.save(update_fields=["status", "modifier_id", "updated_at"])
+        fields = ["status", "modifier_id", "updated_at"]
+        if comment:  # 契约带 comment，原先被丢弃（终审 r2 Minor）
+            a.remark = comment
+            fields.append("remark")
+        a.save(update_fields=fields)
     _notify(
         a.pi_user_id, "ANNOUNCE",
         "申报评审结果已发布" if decision == "PUBLISHED" else "申报已决议",

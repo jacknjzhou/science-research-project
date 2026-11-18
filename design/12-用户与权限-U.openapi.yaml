@@ -1089,6 +1089,8 @@ components:
         security_level:    { type: string, enum: [PUBLIC, INTERNAL, SECRET, TOP_SECRET] }
         employment_status: { type: string, enum: [ONBOARD, RESIGNED, RETIRED, VISITING, GUEST, REHIRE] }
         roles:             { type: array, items: { type: string }, description: 角色码 R-* 列表 }
+        org_id:            { type: integer, format: int64, nullable: true, description: 外部合作机构 ID；授 R-PARTNER 时必填且机构须 APPROVED }
+        user_source:       { type: string, enum: [INTERNAL, EXTERNAL], description: 账号来源；授 R-PARTNER 时强制为 EXTERNAL }
     UserUpdateRequest:
       type: object
       properties:

@@ -148,10 +148,13 @@ def _assert_role_consistency(tenant_id: int, role_codes: list[str], org_id: int 
         raise ApiError(400, CODE_BAD_REQUEST, "外部机构角色必须绑定机构（org_id）")
     from apps.sysadmin.models import SysPartnerOrg
 
-    if not SysPartnerOrg.objects.filter(
+    org = SysPartnerOrg.objects.filter(
         id=org_id, tenant_id=tenant_id, deleted=0
-    ).exists():
+    ).first()
+    if org is None:
         raise ApiError(400, CODE_BAD_REQUEST, "机构不存在或跨租户")
+    if org.status != "APPROVED":  # 未过审/已停用机构不得挂账号（终审 r2 Minor）
+        raise ApiError(400, CODE_BAD_REQUEST, "机构尚未通过资质审核")
 
 
 def create_user(request: HttpRequest):
@@ -166,7 +169,18 @@ def create_user(request: HttpRequest):
         raise ApiError(409, CODE_CONFLICT, "用户名已存在或写入冲突")
     role_codes = [c for c in (body.get("roles") or []) if c]
     org_id = body.get("org_id")
+    if org_id in ("", None):
+        org_id = None
+    else:
+        try:
+            org_id = int(org_id)  # org_id="abc" 原先会在 ORM 层抛 500（终审 r2 Minor）
+        except (TypeError, ValueError):
+            raise ApiError(400, CODE_BAD_REQUEST, "org_id 必须为整数") from None
     _assert_role_consistency(d.tenant_id, role_codes, org_id)
+    if (body.get("user_source") or "").upper() == "EXTERNAL" and any(
+        c != _EXTERNAL_ROLE_CODE for c in role_codes
+    ):
+        raise ApiError(400, CODE_BAD_REQUEST, "外部账号不能持有内部角色")
     u = SysUser.objects.create(
         username=username,
         real_name=real_name,
@@ -179,7 +193,7 @@ def create_user(request: HttpRequest):
         status="ACTIVE",
         tenant_id=d.tenant_id,
         creator_id=d.user_id,
-        org_id=int(org_id) if org_id else None,
+        org_id=org_id,
         user_source=(
             "EXTERNAL" if _EXTERNAL_ROLE_CODE in role_codes
             else (body.get("user_source") or "INTERNAL")
@@ -299,7 +313,9 @@ def assign_role(request: HttpRequest, id: int):
     if u is None:
         raise ApiError(404, CODE_NOT_FOUND, "用户不存在")
     role = SysRole.objects.filter(id=role_id, tenant_id=d.tenant_id).first()
-    if role is not None and role.code == _EXTERNAL_ROLE_CODE:
+    # 双向校验（终审 r2 I-1）：只拦"新增 R-PARTNER"是可绕过的——给已有外部账号追加
+    # 任意内部角色同样会造出混合角色，随后并集权限即可读到院内数据。
+    if role is not None:
         existing = list(role_codes_of(id))
         _assert_role_consistency(d.tenant_id, existing + [role.code], u.org_id)
     SysUserRole.objects.get_or_create(user_id=id, role_id=role_id, tenant_id=d.tenant_id)

@@ -141,7 +141,7 @@ def to_api_final_accept(r: EFinalAccept) -> dict[str, Any]:
         "projectId": r.project_id, "applyAt": fmt_ts(r.apply_at), "acceptAt": fmt_ts(r.accept_at),
         "outputSummary": r.output_summary, "financeReportId": r.finance_report_id,
         "expertIds": r.expert_ids or [], "attachmentIds": r.attachment_ids or [],
-        "archiveChecklistId": r.archive_checklist_id, "outputSummaryText": r.output_summary,
+        "archiveChecklistId": r.archive_checklist_id,
     }
 
 
