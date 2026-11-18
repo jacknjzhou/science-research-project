@@ -412,3 +412,57 @@ def test_m1c_keymatch2_coverage():
     assert ("R-LEADER", "/api/v1/disbursements/*/action", "POST") not in rows
     assert ("R-LEADER", "/api/v1/disbursements/check-contract", "POST") not in rows
     assert ("R-MANAGER", "/api/v1/disbursements/*/action", "POST") not in rows
+
+
+# ---------------------------------------------------------------------------
+# M1-d：统一评估模板写维护（B3）
+# ---------------------------------------------------------------------------
+def _m1d_expected_rows():
+    """M1-d 新增 3 行：评估模板写维护仅 R-MANAGER。
+
+    读（GET 集合/详情）已由既有 `R-MANAGER /api/v1/project/* GET` 通配覆盖
+    （keyMatch2 实测：`/api/v1/project/eval-templates` 被 `/api/v1/project/*` 匹配），
+    故不重复加 GET 行；写（POST/PUT/DELETE）必须显式行——project/* 仅授 GET。
+    """
+    return [
+        ("R-MANAGER", "/api/v1/project/eval-templates", "POST"),
+        ("R-MANAGER", "/api/v1/project/eval-templates/*", "PUT"),
+        ("R-MANAGER", "/api/v1/project/eval-templates/*", "DELETE"),
+    ]
+
+
+def test_m1d_policy_rows_exist():
+    """M1-d 3 行 (role,path,action) 必须全部存在于 policy.csv。"""
+    rows = _policy_p_rows()
+    missing = [r for r in _m1d_expected_rows() if r not in rows]
+    assert not missing, f"缺少 M1-d 策略行: {missing}"
+
+
+def test_m1d_keymatch2_coverage():
+    """keyMatch2 实测裁决：模板读由 project/* GET 通配覆盖；写需显式行；
+    看板/变更版本只读同样由 project/* GET 覆盖；指南发布/关闭动作由 apply/* POST 覆盖。"""
+    from casbin.util import key_match2
+    rows = _policy_p_rows()
+
+    # 裁决 1：eval-templates 集合与详情都被 project/* 的 GET 通配覆盖（读不需新行）
+    assert key_match2("/api/v1/project/eval-templates", "/api/v1/project/*")
+    assert key_match2("/api/v1/project/eval-templates/7", "/api/v1/project/*")
+    assert ("R-MANAGER", "/api/v1/project/*", "GET") in rows
+
+    # 裁决 2：project/* 通配仅授 GET，故模板写必须显式行（不存在隐式写放行）
+    assert ("R-MANAGER", "/api/v1/project/*", "POST") not in rows
+    for role, path, act in _m1d_expected_rows():
+        assert (role, path, act) in rows
+
+    # 裁决 3：模板详情写路径不被集合裸路径匹配（keyMatch2 铁律）
+    assert not key_match2("/api/v1/project/eval-templates/7", "/api/v1/project/eval-templates")
+    assert key_match2("/api/v1/project/eval-templates/7", "/api/v1/project/eval-templates/*")
+
+    # 裁决 4：看板 / 变更版本只读落在 project/* GET 通配内
+    assert key_match2("/api/v1/project/5/board", "/api/v1/project/*")
+    assert key_match2("/api/v1/project/5/change-request/9/versions", "/api/v1/project/*")
+
+    # 裁决 5：指南发布/关闭冒号动作由 apply/* POST 通配覆盖（无需新行）
+    assert key_match2("/api/v1/apply/guidelines/3:publish", "/api/v1/apply/*")
+    assert key_match2("/api/v1/apply/guidelines/3:close", "/api/v1/apply/*")
+    assert ("R-MANAGER", "/api/v1/apply/*", "POST") in rows
