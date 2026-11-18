@@ -282,7 +282,7 @@ def create_progress_report(request: HttpRequest, id: int):
 
 def create_mid_check(request: HttpRequest, id: int):
     d = domain_from(request)
-    _get_project_or_404(id)
+    _get_project_or_404_tenant(id, d.tenant_id)
     body = read_json(request)
     # 契约 camelCase（checkRound/templateId）与既有 snake_case 双读，兼容老调用方
     check_round = body.get("checkRound", body.get("check_round"))
@@ -635,7 +635,7 @@ def approve_change_batch(request: HttpRequest):
 
 def create_final_accept(request: HttpRequest, id: int):
     d = domain_from(request)
-    _get_project_or_404(id)
+    _get_project_or_404_tenant(id, d.tenant_id)
     body = read_json(request)
     template_id = _resolve_template_id(d.tenant_id, body, "FINAL_ACCEPT")
     snapshot, _ = _template_bundle(d.tenant_id, template_id)
