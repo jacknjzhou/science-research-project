@@ -328,6 +328,7 @@ function openChange() {
   changeOpen.value = true
 }
 // 成员/范围变更没有「提交即生效」的回写路径（后端 40001），必须锁定为重大变更走审批。
+// 成员/范围变更后端一律强制 MAJOR（成员影响参与项目判定，范围无回写列）——前端锁防误选
 const severityLocked = computed(() => changeType.value === 'MEMBER' || changeType.value === 'SCOPE')
 watch(severityLocked, (locked) => { if (locked) changeSeverity.value = 'MAJOR' })
 const changeReady = computed(() => {

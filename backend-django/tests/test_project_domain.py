@@ -974,7 +974,9 @@ def test_m1d_eval_template_prefill_and_snapshot(seed_auth):
     assert len(mc.template_snapshot["sections"]) == 2
     assert [it["key"] for it in mc.score_detail["items"]] == ["progress", "finance"]
     assert all(it["score"] is None for it in mc.score_detail["items"])  # 骨架未打分
-    assert r.json()["data"]["template_id"] == tpl.id  # I-2：序列化器可见
+    # I-2：契约键是 camelCase（02-E EvalTemplateSchema/EMidCheck），snake_case 键为过渡保留
+    assert r.json()["data"]["templateId"] == tpl.id
+    assert r.json()["data"]["template_id"] == tpl.id
 
     # 模板随后被改，已建中检的快照不变
     tpl.sections = [{"key": "only", "weight": 1.0}]
@@ -992,7 +994,8 @@ def test_m1d_eval_template_prefill_and_snapshot(seed_auth):
     assert r.status_code == 200
     fa = EFinalAccept.objects.get(id=r.json()["data"]["id"])
     assert fa.template_snapshot["sections"] == [{"key": "target", "weight": 0.5}]
-    # I-2：验收响应带 templateId
+    # I-2：验收响应带 templateId（camelCase 为契约口径）
+    assert r.json()["data"]["templateId"] == tplf.id
     assert r.json()["data"]["template_id"] == tplf.id
 
 
@@ -1006,26 +1009,37 @@ def test_m1d_eval_template_status_validated(seed_auth):
     assert r.json()["code"] == 40001
 
 
-def test_m1d_conclude_works_without_caller_transaction(seed_auth):
-    """N-1 回归：结论回写自带事务（PG 下 select_for_update 在 autocommit 会抛）。
+def test_m1d_conclude_works_without_caller_transaction(seed_auth, monkeypatch):
+    """N-1 回归：批文签发必须在事务内（PG 下 select_for_update 在 autocommit 会抛）。
 
-    sqlite 的 select_for_update 是静默降级，抓不到该缺陷；这里直接断言批文与
-    approval_doc_id 在同一次调用里成对落地，且重复调用不会二次签发。
+    sqlite 的 has_select_for_update=False 会静默降级，光看能否跑通抓不到缺陷，
+    所以直接 spy 签发时的 connection.in_atomic_block——修复前（无 atomic）为 False。
     """
+    from django.db import connection
     from apps.project.models import EFinalAccept, EReport
+    from apps.project import api as project_api
+
+    seen: list[bool] = []
+    real = project_api._issue_report
+
+    def spy(*args, **kwargs):
+        seen.append(connection.in_atomic_block)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(project_api, "_issue_report", spy)
 
     p = _project()
     fa = EFinalAccept.objects.create(tenant_id=1, creator_id=1, project_id=p.id,
                                      status="APPLIED")
-    from apps.project.api import conclude_final_accept
-    conclude_final_accept(fa.id, "APPROVED")
+    project_api.conclude_final_accept(fa.id, "APPROVED")
+    assert seen == [True], "批文签发必须在事务内（否则 PG 上 select_for_update 抛错）"
     fa.refresh_from_db()
     assert fa.status == "APPROVED"
     assert fa.accept_at is not None
     assert fa.approval_doc_id is not None
     assert EReport.objects.filter(final_accept_id=fa.id).count() == 1
 
-    conclude_final_accept(fa.id, "APPROVED")  # 幂等
+    project_api.conclude_final_accept(fa.id, "APPROVED")  # 幂等
     assert EReport.objects.filter(final_accept_id=fa.id).count() == 1
     fa.refresh_from_db()
     assert fa.approval_doc_id == EReport.objects.filter(final_accept_id=fa.id).first().id
@@ -1056,3 +1070,40 @@ def test_m1d_change_batch_isolates_bad_rows(seed_auth):
     assert "范围变更" in by_id[bad.id]["err"]
     p.refresh_from_db()
     assert p.title == "批量改名"  # 好的那条照常生效
+
+
+def test_m1d_budget_amount_bounds_rejected(seed_auth):
+    """Important-3：预算变更拒绝不可落库的数值（有限大指数 / 亚分精度）。"""
+    p = _project()
+    c = _c()
+    for bad in ("1e100", "0.001", "1e-30", "1e16"):
+        r = c.post(f"/api/v1/project/{p.id}/change-request",
+                   data=json.dumps({"changeType": "BUDGET", "severity": "MAJOR",
+                                    "newValue": {"totalBudget": bad}, "reason": "x"}),
+                   content_type="application/json", **bearer(2, ["R-STAFF"]))
+        assert r.status_code == 400, bad
+        assert r.json()["code"] == 40001, bad
+    # 两位小数正常值放行
+    r = c.post(f"/api/v1/project/{p.id}/change-request",
+               data=json.dumps({"changeType": "BUDGET", "severity": "MAJOR",
+                                "newValue": {"totalBudget": "123456.78"}, "reason": "追加预算"}),
+               content_type="application/json", **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 200
+
+
+def test_m1d_member_change_requires_major(seed_auth):
+    """Important-1：成员变更影响「参与项目」判定，不允许一般备案即时生效。"""
+    p = _project()
+    c = _c()
+    r = c.post(f"/api/v1/project/{p.id}/change-request",
+               data=json.dumps({"changeType": "MEMBER", "severity": "GENERAL",
+                                "newValue": {"memberIds": [2, 3]}, "reason": "加人"}),
+               content_type="application/json", **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 400
+    assert r.json()["code"] == 40001
+    r = c.post(f"/api/v1/project/{p.id}/change-request",
+               data=json.dumps({"changeType": "MEMBER", "severity": "MAJOR",
+                                "newValue": {"memberIds": [2, 3]}, "reason": "加人"}),
+               content_type="application/json", **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "SUBMITTED"

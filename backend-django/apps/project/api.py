@@ -308,9 +308,10 @@ def create_mid_check(request: HttpRequest, id: int):
 
 _CHANGE_SEVERITIES = ("GENERAL", "MAJOR")
 _CHANGE_TYPES = ("DELAY", "BUDGET", "MEMBER", "TITLE", "SCOPE")
-# 可「提交即生效」的变更类型：仅限有确定回写目标的字段级微调
-# （SCOPE 无对应列可回写，在 _validate_change 里直接拒绝，登记 M2 任务书版本化）
-_CHANGE_GENERAL_TYPES = ("DELAY", "BUDGET", "TITLE", "MEMBER")
+# 可「提交即生效」的变更类型：仅限有确定回写目标的字段级微调。
+# MEMBER 影响「参与项目」判定（成员名单完整性），SCOPE 无对应列可回写（直接拒绝，
+# 登记 M2 任务书版本化）——两者一律走重大变更审批留痕。
+_CHANGE_GENERAL_TYPES = ("DELAY", "BUDGET", "TITLE")
 
 
 def _validate_change(change_type: str, new_value: Any) -> None:
@@ -337,10 +338,15 @@ def _validate_change(change_type: str, new_value: Any) -> None:
             if not target.is_finite():  # NaN/Infinity 能通过解析但比大小会炸或恒真
                 raise InvalidOperation
             positive = target > 0
+            # 与 DecimalField(18,2) 对齐：上限 1e15、精度不低于 0.01（避免 0.001 落成 0.00）
+            in_range = positive and target <= Decimal("1000000000000000") \
+                and target == target.quantize(Decimal("0.01"))
         except (InvalidOperation, TypeError, ValueError):
             raise ApiError(400, CODE_BAD_REQUEST, "预算变更须提供合法的 totalBudget")
         if not positive:
             raise ApiError(400, CODE_BAD_REQUEST, "变更后项目总预算须为正数")
+        if not in_range:
+            raise ApiError(400, CODE_BAD_REQUEST, "变更后项目总预算须为两位小数且不超过 1e15")
     elif change_type == "MEMBER":
         ids = new_value.get("memberIds", new_value.get("member_ids"))
         if not isinstance(ids, list) or not ids:
@@ -358,7 +364,7 @@ def _check_general_applicable(change_type: str) -> None:
     """一般变更必须能落到项目字段上；无回写路径的类型只能走重大变更审批。"""
     if change_type not in _CHANGE_GENERAL_TYPES:
         raise ApiError(400, CODE_BAD_REQUEST,
-                       "该变更类型无即时生效路径，须以重大变更（severity=MAJOR）提交")
+                       "成员/范围变更须以重大变更（severity=MAJOR）提交，经审批后生效")
 
 
 def _change_new_value(body: dict) -> dict | None:
@@ -435,9 +441,8 @@ def _apply_change(p: EProject, row: EChangeRequest) -> dict:
                 delta = (target - old_total).quantize(Decimal("0.01"))
                 p.total_budget = target.quantize(Decimal("0.01"))
                 fields.append("total_budget")
-                if fields:
-                    p.save(update_fields=fields + ["updated_at"])
-                    fields = []
+                p.save(update_fields=fields + ["updated_at"])
+                fields = []
                 return {
                     "applied": ["total_budget"],
                     "budgetAdjustment": _sync_change_budget(
@@ -515,6 +520,8 @@ def create_change_request(request: HttpRequest, id: int):
 
     with transaction.atomic():
         adjusted = _apply_change(p, r)
+        if not adjusted:  # 与审批路径同口径：不许「生效但零改动」
+            raise ApiError(400, CODE_BAD_REQUEST, "变更内容无可应用到项目的字段")
         r.status = "EFFECTIVE"
         r.approved_at = dj_tz.now()
         r.approval_status = "APPROVED"
@@ -635,6 +642,8 @@ def approve_change_batch(request: HttpRequest):
     comment = body.get("comment")
     if not ids or not isinstance(ids, list) or not action:
         raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
+    if not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+        raise ApiError(400, CODE_BAD_REQUEST, "ids 须为变更单 ID 整数数组")
     if action not in ("APPROVE", "REJECT"):
         raise ApiError(400, CODE_BAD_REQUEST, "action 仅支持 APPROVE/REJECT")
     results = []
