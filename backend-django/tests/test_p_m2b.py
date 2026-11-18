@@ -587,3 +587,119 @@ def test_i4_leader_can_sign_manager_cannot_be_partner(seed_auth):
     assert _data(r)["status"] == "SIGNED"
     assert _post(f"/api/v1/apply/task-books/{tb.id}:sign", {"role": "LEADER"},
                  roles=("R-PARTNER",), uid=ua.id).status_code in (403, 409)
+
+
+# ===========================================================================
+# 终审 r2：覆盖不全 / 边界写入口 / 契约入参
+# ===========================================================================
+def _mixed_user(seed, org):
+    """造一个 R-PARTNER + R-STAFF 混合角色账号（绕过 create_user 的校验，模拟历史脏数据）。"""
+    from apps.sysadmin.models import SysUser, SysUserRole
+
+    u = SysUser.objects.create(
+        username="mixed", real_name="混合", password_hash="x", status="ACTIVE",
+        tenant_id=1, creator_id=1, org_id=org.id, user_source="EXTERNAL")
+    for code in ("R-PARTNER", "R-STAFF"):
+        SysUserRole.objects.create(user=u, role=seed["roles"][code], tenant_id=1)
+    return u
+
+
+def test_r2c1_task_book_generation_is_org_scoped(seed_auth):
+    """r2 C-1：生成任务书曾内联加锁查询绕过机构收口 → 混合外部账号可读他机构快照。"""
+    from apps.p.models import PApplication
+
+    org_a, org_b, ua, ub, _make = _party(seed_auth)
+    mixed = _mixed_user(seed_auth, org_b)
+    other = PApplication.objects.create(
+        tenant_id=1, creator_id=ua.id, title="机构A申报", project_type="开放课题",
+        pi_user_id=ua.id, status="PUBLISHED", applicant_org_id=org_a.id,
+        applicant_type="EXTERNAL", total_budget=1000)
+    # 混合账号属机构 B：机构 A 的申报生成任务书必须 404（且不落库）
+    r = _post("/api/v1/apply/task-books", {"application_id": other.id},
+              roles=("R-PARTNER", "R-STAFF"), uid=mixed.id)
+    assert r.status_code == 404, r.content
+    from apps.p.models import PTaskBook
+    assert not PTaskBook.objects.filter(application_id=other.id).exists()
+    # 院内账号（无机构）正常可生成
+    m = _manager_user(seed_auth)
+    assert _post("/api/v1/apply/task-books", {"application_id": other.id},
+                 roles=("R-MANAGER",), uid=m.id).status_code == 200
+
+
+def test_r2i1_assign_role_and_create_user_reject_mixed(seed_auth):
+    """r2 I-1：给已有外部账号追加内部角色、或建 EXTERNAL 账号持内部角色，都必须 400。"""
+    from apps.sysadmin.models import SysPartnerOrg, SysUser
+
+    org = SysPartnerOrg.objects.create(
+        tenant_id=1, creator_id=1, name="机构D", credit_code="91310000MA1K3XY11D",
+        org_type="COLLAB", status="APPROVED")
+    u = SysUser.objects.create(
+        username="ponly", real_name="外", password_hash="x", status="ACTIVE",
+        tenant_id=1, creator_id=1, org_id=org.id, user_source="EXTERNAL")
+    from apps.sysadmin.models import SysUserRole
+
+    SysUserRole.objects.create(user=u, role=seed_auth["roles"]["R-PARTNER"], tenant_id=1)
+    staff_role_id = seed_auth["roles"]["R-STAFF"].id
+    r = _post(f"/api/v1/admin/users/{u.id}/roles", {"role_id": staff_role_id},
+              roles=("R-ADMIN",), uid=1)
+    assert r.status_code == 400, r.content
+    # EXTERNAL + R-STAFF 建号 → 400
+    r = _post("/api/v1/admin/users",
+              {"username": "ext2", "real_name": "外2", "password": "Abcdef@123",
+               "roles": ["R-STAFF"], "user_source": "EXTERNAL"},
+              roles=("R-ADMIN",), uid=1)
+    assert r.status_code == 400, r.content
+    # PENDING 机构不得挂账号
+    pend = SysPartnerOrg.objects.create(
+        tenant_id=1, creator_id=1, name="机构E", credit_code="91310000MA1K3XY11E",
+        org_type="COLLAB", status="PENDING")
+    r = _post("/api/v1/admin/users",
+              {"username": "pend", "real_name": "待审", "password": "Abcdef@123",
+               "roles": ["R-PARTNER"], "org_id": pend.id},
+              roles=("R-ADMIN",), uid=1)
+    assert r.status_code == 400, r.content
+    # org_id 非整数 → 400（原先 500）
+    r = _post("/api/v1/admin/users",
+              {"username": "badorg", "real_name": "坏", "password": "Abcdef@123",
+               "roles": ["R-PARTNER"], "org_id": "abc"},
+              roles=("R-ADMIN",), uid=1)
+    assert r.status_code == 400, r.content
+
+
+def test_r2i2_progress_report_accepts_contract_camel_case(seed_auth):
+    """r2 I-2：契约 EProgressReportSubmit 是 camelCase，按契约提交必须 200。"""
+    org_a, _org_b, ua, _ub, _make = _party(seed_auth)
+    _manager_user(seed_auth)
+    proj = _ext_project(org_a, ua.id)
+    r = _post(f"/api/v1/project/{proj.id}/progress-report",
+              {"period": "2026Q1", "reportType": "QUARTERLY", "progressPercent": 55,
+               "contentRich": "进展", "nextPlan": "下一步"},
+              roles=("R-PARTNER",), uid=ua.id)
+    assert r.status_code == 200, r.content
+    d = _data(r)
+    assert d["progressPercent"] == 55 and d["reportType"] == "QUARTERLY"
+
+
+def test_r2i3_orgless_external_cannot_write(seed_auth):
+    """r2 I-3：空机构外部账号不得建申报/建议（否则写出 NULL-org 的院内形状数据）。"""
+    from apps.sysadmin.models import SysUser, SysUserRole
+
+    u = SysUser.objects.create(
+        username="nullorg2", real_name="无机构", password_hash="x", status="ACTIVE",
+        tenant_id=1, creator_id=1, org_id=None, user_source="EXTERNAL")
+    SysUserRole.objects.create(user=u, role=seed_auth["roles"]["R-PARTNER"], tenant_id=1)
+    r = _post("/api/v1/apply/applications",
+              {"title": "空机构申报", "project_type": "开放课题"},
+              roles=("R-PARTNER",), uid=u.id)
+    assert r.status_code == 403, r.content
+    r = _post("/api/v1/apply/guide-suggestions", {"title": "空机构建议"},
+              roles=("R-PARTNER",), uid=u.id)
+    assert r.status_code == 403, r.content
+
+
+def test_r2i4_pi_must_exist(seed_auth):
+    """r2 I-4：院内申报的 pi_user_id 必须存在，否则 PI 签署永久 403、申报卡死。"""
+    r = _post("/api/v1/apply/applications",
+              {"title": "幽灵 PI", "project_type": "ZIGE", "pi_user_id": 999999},
+              roles=("R-STAFF",), uid=2)
+    assert r.status_code == 400, r.content
