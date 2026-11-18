@@ -872,18 +872,36 @@ def test_m1d_change_invalid_input_rejected(seed_auth):
         assert r.json()["code"] == 40001, body
     assert EChangeRequest.objects.filter(project_id=p.id).count() == 0  # 无半成品
 
-    # 成员/范围变更无确定回写路径 → 一般备案拒绝，只能走重大审批
-    for ct in ("MEMBER", "SCOPE"):
-        r = c.post(f"/api/v1/project/{p.id}/change-request",
-                   data=json.dumps({"change_type": ct, "severity": "GENERAL",
-                                    "new_value": {}, "reason": "x"}),
+    # 更多非法输入：NaN/Infinity 能被 Decimal 解析但不可用于金额；成员名单必须给 ID 数组
+    more = [
+        {"change_type": "BUDGET", "new_value": {"totalBudget": "Infinity"}, "reason": "x"},
+        {"change_type": "BUDGET", "new_value": {"totalBudget": "NaN"}, "reason": "x"},
+        {"change_type": "BUDGET", "new_value": {"totalBudget": "-1"}, "reason": "x"},
+        {"change_type": "MEMBER", "new_value": {}, "reason": "x"},
+        {"change_type": "MEMBER", "new_value": {"memberIds": []}, "reason": "x"},
+        {"change_type": "MEMBER", "new_value": {"memberIds": ["abc"]}, "reason": "x"},
+    ]
+    for body in more:
+        r = c.post(f"/api/v1/project/{p.id}/change-request", data=json.dumps(body),
                    content_type="application/json", **bearer(2, ["R-STAFF"]))
-        assert r.status_code == 400, ct
+        assert r.status_code == 400, body
+        assert r.json()["code"] == 40001, body
+
+    # 范围变更无对应列可回写 → 两种严重程度都拒绝（M2 任务书版本化再开）
+    for sev in ("GENERAL", "MAJOR"):
         r = c.post(f"/api/v1/project/{p.id}/change-request",
-                   data=json.dumps({"change_type": ct, "severity": "MAJOR",
-                                    "new_value": {}, "reason": "x"}),
+                   data=json.dumps({"change_type": "SCOPE", "severity": sev,
+                                    "new_value": {"scope": "扩展研究内容"}, "reason": "x"}),
                    content_type="application/json", **bearer(2, ["R-STAFF"]))
-        assert r.status_code == 200, ct
+        assert r.status_code == 400, sev
+        assert r.json()["code"] == 40001
+
+    # 成员变更给合法 memberIds 才可建单（重大走审批）
+    r = c.post(f"/api/v1/project/{p.id}/change-request",
+               data=json.dumps({"change_type": "MEMBER", "severity": "MAJOR",
+                                "new_value": {"memberIds": [2, 3]}, "reason": "加入成员"}),
+               content_type="application/json", **bearer(2, ["R-STAFF"]))
+    assert r.status_code == 200
 
 
 def test_m1d_board_and_change_tenant_isolated(seed_auth):
@@ -986,3 +1004,55 @@ def test_m1d_eval_template_status_validated(seed_auth):
                content_type="application/json", **bearer(1, ["R-ADMIN"]))
     assert r.status_code == 400
     assert r.json()["code"] == 40001
+
+
+def test_m1d_conclude_works_without_caller_transaction(seed_auth):
+    """N-1 回归：结论回写自带事务（PG 下 select_for_update 在 autocommit 会抛）。
+
+    sqlite 的 select_for_update 是静默降级，抓不到该缺陷；这里直接断言批文与
+    approval_doc_id 在同一次调用里成对落地，且重复调用不会二次签发。
+    """
+    from apps.project.models import EFinalAccept, EReport
+
+    p = _project()
+    fa = EFinalAccept.objects.create(tenant_id=1, creator_id=1, project_id=p.id,
+                                     status="APPLIED")
+    from apps.project.api import conclude_final_accept
+    conclude_final_accept(fa.id, "APPROVED")
+    fa.refresh_from_db()
+    assert fa.status == "APPROVED"
+    assert fa.accept_at is not None
+    assert fa.approval_doc_id is not None
+    assert EReport.objects.filter(final_accept_id=fa.id).count() == 1
+
+    conclude_final_accept(fa.id, "APPROVED")  # 幂等
+    assert EReport.objects.filter(final_accept_id=fa.id).count() == 1
+    fa.refresh_from_db()
+    assert fa.approval_doc_id == EReport.objects.filter(final_accept_id=fa.id).first().id
+
+
+def test_m1d_change_batch_isolates_bad_rows(seed_auth):
+    """N-5：批量审批逐条独立成败，一条内容非法不带垮整批。"""
+    p = _project()
+    c = _c()
+    good = EChangeRequest.objects.create(
+        tenant_id=1, creator_id=2, project_id=p.id, change_type="TITLE",
+        severity="MAJOR", status="SUBMITTED", new_value={"title": "批量改名"},
+    )
+    bad = EChangeRequest.objects.create(
+        tenant_id=1, creator_id=2, project_id=p.id, change_type="SCOPE",
+        severity="MAJOR", status="SUBMITTED", new_value={"scope": "无回写目标"},
+    )
+    r = c.post("/api/v1/projects/approve-batch",
+               data=json.dumps({"ids": [good.id, bad.id], "action": "APPROVE",
+                                "comment": "批量同意"}),
+               content_type="application/json", **bearer(1, ["R-ADMIN"]))
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["ok"] == 1
+    by_id = {x["id"]: x for x in data["results"]}
+    assert by_id[good.id]["ok"] is True
+    assert by_id[bad.id]["ok"] is False
+    assert "范围变更" in by_id[bad.id]["err"]
+    p.refresh_from_db()
+    assert p.title == "批量改名"  # 好的那条照常生效

@@ -288,7 +288,7 @@ const CHANGE_TYPES: { key: ChangeType; label: string; desc: string }[] = [
   { key: 'BUDGET', label: '预算调整', desc: '科目间调剂批复金额' },
   { key: 'MEMBER', label: '成员变更', desc: '课题组人员增删' },
   { key: 'TITLE', label: '题目变更', desc: '修改项目名称' },
-  { key: 'SCOPE', label: '范围变更', desc: '调整研究内容与考核指标' },
+  { key: 'SCOPE', label: '范围变更', desc: '需改任务书（本期不支持在线变更）' },
 ]
 const changeOpen = ref(false)
 const changeType = ref<ChangeType | ''>('')
@@ -305,7 +305,8 @@ const fSubject = ref('')        // BUDGET：科目（默认取第一个经费用
 const fAmount = ref('')         // BUDGET：新批复金额（万元，科目级说明）
 const fTotalBudget = ref('')    // BUDGET：变更后项目总预算（元，B4 生效回写锚点）
 const fMemberAction = ref<'ADD' | 'REMOVE'>('ADD')
-const fMemberName = ref('')
+// 成员变更按用户 ID 落地：后端把 newValue.memberIds 整体回写 EProject.member_ids
+const fMemberId = ref('')
 const fMemberRole = ref('参与人员')
 const fScope = ref('')          // SCOPE
 
@@ -321,7 +322,7 @@ function openChange() {
   fAmount.value = ''
   fTotalBudget.value = detail.value?.total_budget ?? ''
   fMemberAction.value = 'ADD'
-  fMemberName.value = ''
+  fMemberId.value = ''
   fMemberRole.value = '参与人员'
   fScope.value = ''
   changeOpen.value = true
@@ -334,7 +335,7 @@ const changeReady = computed(() => {
     case 'DELAY': return !!fEnd.value
     case 'TITLE': return !!fNewTitle.value.trim() && fNewTitle.value.trim() !== detail.value?.title
     case 'BUDGET': return !!fSubject.value && !!fAmount.value && !isNaN(Number(fAmount.value)) && !!fTotalBudget.value && !isNaN(Number(fTotalBudget.value))
-    case 'MEMBER': return !!fMemberName.value.trim()
+    case 'MEMBER': return Number(fMemberId.value) > 0
     case 'SCOPE': return !!fScope.value.trim()
     default: return false
   }
@@ -356,8 +357,15 @@ function buildChangePayload(): { change_type: string; old_value: any; new_value:
         severity: changeSeverity.value,
       }
     }
-    case 'MEMBER':
-      return { change_type: 'MEMBER', old_value: { members: d?.members || [] }, new_value: { action: fMemberAction.value, name: fMemberName.value.trim(), role: fMemberRole.value }, reason: changeReason.value, severity: changeSeverity.value }
+    case 'MEMBER': {
+      const base: number[] = Array.isArray(d?.member_ids) ? d!.member_ids.filter((x: any) => typeof x === 'number')
+        : (d?.members || []).map((m: any) => Number(m.userId ?? m.user_id)).filter((x: number) => x > 0)
+      const uid = Number(fMemberId.value)
+      const next = fMemberAction.value === 'ADD'
+        ? Array.from(new Set([...base, uid]))
+        : base.filter((x: number) => x !== uid)
+      return { change_type: 'MEMBER', old_value: { member_ids: base }, new_value: { memberIds: next, action: fMemberAction.value, role: fMemberRole.value }, reason: changeReason.value, severity: changeSeverity.value }
+    }
     case 'TITLE':
       return { change_type: 'TITLE', old_value: { title: d?.title || '' }, new_value: { title: fNewTitle.value.trim() }, reason: changeReason.value, severity: changeSeverity.value }
     case 'SCOPE':
@@ -730,12 +738,13 @@ function onKey(e: KeyboardEvent) {
                     <label><input type="radio" value="REMOVE" v-model="fMemberAction" /> 移除成员</label>
                   </span>
                 </div>
-                <div class="ch-field"><label>姓名 *</label><input type="text" v-model="fMemberName" placeholder="成员姓名" /></div>
+                <div class="ch-field"><label>成员用户 ID *</label><input type="number" min="1" v-model="fMemberId" placeholder="如 12" /></div>
                 <div class="ch-field" v-if="fMemberAction === 'ADD'"><label>角色</label>
                   <select v-model="fMemberRole"><option>参与人员</option><option>子课题负责人</option><option>财务联络员</option></select>
                 </div>
               </template>
-              <p class="ch-tip" v-if="changeType === 'MEMBER'">成员名单以人员模块为准：审批生效后按人力资源口径同步（本表单仅记录变更意向）。</p>
+              <p class="ch-tip" v-if="changeType === 'MEMBER'">按用户 ID 增删：审批生效后整体回写项目成员名单（人员模块口径同步，M2 补齐成员详情页）。</p>
+              <p class="ch-tip" v-if="changeType === 'SCOPE'">研究范围写在任务书里，本期不支持在线变更（后端拒绝建单），请走任务书版本化流程（M2）。</p>
               <template v-if="changeType === 'SCOPE'">
                 <div class="ch-field"><label>变更后研究内容与考核指标 *</label><textarea rows="4" v-model="fScope" placeholder="说明调整后的研究范围、技术路线与考核指标"></textarea></div>
               </template>

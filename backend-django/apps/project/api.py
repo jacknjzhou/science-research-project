@@ -308,9 +308,9 @@ def create_mid_check(request: HttpRequest, id: int):
 
 _CHANGE_SEVERITIES = ("GENERAL", "MAJOR")
 _CHANGE_TYPES = ("DELAY", "BUDGET", "MEMBER", "TITLE", "SCOPE")
-# 可「提交即生效」的变更类型：仅限有确定回写目标的字段级微调。
-# MEMBER/SCOPE 生效需人员或任务书口径（M2），一律走重大变更审批留痕。
-_CHANGE_GENERAL_TYPES = ("DELAY", "BUDGET", "TITLE")
+# 可「提交即生效」的变更类型：仅限有确定回写目标的字段级微调
+# （SCOPE 无对应列可回写，在 _validate_change 里直接拒绝，登记 M2 任务书版本化）
+_CHANGE_GENERAL_TYPES = ("DELAY", "BUDGET", "TITLE", "MEMBER")
 
 
 def _validate_change(change_type: str, new_value: Any) -> None:
@@ -334,21 +334,31 @@ def _validate_change(change_type: str, new_value: Any) -> None:
         raw = new_value.get("totalBudget", new_value.get("total_budget"))
         try:
             target = Decimal(str(raw))
+            if not target.is_finite():  # NaN/Infinity 能通过解析但比大小会炸或恒真
+                raise InvalidOperation
+            positive = target > 0
         except (InvalidOperation, TypeError, ValueError):
             raise ApiError(400, CODE_BAD_REQUEST, "预算变更须提供合法的 totalBudget")
-        if target <= 0:
+        if not positive:
             raise ApiError(400, CODE_BAD_REQUEST, "变更后项目总预算须为正数")
     elif change_type == "MEMBER":
         ids = new_value.get("memberIds", new_value.get("member_ids"))
-        if ids is not None and not isinstance(ids, list):
-            raise ApiError(400, CODE_BAD_REQUEST, "memberIds 须为数组")
+        if not isinstance(ids, list) or not ids:
+            raise ApiError(400, CODE_BAD_REQUEST,
+                           "成员变更须提供 memberIds（变更后的成员用户 ID 数组）")
+        if not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+            raise ApiError(400, CODE_BAD_REQUEST, "memberIds 元素须为用户 ID 整数")
+    elif change_type == "SCOPE":
+        # 研究内容/考核指标在任务书里，E 域无对应列可回写：本期不支持，登记 M2 任务书变更
+        raise ApiError(400, CODE_BAD_REQUEST,
+                       "范围变更需修改任务书，本期不支持在线变更（M2 任务书版本化）")
 
 
 def _check_general_applicable(change_type: str) -> None:
     """一般变更必须能落到项目字段上；无回写路径的类型只能走重大变更审批。"""
     if change_type not in _CHANGE_GENERAL_TYPES:
         raise ApiError(400, CODE_BAD_REQUEST,
-                       "成员/范围变更须以重大变更（severity=MAJOR）提交，经审批后生效")
+                       "该变更类型无即时生效路径，须以重大变更（severity=MAJOR）提交")
 
 
 def _change_new_value(body: dict) -> dict | None:
@@ -390,11 +400,11 @@ def _change_version(tenant_id: int, user_id: int, change: EChangeRequest, p: EPr
     )
 
 
-def _apply_change(p: EProject, row: EChangeRequest) -> dict | None:
+def _apply_change(p: EProject, row: EChangeRequest) -> dict:
     """生效回写（P-7 映射）：DELAY→end_date / TITLE→title / MEMBER→member_ids / BUDGET→预算。
 
-    BUDGET 额外同步 F 域预算：活跃 FBudget.total_approved 按差额调整、首条预算行
-    amount_adjusted 记增量；返回调剂明细（落版本快照 budgetAdjustment）。
+    返回已应用字段清单 {"applied": [...]}；BUDGET 额外带 budgetAdjustment（落版本快照）。
+    返回空 dict 表示一条字段都没落下——调用方必须据此拒绝"生效但没变"的变更。
     """
     nv = row.new_value if isinstance(row.new_value, dict) else {}
     fields: list[str] = []
@@ -428,10 +438,16 @@ def _apply_change(p: EProject, row: EChangeRequest) -> dict | None:
                 if fields:
                     p.save(update_fields=fields + ["updated_at"])
                     fields = []
-                return _sync_change_budget(row.project_id, row.tenant_id, delta, str(target))
-    if fields:
-        p.save(update_fields=fields + ["updated_at"])
-    return None
+                return {
+                    "applied": ["total_budget"],
+                    "budgetAdjustment": _sync_change_budget(
+                        row.project_id, row.tenant_id, delta, str(target)
+                    ),
+                }
+    if not fields:
+        return {}
+    p.save(update_fields=fields + ["updated_at"])
+    return {"applied": fields}
 
 
 def _sync_change_budget(project_id: int, tenant_id: int, delta: Decimal, target: str) -> dict:
@@ -502,8 +518,8 @@ def create_change_request(request: HttpRequest, id: int):
         r.status = "EFFECTIVE"
         r.approved_at = dj_tz.now()
         r.approval_status = "APPROVED"
-        if adjusted is not None:
-            v.snapshot = {**v.snapshot, "budgetAdjustment": adjusted}
+        if adjusted.get("budgetAdjustment"):
+            v.snapshot = {**v.snapshot, "budgetAdjustment": adjusted["budgetAdjustment"]}
             v.save(update_fields=["snapshot"])
         r.save(update_fields=["status", "approved_at", "approval_status", "updated_at"])
         approval.log(
@@ -565,10 +581,14 @@ def _advance_change(d, project_id: int, change_id: int, to_status: str, comment:
             return 409, "状态不允许或变更单不存在"
         if to_status == "EFFECTIVE" and p is not None:
             adjusted = _apply_change(p, row)
-            if adjusted is not None:
+            if not adjusted:
+                # 变更内容无法落到项目字段：宁可拒绝也不写一条「生效但没变」的变更
+                raise ApiError(400, CODE_BAD_REQUEST, "变更内容无可应用到项目的字段")
+            if adjusted.get("budgetAdjustment"):
                 ver = EChangeVersion.objects.filter(change=row, deleted=0).order_by("-version_no").first()
                 if ver is not None:
-                    ver.snapshot = {**(ver.snapshot or {}), "budgetAdjustment": adjusted}
+                    ver.snapshot = {**(ver.snapshot or {}),
+                                    "budgetAdjustment": adjusted["budgetAdjustment"]}
                     ver.save(update_fields=["snapshot"])
             EChangeRequest.objects.filter(id=change_id).update(
                 approved_at=dj_tz.now(), approval_status="APPROVED"
@@ -620,11 +640,18 @@ def approve_change_batch(request: HttpRequest):
     results = []
     ok_n = 0
     for cid in ids:
-        row = EChangeRequest.objects.filter(id=cid).first()
+        row = EChangeRequest.objects.filter(
+            id=cid, tenant_id=d.tenant_id, deleted=0
+        ).first()
         if row is None:
             results.append({"id": cid, "ok": False, "err": "变更单不存在"})
             continue
-        result = _advance_change(d, row.project_id, cid, "", comment, action)
+        # 逐条独立成败：单条内容非法（40001）不能带垮整批（N-5）
+        try:
+            result = _advance_change(d, row.project_id, cid, "", comment, action)
+        except ApiError as exc:
+            results.append({"id": cid, "ok": False, "err": exc.message})
+            continue
         if isinstance(result, tuple):
             results.append({"id": cid, "ok": False, "err": result[1]})
         else:
@@ -669,7 +696,11 @@ def _template_bundle(tenant_id: int, template_id: int | None) -> tuple[dict | No
 
 
 def _prefill_score_detail(sections: list) -> dict | None:
-    """按模板 sections 预填打分骨架（中检 plan Task 4 硬要求：score_detail==sections）。"""
+    """按模板 sections 预填打分骨架：items 顺序与模板一致，score 留空待专家打分。
+
+    形状为 {"items":[{key,label,weight,score}]}——不是 sections 原样拷贝：打分要落
+    score 槽位，裸拷贝会让专家分无处可放（与 plan 字面的偏差已记 ledger Ruling）。
+    """
     if not sections:
         return None
     items = []
@@ -1231,26 +1262,31 @@ def conclude_mid_check(mid_check_id: int, project_id: int, conclusion: str,
 
 def conclude_final_accept(final_accept_id: int, status: str) -> None:
     """N.conclude(FINAL_ACCEPT) 回写结题验收状态；仅通过时签发批文（B3）。"""
-    fa = EFinalAccept.objects.filter(id=final_accept_id, deleted=0).first()
-    if fa is None:
-        return
-    fa.status = status
-    if status == "APPROVED":
-        fa.accept_at = dj_tz.now()
-    fa.save(update_fields=["status", "accept_at", "updated_at"])
-    if status != "APPROVED":
-        return
+    # 必须整体在事务内：_issue_report 内部有 select_for_update，autocommit 下 PG 会抛
+    # TransactionManagementError（sqlite 静默降级，测试掩盖过——见 N-1）
+    with transaction.atomic():
+        fa = EFinalAccept.objects.select_for_update().filter(
+            id=final_accept_id, deleted=0
+        ).first()
+        if fa is None:
+            return
+        fa.status = status
+        if status == "APPROVED":
+            fa.accept_at = dj_tz.now()
+        fa.save(update_fields=["status", "accept_at", "updated_at"])
+        if status != "APPROVED":
+            return
 
-    p = EProject.objects.filter(id=fa.project_id, deleted=0).first()
-    title = f"{p.title if p else '项目'} 结题验收批文"
-    report_id = _issue_report(
-        project_id=fa.project_id, tenant_id=fa.tenant_id, user_id=fa.creator_id,
-        doc_type="FINAL_ACCEPT", title=title, conclusion=fa.conclusion,
-        score_detail=fa.output_summary, final_accept_id=fa.id,
-    )
-    if fa.approval_doc_id != report_id:
-        fa.approval_doc_id = report_id
-        fa.save(update_fields=["approval_doc_id", "updated_at"])
+        p = EProject.objects.filter(id=fa.project_id, tenant_id=fa.tenant_id, deleted=0).first()
+        title = f"{p.title if p else '项目'} 结题验收批文"
+        report_id = _issue_report(
+            project_id=fa.project_id, tenant_id=fa.tenant_id, user_id=fa.creator_id,
+            doc_type="FINAL_ACCEPT", title=title, conclusion=fa.conclusion,
+            score_detail=fa.output_summary, final_accept_id=fa.id,
+        )
+        if fa.approval_doc_id != report_id:
+            fa.approval_doc_id = report_id
+            fa.save(update_fields=["approval_doc_id", "updated_at"])
     try:  # 通知 best-effort：任何异常都不阻断结论落库
         _notify_role(fa.tenant_id, "R-MANAGER", "FINAL_ACCEPT", title,
                      "结题验收通过，批文已生成", f"final-accept:{fa.id}")

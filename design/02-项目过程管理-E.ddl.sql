@@ -309,7 +309,7 @@ CREATE TABLE E_EVAL_TEMPLATE (
   name             VARCHAR(128) NOT NULL,                            -- 模板名称
   scene            VARCHAR(16)  NOT NULL DEFAULT 'MID_CHECK'
                    CHECK (scene IN ('MID_CHECK','FINAL_ACCEPT')),    -- 适用场景
-  sections         JSONB        NOT NULL DEFAULT '[]'::jsonb,        -- 填报节/评审要素 [{key,title,weight,required}]
+  sections         JSONB        NOT NULL DEFAULT '[]'::jsonb,        -- 评审要素数组，元素 {key,label,weight,desc}（与 02-E openapi EvalTemplate.sections 同形）
   score_rubric     JSONB        NOT NULL DEFAULT '{}'::jsonb         -- 评分规则 {total,bands:[{min,max,conclusion}]}
 );
 COMMENT ON TABLE  E_EVAL_TEMPLATE IS '统一项目评估模板（B3：中期检查/结题验收共用一套配置）';
