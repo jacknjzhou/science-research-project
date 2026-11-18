@@ -156,3 +156,33 @@ def test_guide_suggestion_requires_title(seed_auth):
     r = _post("/api/v1/apply/guide-suggestions", {"title": "  "},
               roles=("R-PARTNER",), uid=ua.id)
     assert r.status_code == 400 and json.loads(r.content)["code"] == 40001
+
+
+# ===========================================================================
+# Task 4：申报机构化
+# ===========================================================================
+
+
+def test_partner_application_is_org_bound(seed_auth):
+    org_a, _org_b, ua, ub = _partner_users(seed_auth)
+    r = _post("/api/v1/apply/applications",
+              {"title": "开放课题甲", "project_type": "开放课题",
+               "pi_user_id": 999, "applicant_org_id": 999},
+              roles=("R-PARTNER",), uid=ua.id)
+    assert r.status_code == 200, r.content
+    d = _data(r)
+    assert d["pi_user_id"] == ua.id and d["applicant_org_id"] == org_a.id
+    assert d["applicant_type"] == "EXTERNAL"
+    aid = d["id"]
+    lb = _data(_get("/api/v1/apply/applications", roles=("R-PARTNER",), uid=ub.id))
+    assert lb["total"] == 0
+    assert _get(f"/api/v1/apply/applications/{aid}",
+                roles=("R-PARTNER",), uid=ub.id).status_code == 404
+
+
+def test_internal_application_stays_internal(seed_auth):
+    d = _data(_post("/api/v1/apply/applications",
+                    {"title": "院内课题", "project_type": "ZIGE", "pi_user_id": 2},
+                    roles=("R-STAFF",), uid=2))
+    assert d["applicant_type"] == "INTERNAL" and d["applicant_org_id"] is None
+    assert d["pi_user_id"] == 2

@@ -1559,6 +1559,8 @@ components:
         is_horizontal: { type: boolean }
         funding_channel: { type: string, nullable: true }
         ai_draft_marked: { type: boolean }
+        applicant_org_id: { type: integer, format: int64, nullable: true, description: "外部申报机构 → sys_partner_org(id)，空=院内（M2-b）" }
+        applicant_type: { type: string, enum: [INTERNAL, EXTERNAL], description: "申报主体类型（M2-b）" }
         submit_at:     { type: string, format: date-time, nullable: true }
         withdraw_at:   { type: string, format: date-time, nullable: true }
         withdraw_reason: { type: string, nullable: true }
@@ -1579,6 +1581,7 @@ components:
         total_budget:  { type: string }
         is_horizontal: { type: boolean }
         funding_channel: { type: string }
+        applicant_org_id: { type: integer, format: int64, description: "院内可指定；外部机构用户忽略（以本人机构为准）" }
 
     SectionSaveRequest:
       type: object

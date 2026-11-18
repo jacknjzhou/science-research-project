@@ -51,6 +51,8 @@ def to_api_application(a: PApplication) -> dict[str, Any]:
         "member_ids": a.member_ids or [],
         "is_horizontal": a.is_horizontal,
         "ai_draft_marked": a.ai_draft_marked,
+        "applicant_org_id": a.applicant_org_id,
+        "applicant_type": a.applicant_type,
         "total_budget": num2(a.total_budget),
         "code": a.code,
         "remark": a.remark,

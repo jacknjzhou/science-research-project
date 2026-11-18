@@ -251,6 +251,8 @@ def list_applications(request: HttpRequest):
     d = domain_from(request)
     page, size, limit, offset = page_args(request)
     qs = PApplication.objects.filter(tenant_id=d.tenant_id, deleted=0)
+    if is_external_only(d):
+        qs = qs.filter(applicant_org_id=current_org_id(d))
     if request.GET.get("status"):
         qs = qs.filter(status=request.GET["status"])
     if request.GET.get("project_type"):
@@ -274,7 +276,12 @@ def create_application(request: HttpRequest):
     body = read_json(request)
     title = body.get("title")
     project_type = body.get("project_type")
-    pi_user_id = body.get("pi_user_id")
+    external = is_external_only(d)
+    # 外部机构：PI 与申报机构一律以本人/本机构为准（忽略请求体，防冒名与跨机构挂靠）
+    if external:
+        pi_user_id = d.user_id
+    else:
+        pi_user_id = body.get("pi_user_id")
     if not title or not project_type or pi_user_id is None:
         raise ApiError(400, CODE_BAD_REQUEST, "请求参数错误")
     total_budget = None
@@ -291,6 +298,8 @@ def create_application(request: HttpRequest):
         abstract=body.get("abstract"),
         total_budget=total_budget,
         is_horizontal=bool(body.get("is_horizontal")),
+        applicant_org_id=current_org_id(d) if external else body.get("applicant_org_id"),
+        applicant_type="EXTERNAL" if external else "INTERNAL",
     )
     return ok(request, to_api_application(a))
 
