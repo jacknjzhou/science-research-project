@@ -80,3 +80,8 @@ def seed_notify(db):
 def bearer(user_id: int, roles: list[str], tenant_id: int = 1) -> dict:
     tok = gen_token(user_id, tenant_id, 0, "INTERNAL", roles)
     return {"HTTP_AUTHORIZATION": f"Bearer {tok}"}
+
+@pytest.fixture(autouse=True)
+def _locmem_email(settings):
+    """测试一律用 locmem 邮件后端，保证 mail.outbox 可断言（M2-a C5）。"""
+    settings.EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"

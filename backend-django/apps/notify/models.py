@@ -17,6 +17,8 @@ class SysNotification(models.Model):
     title = models.CharField(max_length=200)
     content = models.TextField(null=True, blank=True)
     biz_ref = models.CharField(max_length=128, null=True, blank=True)
+    # M2-a：投递渠道 INAPP 站内信 / EMAIL 邮件 / BOTH 双通道
+    channel = models.CharField(max_length=16, default="INAPP")
     read_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

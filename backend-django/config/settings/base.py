@@ -122,3 +122,12 @@ LLM_BASE_URL = os.environ.get("ARK_LLM_BASE_URL", "")
 LLM_API_KEY = os.environ.get("ARK_LLM_API_KEY", "")
 LLM_MODEL = os.environ.get("ARK_LLM_MODEL", "gpt-4o-mini")
 LLM_TIMEOUT_SEC = int(os.environ.get("ARK_LLM_TIMEOUT_SEC", "30"))
+
+# ---- 邮件通道（M2-a C5 最小实现；默认 console 后端，测试用 locmem）----
+EMAIL_BACKEND = os.environ.get("ARK_EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+EMAIL_HOST = os.environ.get("ARK_EMAIL_HOST", "localhost")
+EMAIL_PORT = int(os.environ.get("ARK_EMAIL_PORT", "25"))
+EMAIL_HOST_USER = os.environ.get("ARK_EMAIL_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("ARK_EMAIL_PASSWORD", "")
+EMAIL_USE_TLS = os.environ.get("ARK_EMAIL_TLS", "") == "1"
+DEFAULT_FROM_EMAIL = os.environ.get("ARK_EMAIL_FROM", "noreply@ark.local")
