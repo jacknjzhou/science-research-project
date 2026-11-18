@@ -384,6 +384,30 @@ paths:
                       data: { $ref: '#/components/schemas/EArchiveChecklist' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /project/{id}/board:
+    get:
+      tags: [Board]
+      summary: 项目八要素看板聚合（B2）
+      description: >-
+        只读聚合视图，供项目页"看板"页签一次取全八要素：经费（复用 03 F 执行口径）、进度、
+        人员、质量、外包、变更、成果。各要素另给出前端直达目标页；数字与各域实时一致，不落快照表。
+        金额一律 NUMERIC(18,2) 字符串承载精度。
+      operationId: getProjectBoard
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdPath'
+      responses:
+        '200':
+          description: 八要素聚合
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ProjectBoard' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /project/{id}/trace:
     get:
       tags: [Trace]
@@ -1068,6 +1092,60 @@ components:
         completeness: { type: string, description: 'NUMERIC(6,4) 完成度' }
         blockedItems: { type: array, items: { type: string }, description: 缺项清单（拦截依据） }
         status: { type: string, enum: [TEMPLATE, IN_PROGRESS, PASSED, BLOCKED] }
+
+    ProjectBoard:
+      type: object
+      description: 项目八要素看板聚合（B2；金额均为 NUMERIC(18,2) 字符串）
+      properties:
+        fund:
+          type: object
+          description: 经费要素（复用 03 F 执行口径）
+          properties:
+            projectId: { type: integer, format: int64 }
+            budgetApproved: { type: string, description: 预算批复额 }
+            incomeTotal: { type: string, description: 认领到账合计 }
+            used: { type: string, description: 已用（APPROVED/PAID/VOUCHER_SYNCED） }
+            frozen: { type: string, description: 冻结（在途审批） }
+            remaining: { type: string, description: 结余 = 批复 − 已用 − 冻结 }
+            execRateByBudget: { type: number, description: 按预算口径执行率 }
+            execRateByIncome: { type: number, description: 按到账口径执行率 }
+        progress:
+          type: object
+          properties:
+            milestonesTotal: { type: integer }
+            milestonesDone: { type: integer, description: 状态 ACHIEVED 的里程碑数 }
+            tasksTotal: { type: integer }
+            tasksDone: { type: integer, description: 状态 COMPLETED 的任务数 }
+        members:
+          type: array
+          items:
+            type: object
+            properties:
+              userId: { type: integer, format: int64 }
+              name: { type: string, nullable: true, description: 查无此人时为 null }
+        quality:
+          type: object
+          properties:
+            healthScore: { type: integer }
+            riskLevel: { type: string }
+            lastCheckAt: { type: string, format: date-time, nullable: true }
+        outsource:
+          type: object
+          properties:
+            contracts: { type: integer, description: 该项目合同数（09 G） }
+            amountTotal: { type: string, description: 合同金额合计 }
+        changes:
+          type: object
+          properties:
+            total: { type: integer }
+            byStatus:
+              type: object
+              additionalProperties: { type: integer }
+              description: 按变更单状态计数
+        outputs:
+          type: object
+          properties:
+            total: { type: integer, description: R_OUTPUT.project_ids 命中该项目的成果数 }
 
     TraceNode:
       type: object

@@ -17,6 +17,7 @@ from django.utils import timezone as dj_tz
 
 from apps.notify.models import SysNotification
 from apps.project.mappings import (
+    _num2,
     to_api_category,
     to_api_change_request,
     to_api_final_accept,
@@ -32,6 +33,7 @@ from apps.project.models import (
     EArchiveChecklist,
     EChangeRequest,
     EFinalAccept,
+    EHealthHistory,
     EMidCheck,
     EMilestone,
     EProgressReport,
@@ -39,6 +41,7 @@ from apps.project.models import (
     EProjectCategory,
     ETask,
 )
+from apps.sysadmin.mappings import fmt_ts
 from core import approval
 from core.auth.deps import domain_from
 from core.httpx import (
@@ -123,6 +126,100 @@ def list_milestones(request: HttpRequest, id: int):
     _get_project_or_404(id)
     rows = EMilestone.objects.filter(project_id=id, deleted=0).order_by("id")
     return ok(request, {"list": [to_api_milestone(m) for m in rows]})
+
+
+# ---------------------------------------------------------------------------
+# M1-d B2：项目八要素看板（只读聚合，金额一律 Money=string）
+# ---------------------------------------------------------------------------
+def _board_outputs(tenant_id: int, project_id: int) -> int:
+    """R_OUTPUT.project_ids 为 JSONB 数组，元素可能是 int 或 str（见 R 域写入面），两者都算。
+
+    无 DB 端 JSON 包含查询可移植写法（sqlite 测试库），故按租户取 id 列后在 Python 过滤。
+    """
+    from apps.output.models import ROutput
+
+    rows = ROutput.objects.filter(tenant_id=tenant_id, deleted=0).values_list("project_ids", flat=True)
+    target = {project_id, str(project_id)}
+    n = 0
+    for ids in rows:
+        if isinstance(ids, list) and any(i in target for i in ids):
+            n += 1
+    return n
+
+
+def project_board(request: HttpRequest, id: int):
+    from decimal import Decimal
+
+    from django.db.models import Count, Sum
+
+    from apps.funding.api import _execution_of
+    from apps.procure.models import GContract
+    from apps.sysadmin.models import SysUser
+
+    p = _get_project_or_404(id)
+    tenant_id = p.tenant_id
+
+    # 经费：复用 03 F 域口径（预算批复/到账/已用/冻结/结余 + 两率）
+    fund = _execution_of(tenant_id, id)
+
+    # 进度：里程碑（ACHIEVED=完成）与任务（COMPLETED=完成）
+    ms = EMilestone.objects.filter(tenant_id=tenant_id, project_id=id, deleted=0)
+    tasks = ETask.objects.filter(tenant_id=tenant_id, project_id=id, deleted=0)
+    progress = {
+        "milestonesTotal": ms.count(),
+        "milestonesDone": ms.filter(status="ACHIEVED").count(),
+        "tasksTotal": tasks.count(),
+        "tasksDone": tasks.filter(status="COMPLETED").count(),
+    }
+
+    # 人员：项目成员快照，查无此人仅返回 id（name=None）
+    member_ids = [m for m in (p.member_ids or []) if isinstance(m, int)]
+    names = dict(
+        SysUser.objects.filter(tenant_id=tenant_id, id__in=member_ids).values_list("id", "real_name")
+    )
+    members = [{"userId": uid, "name": names.get(uid)} for uid in member_ids]
+
+    # 质量：项目当前健康度 + 最近一次健康度快照
+    last = (
+        EHealthHistory.objects.filter(tenant_id=tenant_id, project_id=id)
+        .order_by("-created_at", "-id")
+        .first()
+    )
+    quality = {
+        "healthScore": p.health_score,
+        "riskLevel": p.risk_level,
+        "lastCheckAt": fmt_ts(last.created_at) if last else None,
+    }
+
+    # 外包：09 G 合同台账（project_id 过滤）
+    agg = GContract.objects.filter(tenant_id=tenant_id, project_id=id, deleted=0).aggregate(
+        n=Count("id"), s=Sum("amount")
+    )
+    outsource = {"contracts": agg["n"] or 0, "amountTotal": _num2(agg["s"] or Decimal("0"))}
+
+    # 变更：按状态计数
+    by_status: dict[str, int] = {}
+    for st in EChangeRequest.objects.filter(tenant_id=tenant_id, project_id=id, deleted=0).values_list(
+        "status", flat=True
+    ):
+        by_status[st] = by_status.get(st, 0) + 1
+    changes = {"total": sum(by_status.values()), "byStatus": by_status}
+
+    # 成果：04 R 只读引用
+    outputs = {"total": _board_outputs(tenant_id, id)}
+
+    return ok(
+        request,
+        {
+            "fund": fund,
+            "progress": progress,
+            "members": members,
+            "quality": quality,
+            "outsource": outsource,
+            "changes": changes,
+            "outputs": outputs,
+        },
+    )
 
 
 def update_task(request: HttpRequest, id: int, task_id: int):

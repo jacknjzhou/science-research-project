@@ -408,3 +408,92 @@ def test_m1d_change_severity_default(seed_auth):
         tenant_id=1, creator_id=1, project=p, change_type="BUDGET", severity="MAJOR"
     )
     assert ch2.severity == "MAJOR"
+
+
+# ---------------------------------------------------------------------------
+# M1-d B2：八要素看板聚合
+# ---------------------------------------------------------------------------
+def test_m1d_board_eight_sections_and_money_strings(seed_auth):
+    from apps.funding.models import FBudget
+    from apps.project.models import EHealthHistory, EMilestone
+    from apps.procure.models import GContract
+
+    p = _project(title="看板项目")
+    FBudget.objects.create(
+        tenant_id=1, creator_id=1, project_id=p.id, legal_entity_id=1,
+        status="EXECUTING", total_approved=100000,
+    )
+    EMilestone.objects.create(tenant_id=1, creator_id=1, project=p, name="M1", status="ACHIEVED")
+    EHealthHistory.objects.create(tenant_id=1, project=p, health_score=88, risk_level="MEDIUM")
+    GContract.objects.create(
+        tenant_id=1, creator_id=1, contract_type="技术服务", project_id=p.id, amount=50000,
+    )
+    EChangeRequest.objects.create(tenant_id=1, creator_id=1, project=p, change_type="TITLE")
+
+    c = _c()
+    r = c.get(f"/api/v1/project/{p.id}/board", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert set(d) == {"fund", "progress", "members", "quality", "outsource", "changes", "outputs"}
+
+    # 经费：复用 F 域 _execution_of，金额一律 num2 字符串（Money=string 契约）
+    fund = d["fund"]
+    assert fund["projectId"] == p.id
+    for k in ("budgetApproved", "incomeTotal", "used", "frozen", "remaining"):
+        assert isinstance(fund[k], str), f"fund.{k} 必须为字符串"
+    assert fund["budgetApproved"] == "100000.00"
+
+    # 进度：里程碑/任务计数
+    assert d["progress"]["milestonesTotal"] == 1
+    assert d["progress"]["milestonesDone"] == 1
+    assert d["progress"]["tasksTotal"] == 0
+    assert d["progress"]["tasksDone"] == 0
+
+    # 质量：项目当前分 + 历史最新一条
+    assert d["quality"]["healthScore"] == 100
+    assert d["quality"]["riskLevel"] == "LOW"
+    assert d["quality"]["lastCheckAt"] is not None
+
+    # 外包：合同计数 + 金额字符串
+    assert d["outsource"]["contracts"] == 1
+    assert d["outsource"]["amountTotal"] == "50000.00"
+    assert isinstance(d["outsource"]["amountTotal"], str)
+
+    # 变更 / 成果
+    assert d["changes"]["total"] == 1
+    assert d["changes"]["byStatus"] == {"DRAFT": 1}
+    assert d["outputs"]["total"] == 0
+
+
+def test_m1d_board_outputs_counts_str_ids(seed_auth):
+    """Review Focus 3：R_OUTPUT.project_ids 元素 int/str 混存都要计数。"""
+    from apps.output.models import ROutput
+
+    p = _project()
+    ROutput.objects.create(tenant_id=1, creator_id=1, output_type="PAPER", title="论文A",
+                           project_ids=[p.id])
+    ROutput.objects.create(tenant_id=1, creator_id=1, output_type="PATENT", title="专利B",
+                           project_ids=[str(p.id)])
+    ROutput.objects.create(tenant_id=1, creator_id=1, output_type="PAPER", title="论文C",
+                           project_ids=[999])
+    c = _c()
+    r = c.get(f"/api/v1/project/{p.id}/board", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 200
+    assert r.json()["data"]["outputs"]["total"] == 2
+
+
+def test_m1d_board_members_and_404(seed_auth):
+    from apps.sysadmin.models import SysUser
+
+    u = SysUser.objects.create(username="u2", real_name="张三", tenant_id=1, status="ACTIVE",
+                               creator_id=1)
+    p = _project(member_ids=[u.id, 999])
+    c = _c()
+    r = c.get(f"/api/v1/project/{p.id}/board", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 200
+    members = r.json()["data"]["members"]
+    assert members == [{"userId": u.id, "name": "张三"}, {"userId": 999, "name": None}]
+
+    r2 = c.get("/api/v1/project/999999/board", **bearer(1, ["R-MANAGER"]))
+    assert r2.status_code == 404
+    assert r2.json()["code"] == 40401

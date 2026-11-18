@@ -108,6 +108,7 @@ api.get("/project/mine", auth=ark_auth, tags=["project"])(project_api.list_my_pr
 api.get("/project/{id}", auth=ark_auth, tags=["project"])(project_api.get_project)
 api.get("/project/{id}/tasks", auth=ark_auth, tags=["project"])(project_api.list_tasks)
 api.get("/project/{id}/milestones", auth=ark_auth, tags=["project"])(project_api.list_milestones)
+api.get("/project/{id}/board", auth=ark_auth, tags=["project"])(project_api.project_board)
 api.put(
     "/project/{id}/tasks/{task_id}", auth=ark_auth, tags=["project"]
 )(project_api.update_task)
