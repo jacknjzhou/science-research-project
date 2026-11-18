@@ -939,4 +939,102 @@ class Command(BaseCommand):
              "creator_id": C1, "remark": "演示开户科目行（M1-c B1，零额度待分配）"},
             "funding")
 
+        # ---- R. M1-d 演示数据（统一评估 B3 / 变更版本 B4 / 指南发布 B5） ----
+        from apps.project.models import (
+            EChangeRequest, EChangeVersion, EEvalTemplate, EMidCheck, EReport,
+        )
+
+        tpl_mid = put(EEvalTemplate, {"tenant_id": T1, "code": "TPLM-DEMO-01"},
+            {"name": "中期检查评估表（演示）", "scene": "MID_CHECK", "status": "ACTIVE",
+             "sections": [
+                 {"key": "progress", "label": "研究进度", "weight": 0.4,
+                  "items": ["任务书指标达成情况", "里程碑完成率"]},
+                 {"key": "finance", "label": "经费执行", "weight": 0.3,
+                  "items": ["预算执行率", "外协合同履约"]},
+                 {"key": "output", "label": "阶段成果", "weight": 0.3,
+                  "items": ["论文/专利", "人才培养"]},
+             ],
+             "score_rubric": {"max": 100, "levels": [
+                 {"min": 85, "label": "优秀"}, {"min": 70, "label": "良好"},
+                 {"min": 60, "label": "合格"}, {"min": 0, "label": "不合格"}]},
+             "creator_id": C1, "remark": "演示评估模板（M1-d B3，中期检查）"}, "project")
+        put(EEvalTemplate, {"tenant_id": T1, "code": "TPLF-DEMO-01"},
+            {"name": "结题验收评估表（演示）", "scene": "FINAL_ACCEPT", "status": "ACTIVE",
+             "sections": [
+                 {"key": "target", "label": "考核指标完成", "weight": 0.5,
+                  "items": ["任务书全部指标", "技术就绪度"]},
+                 {"key": "finance", "label": "经费决算", "weight": 0.3,
+                  "items": ["决算与审计", "结转结余"]},
+                 {"key": "archive", "label": "归档完整性", "weight": 0.2,
+                  "items": ["档案清单齐备率"]},
+             ],
+             "score_rubric": {"max": 100, "levels": [
+                 {"min": 85, "label": "通过"}, {"min": 60, "label": "整改后通过"},
+                 {"min": 0, "label": "不通过"}]},
+             "creator_id": C1, "remark": "演示评估模板（M1-d B3，结题验收）"}, "project")
+
+        # B4：一般变更（提交即生效）+ 版本快照基线；重大变更留 SUBMITTED 供审批演示
+        chg_gen = put(EChangeRequest,
+            {"tenant_id": T1, "code": "CHG-DEMO-0001"},
+            {"project": prj1, "change_type": "TITLE", "severity": "GENERAL",
+             "old_value": {"title": "面向新能源的高熵催化剂研发"},
+             "new_value": {"title": "面向新能源的高熵催化剂研发（二期）"},
+             "reason": "研究范围扩大，题目同步调整（一般变更内部备案）",
+             "status": "EFFECTIVE", "approval_status": "APPROVED",
+             "approved_at": now, "creator_id": C1,
+             "remark": "演示一般变更（M1-d B4，提交即生效）"}, "project")
+        ver_gen = put(EChangeVersion,
+            {"tenant_id": T1, "change_id": chg_gen.id, "version_no": 1},
+            {"snapshot": {"title": "面向新能源的高熵催化剂研发",
+                          "endDate": str(prj1.end_date),
+                          "memberIds": prj1.member_ids,
+                          "totalBudget": str(prj1.total_budget)},
+             "creator_id": C1, "remark": "演示变更版本快照（M1-d B4 v1）"}, "project")
+        if chg_gen.snapshot_ref is None:
+            chg_gen.snapshot_ref = f"E_CHANGE_VERSION#{ver_gen.id}"
+            chg_gen.save(update_fields=["snapshot_ref"])
+        put(EChangeRequest,
+            {"tenant_id": T1, "code": "CHG-DEMO-0002"},
+            {"project": prj1, "change_type": "DELAY", "severity": "MAJOR",
+             "old_value": {"endDate": str(prj1.end_date)},
+             "new_value": {"endDate": str(prj1.end_date + timedelta(days=180))},
+             "reason": "关键设备到货延期，申请顺延 6 个月（重大变更，待审批）",
+             "status": "SUBMITTED", "approval_status": "PENDING",
+             "creator_id": C1,
+             "remark": "演示重大变更（M1-d B4，走逐级审批）"}, "project")
+
+        # B3：中检结论 + 批文（一评估一批文）
+        mid = put(EMidCheck,
+            {"tenant_id": T1, "project": prj1, "check_round": 1},
+            {"check_date": today - timedelta(days=20), "template_id": tpl_mid.id,
+             "status": "CONCLUDED", "conclusion": "PASS",
+             "score_detail": {"score": 88, "level": "优秀",
+                              "items": [{"key": "progress", "score": 90},
+                                        {"key": "finance", "score": 86},
+                                        {"key": "output", "score": 88}]},
+             "creator_id": C1, "remark": "演示中期检查（M1-d B3，已出结论）"}, "project")
+        rpt = put(EReport,
+            {"tenant_id": T1, "project": prj1, "doc_type": "MID_CHECK",
+             "mid_check_id": mid.id},
+            {"title": f"{prj1.title} 中期检查批文", "status": "ISSUED",
+             "conclusion": "PASS",
+             "content_rich": "经专家组评审，本项目中期检查结论为通过，请按专家意见推进后续研究。",
+             "score_detail": mid.score_detail, "issued_at": now,
+             "creator_id": C1, "remark": "演示评估批文（M1-d B3，RPT 单号）"}, "project")
+        if rpt.code is None:
+            rpt.code = code_of("RPT", rpt.id)
+            rpt.save(update_fields=["code"])
+        if mid.approval_doc_id is None:
+            mid.approval_doc_id = rpt.id
+            mid.save(update_fields=["approval_doc_id"])
+
+        # B5：待发布指南（演示 publish 动作 → 通知科研人员）
+        put(PGuideline, {"tenant_id": T1, "code": "GL-DEMO-2026-02"},
+            {"title": "2027 年度院自主部署项目指南征集（演示）", "project_type": "ZIGE",
+             "status": "DRAFT", "creator_id": C1,
+             "apply_start_at": now + timedelta(days=30),
+             "apply_end_at": now + timedelta(days=90),
+             "funding_source": "院自主部署", "total_envelope": 3000000,
+             "content_rich": "## 征集方向\n1. 新能源材料\n2. 智能装备",}, "p")
+
         return cnt
