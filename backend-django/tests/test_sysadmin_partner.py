@@ -136,3 +136,57 @@ def test_locked_user_cannot_login_until_approved():
     )
     assert r.status_code == 403
     assert json.loads(r.content)["code"] == 40302  # CODE_ACCOUNT_DISABLED
+
+
+# ===========================================================================
+# Task 5：机构审核（R-MANAGER）
+# ===========================================================================
+
+AUDIT_URL = "/api/v1/partner-orgs/{id}/audit"
+
+
+def _register_then_approve(action="APPROVE", reason=None, **kw):
+    oid = _data(_post(REGISTER_URL, _register_body(**kw)))["id"]
+    body = {"action": action} if reason is None else {"action": action, "reason": reason}
+    return oid, _post(AUDIT_URL.format(id=oid), body, roles=("R-MANAGER",))
+
+
+def test_approve_activates_user_grants_role_and_notifies(seed_auth):
+    oid, resp = _register_then_approve()
+    assert resp.status_code == 200, resp.content
+    data = _data(resp)
+    assert data["status"] == "APPROVED" and data["audit_user_id"]
+    u = SysUser.objects.get(username="p_example")
+    assert u.status == "ACTIVE"
+    from apps.sysadmin.models import SysUserRole
+
+    assert SysUserRole.objects.filter(user_id=u.id, role__code="R-PARTNER").count() == 1
+    from apps.notify.models import SysNotification
+
+    assert SysNotification.objects.filter(user_id=u.id, typ="ANNOUNCE").exists()
+
+
+def test_approve_twice_is_idempotent(seed_auth):
+    oid, _ = _register_then_approve()
+    resp = _post(AUDIT_URL.format(id=oid), {"action": "APPROVE"}, roles=("R-MANAGER",))
+    assert resp.status_code == 200
+    u = SysUser.objects.get(username="p_example")
+    from apps.sysadmin.models import SysUserRole
+
+    assert SysUserRole.objects.filter(user_id=u.id, role__code="R-PARTNER").count() == 1
+
+
+def test_reject_requires_reason_and_keeps_user_locked(seed_auth):
+    oid, bad = _register_then_approve(action="REJECT")
+    assert bad.status_code == 400 and json.loads(bad.content)["code"] == 40001
+    _, ok_resp = _register_then_approve(
+        action="REJECT", reason="资质不全", username="p_two",
+        credit_code="91310000MA1K3XY12B",
+    )
+    assert _data(ok_resp)["status"] == "REJECTED"
+    assert SysUser.objects.get(username="p_two").status == "LOCKED"
+
+
+def test_audit_unknown_org_is_404(seed_auth):
+    r = _post(AUDIT_URL.format(id=99999), {"action": "APPROVE"}, roles=("R-MANAGER",))
+    assert r.status_code == 404

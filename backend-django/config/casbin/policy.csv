@@ -871,3 +871,6 @@ p, R-PARTNER, /api/v1/notifications,                 GET
 p, R-PARTNER, /api/v1/notifications/*,               POST
 p, R-PARTNER, /api/v1/notifications/read-all,        POST
 p, R-PARTNER, /api/v1/dicts/*,                       GET
+# —— M2-a 机构审核台（R-MANAGER）：列表 + 审核动作 ——
+p, R-MANAGER, /api/v1/partner-orgs,                  GET
+p, R-MANAGER, /api/v1/partner-orgs/*/audit,          POST

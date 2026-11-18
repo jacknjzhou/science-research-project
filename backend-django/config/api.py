@@ -12,8 +12,12 @@ from core import dataio_api
 # —— 公开：登录（不进鉴权中间件，对齐 Go）——
 api.post("/auth/login", tags=["auth"])(login_view)
 
-# —— M2-a 外部机构自助注册（公开，无登录态）——
+# —— M2-a 外部机构：公开自助注册 + 管理端审核台（静态段先于动态段）——
 api.post("/portal/register", tags=["portal"])(sysadmin_api.register_partner)
+api.get("/partner-orgs", auth=ark_auth, tags=["portal"])(sysadmin_api.list_partner_orgs)
+api.post("/partner-orgs/{id}/audit", auth=ark_auth, tags=["portal"])(
+    sysadmin_api.audit_partner_org
+)
 
 # —— auth/me（所有已认证角色）——
 api.get("/auth/me", auth=ark_auth, tags=["auth"])(sysadmin_api.get_me)

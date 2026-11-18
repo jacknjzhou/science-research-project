@@ -702,3 +702,93 @@ def register_partner(request: HttpRequest) -> object:
         f"partner-org:{org.id}",
     )
     return ok(request, to_api_partner_org(org))
+
+
+def list_partner_orgs(request: HttpRequest) -> object:
+    """机构列表（R-MANAGER 审核台）：status/keyword 过滤，按 id 倒序。"""
+    d = domain_from(request)
+    page, size, _, offset = page_args(request)
+    qs = SysPartnerOrg.objects.filter(tenant_id=d.tenant_id, deleted=0)
+    status = (request.GET.get("status") or "").strip()
+    if status:
+        qs = qs.filter(status=status)
+    kw = (request.GET.get("keyword") or "").strip()
+    if kw:
+        qs = qs.filter(Q(name__icontains=kw) | Q(credit_code__icontains=kw))
+    total = qs.count()
+    rows = qs.order_by("-id")[offset : offset + size]
+    return ok(request, {
+        "list": [to_api_partner_org(o) for o in rows],
+        "total": total, "page": page, "size": size,
+    })
+
+
+def audit_partner_org(request: HttpRequest, id: int) -> object:
+    """机构资质审核：APPROVE → 机构 APPROVED + 账号 ACTIVE + 授 R-PARTNER + 双通道通知。
+
+    REJECT → 机构 REJECTED（必须给理由），账号保持 LOCKED。
+    """
+    from apps.notify.email import notify_inapp, send_mail_best_effort
+
+    d = domain_from(request)
+    body = read_json(request)
+    action = (body.get("action") or "").strip().upper()
+    if action not in ("APPROVE", "REJECT"):
+        raise ApiError(400, CODE_BAD_REQUEST, "action 须为 APPROVE 或 REJECT")
+
+    with transaction.atomic():
+        org = _partner_org_or_404(d.tenant_id, id)
+        if action == "APPROVE":
+            if org.status == "APPROVED":  # 幂等：不重复授角色/重复通知
+                return ok(request, to_api_partner_org(org))
+            reason = None
+        else:
+            reason = _str_field(body, "reason", "驳回理由", max_len=512)
+            if org.status == "REJECTED":
+                return ok(request, to_api_partner_org(org))
+
+        org.status = "APPROVED" if action == "APPROVE" else "REJECTED"
+        org.audit_user_id = d.user_id
+        org.audited_at = dj_tz.now()
+        org.reject_reason = reason
+        org.modifier_id = d.user_id
+        org.save(
+            update_fields=[
+                "status", "audit_user_id", "audited_at", "reject_reason",
+                "modifier_id", "updated_at",
+            ]
+        )
+
+        user = SysUser.objects.filter(
+            tenant_id=d.tenant_id, org_id=org.id, deleted=0
+        ).first()
+        if action == "APPROVE" and user is not None:
+            user.status = "ACTIVE"
+            user.modifier_id = d.user_id
+            user.save(update_fields=["status", "modifier_id", "updated_at"])
+            role = SysRole.objects.filter(code="R-PARTNER", tenant_id=d.tenant_id).first()
+            if role is not None:
+                SysUserRole.objects.get_or_create(
+                    user_id=user.id, role_id=role.id,
+                    defaults={"tenant_id": d.tenant_id},
+                )
+
+    # 通知（事务外，best-effort，绝不阻断审核）
+    if user is not None:
+        try:
+            if action == "APPROVE":
+                title = "机构资质审核通过"
+                content = f"{org.name} 的注册申请已通过，可登录机构门户。"
+                notify_inapp(d.tenant_id, user.id, "ANNOUNCE", title, content,
+                             f"partner-org:{org.id}", channel="BOTH")
+                send_mail_best_effort(
+                    org.contact_email, title, content,
+                    tenant_id=d.tenant_id, biz_ref=f"partner-org:{org.id}",
+                )
+            else:
+                notify_inapp(d.tenant_id, user.id, "ANNOUNCE", "机构资质审核未通过",
+                             f"{org.name} 的注册申请未通过：{reason}",
+                             f"partner-org:{org.id}")
+        except Exception:  # pragma: no cover - 通知永不阻断
+            pass
+    return ok(request, to_api_partner_org(org))

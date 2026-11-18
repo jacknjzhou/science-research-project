@@ -486,6 +486,9 @@ def test_m2a_partner_policy_rows_exist():
         ("R-PARTNER", "/api/v1/notifications/read-all", "POST"),
         ("R-PARTNER", "/api/v1/dicts/*", "GET"),
         ("R-PARTNER", "/api/v1/auth/me", "GET"),
+        # 审核台（R-MANAGER，Task 5）
+        ("R-MANAGER", "/api/v1/partner-orgs", "GET"),
+        ("R-MANAGER", "/api/v1/partner-orgs/*/audit", "POST"),
     }
     assert expected <= rows
 
