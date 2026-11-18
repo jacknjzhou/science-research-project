@@ -277,8 +277,10 @@ def test_review_full_lifecycle_and_writeback(seed_auth):
     # 逐个应允 → 达法定人数 → QUORUM
     invites = list(NReviewInvitation.objects.filter(task_id=tid))
     for iv in invites:
+        # M2-c：响应身份取令牌（专家档案 user_id），不再由 body.expert_id 决定我是谁
+        uid = NExpert.objects.get(id=iv.expert_id).user_id
         r = c.post(f"/api/v1/reviews/{tid}/accept", data=json.dumps({"expert_id": iv.expert_id}),
-                   content_type="application/json", **bearer(1, ["R-EXPERT"]))
+                   content_type="application/json", **bearer(uid, ["R-EXPERT"]))
     task_row.refresh_from_db()
     assert task_row.status == "QUORUM"
     # 开始评审 → IN_REVIEW
@@ -287,10 +289,11 @@ def test_review_full_lifecycle_and_writeback(seed_auth):
     assert task_row.status == "IN_REVIEW"
     # 两人打分 → 全提交 → COLLECTING
     for iv in invites:
+        uid = NExpert.objects.get(id=iv.expert_id).user_id
         r = c.post(f"/api/v1/reviews/{tid}/scores", data=json.dumps({
             "expert_id": iv.expert_id, "total_score": "88.50",
             "dimension_scores": [{"dim": "创新性", "score": 90}]}),
-            content_type="application/json", **bearer(1, ["R-EXPERT"]))
+            content_type="application/json", **bearer(uid, ["R-EXPERT"]))
         assert _json(r)["code"] == 0
     task_row.refresh_from_db()
     assert task_row.status == "COLLECTING"
@@ -334,11 +337,12 @@ def test_review_final_accept_writeback_map(seed_auth):
            content_type="application/json", **bearer(1, ["R-MANAGER"]))
     c.post(f"/api/v1/reviews/{tid}/invite", **bearer(1, ["R-MANAGER"]))
     iv = NReviewInvitation.objects.get(task_id=tid)
+    uid = NExpert.objects.get(id=iv.expert_id).user_id
     c.post(f"/api/v1/reviews/{tid}/accept", data=json.dumps({"expert_id": iv.expert_id}),
-           content_type="application/json", **bearer(1, ["R-EXPERT"]))
+           content_type="application/json", **bearer(uid, ["R-EXPERT"]))
     c.post(f"/api/v1/reviews/{tid}/scores", data=json.dumps(
         {"expert_id": iv.expert_id, "total_score": "92.00"}),
-        content_type="application/json", **bearer(1, ["R-EXPERT"]))
+        content_type="application/json", **bearer(uid, ["R-EXPERT"]))
     r = c.post(f"/api/v1/reviews/{tid}/conclude", data=json.dumps({"conclusion": "PASS"}),
                content_type="application/json", **bearer(1, ["R-MANAGER"]))
     assert _json(r)["code"] == 0

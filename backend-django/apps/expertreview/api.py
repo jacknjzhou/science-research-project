@@ -33,6 +33,7 @@ from core.httpx import (
     ApiError,
     CODE_BAD_REQUEST,
     CODE_CONFLICT,
+    CODE_FORBIDDEN,
     CODE_NOT_FOUND,
     ok,
     read_json,
@@ -51,18 +52,34 @@ def page_args(request: HttpRequest) -> tuple[int, int, int, int]:
     return page, size, size, (page - 1) * size
 
 
-def _get_expert_or_404(expert_id: int) -> NExpert:
-    e = NExpert.objects.filter(id=expert_id, deleted=0).first()
+def _get_expert_or_404(tenant_id: int, expert_id: int) -> NExpert:
+    """按租户取专家（M2-c：原先只按 id，跨租户可读）。"""
+    e = NExpert.objects.filter(id=expert_id, tenant_id=tenant_id, deleted=0).first()
     if e is None:
         raise ApiError(404, CODE_NOT_FOUND, "专家不存在")
     return e
 
 
-def _get_task_or_404(task_id: int) -> NReviewTask:
-    t = NReviewTask.objects.filter(id=task_id, deleted=0).first()
+def _get_task_or_404(tenant_id: int, task_id: int) -> NReviewTask:
+    """按租户取评审任务（M2-c：原先只按 id，跨租户可读）。"""
+    t = NReviewTask.objects.filter(id=task_id, tenant_id=tenant_id, deleted=0).first()
     if t is None:
         raise ApiError(404, CODE_NOT_FOUND, "评审任务不存在")
     return t
+
+
+def _my_expert_or_403(d) -> NExpert:
+    """当前登录人对应的专家档案；无档案/未生效 → 40301（不泄露他人档案）。"""
+    if not getattr(d, "user_id", 0):
+        raise ApiError(403, CODE_FORBIDDEN, "当前账号没有专家档案")
+    e = NExpert.objects.filter(
+        tenant_id=d.tenant_id, user_id=d.user_id, deleted=0
+    ).first()
+    if e is None:
+        raise ApiError(403, CODE_FORBIDDEN, "当前账号没有专家档案")
+    if e.status not in ("ACTIVE", "CANDIDATE"):
+        raise ApiError(403, CODE_FORBIDDEN, "专家档案状态不允许该操作")
+    return e
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +102,7 @@ def list_experts(request: HttpRequest):
 
 
 def get_expert(request: HttpRequest, id: int):
-    return ok(request, to_api_expert(_get_expert_or_404(id)))
+    return ok(request, to_api_expert(_get_expert_or_404(domain_from(request).tenant_id, id)))
 
 
 def create_expert(request: HttpRequest):
@@ -109,7 +126,7 @@ def create_expert(request: HttpRequest):
 
 def update_expert(request: HttpRequest, id: int):
     d = domain_from(request)
-    e = _get_expert_or_404(id)
+    e = _get_expert_or_404(domain_from(request).tenant_id, id)
     b = read_json(request)
     name = b.get("name") or e.name
     e.name = name
@@ -129,7 +146,7 @@ def update_expert(request: HttpRequest, id: int):
 
 
 def set_expert_status(request: HttpRequest, id: int):
-    e = _get_expert_or_404(id)
+    e = _get_expert_or_404(domain_from(request).tenant_id, id)
     b = read_json(request)
     status = b.get("status")
     if status not in EXPERT_STATUSES:
@@ -140,7 +157,7 @@ def set_expert_status(request: HttpRequest, id: int):
 
 
 def delete_expert(request: HttpRequest, id: int):
-    e = _get_expert_or_404(id)
+    e = _get_expert_or_404(domain_from(request).tenant_id, id)
     e.deleted = 1
     e.save(update_fields=["deleted", "updated_at"])
     return ok(request, None)
@@ -216,7 +233,7 @@ def list_reviews(request: HttpRequest):
 
 
 def get_review(request: HttpRequest, id: int):
-    return ok(request, to_api_review_task(_get_task_or_404(id)))
+    return ok(request, to_api_review_task(_get_task_or_404(domain_from(request).tenant_id, id)))
 
 
 def create_review(request: HttpRequest):
@@ -239,7 +256,7 @@ def create_review(request: HttpRequest):
 
 
 def cancel_review(request: HttpRequest, id: int):
-    t = _get_task_or_404(id)
+    t = _get_task_or_404(domain_from(request).tenant_id, id)
     t.status = "CANCELLED"
     t.save(update_fields=["status", "updated_at"])
     return ok(request, None)
@@ -247,7 +264,7 @@ def cancel_review(request: HttpRequest, id: int):
 
 def draw_experts(request: HttpRequest, id: int):
     """回避过滤 + 确定性随机 → DRAFT→DRAWN；逐席位落 n_review_invitation。"""
-    t = _get_task_or_404(id)
+    t = _get_task_or_404(domain_from(request).tenant_id, id)
     b = read_json_soft(request)
     rule = t.draw_rule or {}
     experts = list(NExpert.objects.filter(status="ACTIVE", deleted=0))
@@ -272,7 +289,7 @@ def draw_experts(request: HttpRequest, id: int):
 
 def invite_experts(request: HttpRequest, id: int):
     """DRAWN→INVITING；MID_CHECK 经 E 单一写者回填 expert_ids。"""
-    t = _get_task_or_404(id)
+    t = _get_task_or_404(domain_from(request).tenant_id, id)
     t.status = "INVITING"
     t.save(update_fields=["status", "updated_at"])
     if t.biz_type == "MID_CHECK" and t.target_id:
@@ -289,12 +306,15 @@ def invite_experts(request: HttpRequest, id: int):
 
 
 def _respond(request: HttpRequest, id: int, resp: str):
-    t = _get_task_or_404(id)
+    """接受/拒绝邀请：身份取令牌（M2-c），body.expert_id 只做一致性校验。"""
+    t = _get_task_or_404(domain_from(request).tenant_id, id)
+    d = domain_from(request)
     b = read_json(request)
-    expert_id = b.get("expert_id")
-    if not expert_id:
-        raise ApiError(400, CODE_BAD_REQUEST, "缺少 expert_id")
-    iv = NReviewInvitation.objects.filter(task_id=id, expert_id=expert_id).first()
+    expert = _my_expert_or_403(d)
+    body_expert = b.get("expert_id")
+    if body_expert not in (None, "", expert.id) and str(body_expert) != str(expert.id):
+        raise ApiError(400, CODE_BAD_REQUEST, "不得代他人响应邀请")
+    iv = NReviewInvitation.objects.filter(task_id=id, expert_id=expert.id).first()
     if iv is None:
         raise ApiError(404, 40402, "邀请不存在")
     iv.response = resp
@@ -318,7 +338,7 @@ def decline_invitation(request: HttpRequest, id: int):
 
 def start_review(request: HttpRequest, id: int):
     """QUORUM→IN_REVIEW。"""
-    t = _get_task_or_404(id)
+    t = _get_task_or_404(domain_from(request).tenant_id, id)
     if t.status != "QUORUM":
         raise ApiError(409, CODE_CONFLICT, "状态更新失败")
     t.status = "IN_REVIEW"
@@ -329,13 +349,18 @@ def start_review(request: HttpRequest, id: int):
 
 def submit_score(request: HttpRequest, id: int):
     """专家提交打分（Upsert）；已提交数达已接受数→COLLECTING。"""
-    t = _get_task_or_404(id)
+    t = _get_task_or_404(domain_from(request).tenant_id, id)
+    d = domain_from(request)
     b = read_json(request)
-    if not b.get("expert_id") or b.get("total_score") in (None, ""):
+    if b.get("total_score") in (None, ""):
         raise ApiError(400, CODE_BAD_REQUEST, "请求参数错误")
-    sc = NReviewScore.objects.filter(task_id=id, expert_id=b["expert_id"]).first()
+    expert = _my_expert_or_403(d)
+    body_expert = b.get("expert_id")
+    if body_expert not in (None, "", expert.id) and str(body_expert) != str(expert.id):
+        raise ApiError(400, CODE_BAD_REQUEST, "不得代他人打分")
+    sc = NReviewScore.objects.filter(task_id=id, expert_id=expert.id).first()
     if sc is None:
-        sc = NReviewScore(tenant_id=t.tenant_id, task_id=id, expert_id=b["expert_id"])
+        sc = NReviewScore(tenant_id=t.tenant_id, task_id=id, expert_id=expert.id)
     sc.target_type = b.get("target_type")
     sc.target_id = b.get("target_id")
     sc.dimension_scores = b.get("dimension_scores") or []
@@ -374,7 +399,7 @@ def _build_score_summary(task_id: int) -> dict:
 
 def conclude_review(request: HttpRequest, id: int):
     """汇总→CONCLUDED，按 biz_type 经单一写者回写 E/R。"""
-    t = _get_task_or_404(id)
+    t = _get_task_or_404(domain_from(request).tenant_id, id)
     b = read_json(request)
     conclusion = b.get("conclusion")
     if not conclusion:
@@ -414,7 +439,7 @@ def _conclude_writeback(biz_type: str, target_id: int, project_id: int,
 def generate_fees(request: HttpRequest, id: int):
     """按已接受专家逐人生成评审费（联动 F 预留）。"""
     d = domain_from(request)
-    t = _get_task_or_404(id)
+    t = _get_task_or_404(domain_from(request).tenant_id, id)
     b = read_json_soft(request)
     amount = Decimal(str((b or {}).get("amount") or 0))
     accepted = list(NReviewInvitation.objects.filter(task_id=id, response="ACCEPT"))
@@ -429,7 +454,7 @@ def generate_fees(request: HttpRequest, id: int):
 
 
 def get_review_detail(request: HttpRequest, id: int):
-    t = _get_task_or_404(id)
+    t = _get_task_or_404(domain_from(request).tenant_id, id)
     invites = list(NReviewInvitation.objects.filter(task_id=id).order_by("seat_no"))
     scores = list(NReviewScore.objects.filter(task_id=id).order_by("id"))
     inv = []
