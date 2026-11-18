@@ -1031,7 +1031,9 @@ def change_application_pi(request: HttpRequest, id: int):
     """POST /apply/applications/{id}:change-pi —— 改派申报负责人（终审 r3 N-1）。
 
     原先 PI 一旦停用/离职，PI 签署恒 403 且无任何改派入口，申报会永久死锁。
-    仅 R-MANAGER/R-LEADER 可改派；任务书签订后（SIGNED/EXECUTING）不再允许改派。
+    仅 R-MANAGER/R-LEADER 可改派；任务书**已开始签署**（sign_records 非空或已离开
+    DRAFT）或申报已立项（SIGNED/EXECUTING）后不再允许改派——注意 `_assert_application_mutable`
+    （任务书维度）与下方 tb 守卫是互补的：后者只看最新任务书行，前者兜住数据漂移。
     """
     d = domain_from(request)
     body = read_json(request)

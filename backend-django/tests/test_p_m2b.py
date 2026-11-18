@@ -898,3 +898,15 @@ def test_r4_progress_report_rejects_blank_and_fractional(seed_auth):
         r = _post(f"/api/v1/project/{proj.id}/progress-report", payload,
                   roles=("R-STAFF",), uid=pi.id)
         assert r.status_code == 400, (payload, r.content)
+
+
+def test_r5_progress_percent_rejects_bool(seed_auth):
+    """终审 r5 N-r5-1：bool 是 int 子类，true 不得静默落成 1。"""
+    pi = _internal_user(seed_auth, "pi_bool_report")
+    _a, org_a, _ua = _app_with_pi(seed_auth, pi)
+    proj = _ext_project(org_a, pi.id)
+    for bad in (True, False):
+        r = _post(f"/api/v1/project/{proj.id}/progress-report",
+                  {"period": "2026Q1", "reportType": "SELF", "progressPercent": bad},
+                  roles=("R-STAFF",), uid=pi.id)
+        assert r.status_code == 400, (bad, r.content)

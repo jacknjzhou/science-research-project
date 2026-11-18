@@ -307,6 +307,8 @@ def create_progress_report(request: HttpRequest, id: int):
             f"reportType 须为 {'/'.join(_REPORT_TYPES)}",
         )
     raw_pct = _pick("progressPercent", "progress_percent", 0)
+    if isinstance(raw_pct, bool):  # bool 是 int 子类，true 会被静默落成 1（终审 r5 N-r5-1）
+        raise ApiError(400, CODE_BAD_REQUEST, "progressPercent 必须为整数")
     if isinstance(raw_pct, float) and not raw_pct.is_integer():
         # 55.7 原先被 int() 截断成 55 静默落库（终审 r4 M-4）
         raise ApiError(400, CODE_BAD_REQUEST, "progressPercent 必须为整数")

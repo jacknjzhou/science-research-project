@@ -640,7 +640,8 @@ paths:
       description: >-
         仅 R-MANAGER / R-LEADER 可调用。用于 PI 离职/停用导致签署环节死锁的修复：
         新 PI 必须是本租户 ACTIVE 的内部账号；申报已立项（SIGNED/EXECUTING）或任务书
-        已签订时 409。改派成功后向新旧 PI 各发一条站内信。
+        **已开始签署**（存在签署记录或已离开 DRAFT）时 409。改派会同步刷新 DRAFT 任务书
+        快照中的负责人。改派成功后向新旧 PI 各发一条站内信。
       operationId: changeApplicationPi
       parameters:
         - $ref: '#/components/parameters/PathId'
