@@ -2,7 +2,7 @@
 
 面向科研院所的一体化科研管理平台：项目申报立项 → 过程管理 → 经费 → 成果 → 转化 → 诚信伦理 → 人员团队 → 决策大屏 → 采购合同 → 资产耗材 → 涉密多法人治理，共 11 个业务模块，契约驱动、前后端分离、多法人多租户。
 
-> **当前状态**：后端 Django 重写 **Phase 0–4 全部完成**（11 模块全量落地 + svc-ai AI 微服务），全量 511 pytest 通过，PG 端到端冒烟 30 项全过，`develop` 已推送。
+> **当前状态**：后端 Django 重写 **Phase 0–4 全部完成**（11 模块全量落地 + svc-ai AI 微服务），全量 515 pytest 通过，PG 端到端冒烟 30 项全过，`develop` 已推送。
 
 ## 技术栈（方案 C）
 
@@ -26,7 +26,7 @@
 │   ├── svc_ai/              # FastAPI AI 微服务（/ai/*）
 │   ├── config/              # settings(dev/test/base) + 集中路由 + casbin policy
 │   ├── scripts/             # PG 冒烟脚本 smoke_p3.py / smoke_p4.py
-│   └── tests/               # pytest 套件（511 个）
+│   └── tests/               # pytest 套件（515 个）
 ├── frontend/                # Vue3 SPA（契约 mock，13 屏）
 ├── prototype/               # 静态高保真原型
 ├── docs/superpowers/        # 重写 plan 与 spec（backend-django-rewrite-*）
@@ -53,6 +53,15 @@ docker compose up -d --build
 >
 > 已存在库重播种时，`ARK_SEED_PASSWORD` 会**轮换**全部演示账号口令
 > （`admin`/`manager`/`staff`/`finance`/`partner`/`expert_ext`），旧默认口令随即失效。
+>
+> **升级旧数据卷（E-8 之前建的库）**：那类库里 `admin/Admin@123456` 等公开口令仍然有效。
+> 生产启动会**直接拒绝**（`检测到仍在使用仓库默认口令的账号：…`），因为「默认口令的 R-ADMIN」
+> 等同没有口令。修复只需一条命令，之后容器正常起来：
+>
+> ```bash
+> docker compose exec backend python manage.py rotate_demo_credentials \
+>     --password '你的新强口令'        # 只轮换确实还在用默认口令的账号
+> ```
 
 启动后（全部容器 healthcheck 通过约 1 分钟）：
 
@@ -83,7 +92,7 @@ python manage.py migrate                                    # 默认连 localhos
 python manage.py seed_demo                                  # 幂等播种
 
 # 全量测试（sqlite 内存库，不依赖 PG）
-python -m pytest tests -q                                   # 当前 511 passed
+python -m pytest tests -q                                   # 当前 515 passed
 
 > **冒烟后门（仅本地/演示）**：`ark/ark` 登录默认**关闭**；需同时满足 `DEBUG=True` 与
 > 环境变量 `ARK_DEV_LOGIN=1` 才会签发一个最小权限（`R-STAFF`）令牌，数据域由
@@ -181,7 +190,7 @@ uvicorn svc_ai.main:app --port 8900
 ## 部署
 
 - **开发/演示**：`docker compose up -d --build`（见上文）。
-- **生产**：**先设置强 JWT 密钥**（`config.settings.prod` 在 `ARK_JWT_SECRET` 缺失/为仓库默认值/短于 32 字符时直接拒绝启动）；**不要**设 `ARK_SEED_DEMO`（否则会灌入演示账号）。非容器化——systemd 多实例（`django-api.service` gunicorn / `django-worker` / `django-beat` / `svc-ai.service` uvicorn / `django-migrate` oneshot）+ Nginx 反向代理多活（`/api/ → django`、`/ai/ → svc-ai` 内网）。详见 `docs/superpowers/specs/2026-10-17-backend-django-rewrite-spec.md` §九。
+- **生产**：**先设置强 JWT 密钥**（`config.settings.prod` 在 `ARK_JWT_SECRET` 缺失/为仓库默认值/短于 32 字符时直接拒绝启动；校验的是**真正用于签名的** `settings.JWT_SECRET`，自定义 settings 覆盖也拦）；启动时还会扫描库中是否残留仓库默认口令账号，命中即拒绝并提示 `manage.py rotate_demo_credentials`；**不要**设 `ARK_SEED_DEMO`（否则会灌入演示账号）。非容器化——systemd 多实例（`django-api.service` gunicorn / `django-worker` / `django-beat` / `svc-ai.service` uvicorn / `django-migrate` oneshot）+ Nginx 反向代理多活（`/api/ → django`、`/ai/ → svc-ai` 内网）。详见 `docs/superpowers/specs/2026-10-17-backend-django-rewrite-spec.md` §九。
 
 ## 文档索引
 

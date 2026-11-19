@@ -19,11 +19,24 @@ def test_runtime_secret_check_requires_strong_value(monkeypatch, settings):
         validate_runtime_secrets()
 
     monkeypatch.setenv("ARK_JWT_SECRET", "short")
+    settings.JWT_SECRET = "short"
     with pytest.raises(ImproperlyConfigured):
         validate_runtime_secrets()
 
     monkeypatch.setenv("ARK_JWT_SECRET", "Z" * 32)
+    settings.JWT_SECRET = "Z" * 32
     validate_runtime_secrets()  # 通过，不抛
+
+
+def test_secret_check_reads_effective_setting_not_env(monkeypatch, settings):
+    """r2-② 回归：自定义 settings 覆盖 settings.JWT_SECRET（env 看起来合规）也必须被拦。"""
+    from core.startup import validate_runtime_secrets
+
+    settings.DEBUG = False
+    monkeypatch.setenv("ARK_JWT_SECRET", "Z" * 40)  # env 合规
+    settings.JWT_SECRET = "short"                   # 但真正签名用的是它
+    with pytest.raises(ImproperlyConfigured):
+        validate_runtime_secrets()
 
 
 def test_secret_check_ignores_settings_module_name(monkeypatch, settings):
@@ -175,3 +188,63 @@ def test_empty_env_password_is_treated_as_absent(monkeypatch, settings):
     monkeypatch.setenv("ARK_SEED_PASSWORD", "")
     with pytest.raises(CommandError, match="ARK_SEED_PASSWORD"):
         _seed(verbosity=0)
+
+
+# —— r2-①：旧数据卷残留公开默认口令 → 生产拒绝启动，轮换命令可恢复 ——
+
+def _make_admin_with(password: str):
+    import bcrypt
+
+    from apps.sysadmin.models import SysUser
+
+    user, _ = SysUser.objects.get_or_create(
+        tenant_id=1, username="admin",
+        defaults={"real_name": "管理员", "status": "ACTIVE", "creator_id": 1,
+                  "password_hash": bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()},
+    )
+    return user
+
+
+@pytest.mark.django_db
+def test_default_credentials_block_production_start(settings):
+    from core.startup import assert_no_default_credentials
+
+    _make_admin_with("Admin@123456")
+    settings.DEBUG = False
+    with pytest.raises(ImproperlyConfigured) as e:
+        assert_no_default_credentials()
+    assert "admin" in str(e.value)
+
+    settings.DEBUG = True  # dev 形态不拦（本地演示需要默认口令）
+    assert_no_default_credentials()
+
+
+@pytest.mark.django_db
+def test_rotate_command_clears_defaults_and_unblocks_start(settings):
+    import bcrypt
+    from django.core.management import call_command
+
+    from core.startup import assert_no_default_credentials
+
+    user = _make_admin_with("Admin@123456")
+    settings.DEBUG = False
+
+    call_command("rotate_demo_credentials", "--password", "Fresh-Str0ng-Pass!")
+    user.refresh_from_db()
+    assert bcrypt.checkpw(b"Fresh-Str0ng-Pass!", user.password_hash.encode())
+    assert not bcrypt.checkpw(b"Admin@123456", user.password_hash.encode())
+
+    assert_no_default_credentials()  # 不再拦
+
+
+@pytest.mark.django_db
+def test_rotate_command_skips_real_password(settings):
+    """只动「确实等于默认口令」的账号，真实用户不受影响。"""
+    import bcrypt
+    from django.core.management import call_command
+
+    user = _make_admin_with("Real-User-Pass!2026")
+    before = user.password_hash
+    call_command("rotate_demo_credentials", "--password", "Fresh-Str0ng-Pass!")
+    user.refresh_from_db()
+    assert user.password_hash == before

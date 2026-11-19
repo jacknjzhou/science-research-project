@@ -505,7 +505,12 @@ def test_prod_settings_have_debug_off(monkeypatch):
     """
     import importlib
 
-    monkeypatch.setenv("ARK_JWT_SECRET", "Z" * 40)
+    # prod 在 import 期校验它自己定义的 JWT_SECRET（`from .base import *` 拷贝的是
+    # base 模块对象上的值，改 env 已来不及），所以直接给 base 模块打补丁。
+    import config.settings.base as base
+
+    monkeypatch.setattr(base, "JWT_SECRET", "Z" * 40)
+    monkeypatch.setattr(base, "SECRET_KEY", "Z" * 40)
     prod = importlib.import_module("config.settings.prod")
     assert prod.DEBUG is False
 

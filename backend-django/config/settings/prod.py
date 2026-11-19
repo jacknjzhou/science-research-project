@@ -18,6 +18,10 @@ ALLOWED_HOSTS = ["*"]
 
 # 自检实现见 core/startup.py：判据是运行期 DEBUG，不依赖 settings 模块名，
 # 因此自定义 `from .prod import *` 的模块同样受保护（wsgi/asgi/manage.py 兜底）。
-from core.startup import validate_runtime_secrets  # noqa: E402
+from core.startup import validate_secret_value  # noqa: E402
 
-validate_runtime_secrets()
+# 校验本模块**实际定义**的 JWT_SECRET。这里不调 validate_runtime_secrets()：
+# import 期 `django.conf.settings` 可能仍指向别的模块（测试进程里是
+# config.settings.test），那条路径看不到本值；wsgi/asgi/manage.py 会兜底再查一次。
+# 缺 env 时 JWT_SECRET 落在仓库缺省值上，同样被下面这条拒绝。
+validate_secret_value(str(JWT_SECRET or ""), origin="config.settings.prod.JWT_SECRET")
