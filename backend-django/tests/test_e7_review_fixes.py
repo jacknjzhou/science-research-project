@@ -525,3 +525,54 @@ def test_asset_issue_is_tenant_scoped(seed_auth):
     assert r.status_code == 404, r.content.decode()
     a.refresh_from_db()
     assert a.status == "IDLE", "他租户资产不得被领用"
+
+
+def test_visitor_approve_is_tenant_scoped(seed_auth):
+    """E-7 r5 C-1：访客审批曾裸查 id，tenant-1 可批准他租户客座申请并写入 role_codes。"""
+    from apps.staff.models import SStaff, SVisitor
+
+    owner = SStaff.objects.create(
+        tenant_id=2, creator_id=1, name="他租户员工", user_id=2,
+        hr_code="HR-V2-001", employment_status="ACTIVE", status="ACTIVE",
+        department_id=1,
+    )
+    v = SVisitor.objects.create(
+        tenant_id=2, creator_id=1, staff_id=owner.id, visit_type="ACADEMIC",
+        status="APPLIED", permissions_scope={}, start_date=date(2026, 1, 5),
+        end_date=date(2026, 1, 9),
+    )
+    r = Client().post(f"/api/v1/visitors/{v.id}/approve", data=json.dumps({
+        "decision": "APPROVE", "role_codes": ["R-ADMIN"], "comment": "越权",
+    }), content_type="application/json", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 404, r.content[:300]
+    v.refresh_from_db()
+    assert v.status == "APPLIED"
+    assert "role_codes" not in (v.permissions_scope or {})
+
+
+def test_expertreview_writeback_rejects_foreign_target(seed_auth):
+    """E-7 r5 C-2：N 域评审回写链可把结论写到别租户的成果（conclude_output_eval 裸 id）。
+
+    create 入口先挡；另用 ORM 造一条已绕过入口的任务，验证 conclude 处的兜底守卫。
+    """
+    from apps.expertreview.models import NReviewTask
+    from apps.output.models import ROutput
+
+    o = ROutput.objects.create(tenant_id=2, creator_id=1, status="CLAIMED",
+                               title="他租户成果", is_claimed=False)
+    body = {"biz_type": "OUTPUT_EVAL", "target_type": "OUTPUT", "target_id": o.id,
+            "title": "越权评审"}
+    r = Client().post("/api/v1/reviews", data=json.dumps(body),
+                      content_type="application/json", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 404, r.content[:300]
+    assert not NReviewTask.objects.filter(tenant_id=1, target_id=o.id).exists()
+
+    t = NReviewTask.objects.create(
+        code="", tenant_id=1, creator_id=1, biz_type="OUTPUT_EVAL",
+        target_type="OUTPUT", target_id=o.id, title="历史脏任务", status="COLLECTING",
+    )
+    r = Client().post(f"/api/v1/reviews/{t.id}/conclude", data=json.dumps({"conclusion": "PASS"}),
+                      content_type="application/json", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 404, r.content[:300]
+    o.refresh_from_db()
+    assert o.status == "CLAIMED" and o.is_claimed is False

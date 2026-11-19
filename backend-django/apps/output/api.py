@@ -292,13 +292,16 @@ def link_projects(request: HttpRequest, id: int):
 # 单一写者（N 域结论回写唯一入口；签名权威勿漂移）
 # ---------------------------------------------------------------------------
 
-def conclude_output_eval(output_id: int, passed: bool) -> None:
+def conclude_output_eval(output_id: int, passed: bool, tenant_id: int | None = None) -> None:
     """ConcludeOutputEval：pass→ASSIGNED_TO_PROJECT+is_claimed=true；fail→REJECTED。
 
-    跨域回写入口（N 域评审结论回写成果状态）：**tenant 由调用方保证**——
-    调用方必须已按租户取出该成果，本函数不再重复校验。
+    跨域回写入口（N 域评审结论回写成果状态）：N 域应传 `tenant_id` 强制归属校验
+    （E-7 r5 C-2）；缺省仅按 id 取，供内部/测试调用。
     """
-    o = ROutput.objects.filter(id=output_id, deleted=0).first()
+    qs = ROutput.objects.filter(id=output_id, deleted=0)
+    if tenant_id is not None:
+        qs = qs.filter(tenant_id=tenant_id)
+    o = qs.first()
     if o is None:
         return
     if passed:

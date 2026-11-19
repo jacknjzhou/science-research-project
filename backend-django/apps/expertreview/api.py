@@ -235,6 +235,26 @@ def list_reviews(request: HttpRequest):
                         "total": total, "page": page, "size": size})
 
 
+def _assert_target_owned(tenant_id: int, biz_type: str | None, target_id: int | None) -> None:
+    """回写目标归属校验（E-7 r5 C-2）：目标存在且属他租户 → 404；不存在则放行。
+
+    只在 HTTP 入口（create/invite/conclude）调用，保证 N 域不会把结论写到别家 E/R 表；
+    对象不存在时放行以兼容历史数据（真正被写坏的场景必然是「指向别人的行」）。
+    """
+    if not target_id:
+        return
+    from apps.output.models import ROutput
+    from apps.project.models import EFinalAccept, EMidCheck
+
+    model = {"MID_CHECK": EMidCheck, "FINAL_ACCEPT": EFinalAccept,
+             "OUTPUT_EVAL": ROutput}.get(biz_type or "")
+    if model is None:
+        return
+    foreign = model.objects.filter(id=target_id).exclude(tenant_id=tenant_id).exists()
+    if foreign:
+        raise ApiError(404, CODE_NOT_FOUND, "评审目标不存在")
+
+
 def get_review(request: HttpRequest, id: int):
     return ok(request, to_api_review_task(_get_task_or_404(domain_from(request).tenant_id, id)))
 
@@ -247,6 +267,7 @@ def create_review(request: HttpRequest):
     plan_count = b.get("plan_count") or 0
     if plan_count <= 0:
         plan_count = 3
+    _assert_target_owned(d.tenant_id, b.get("biz_type"), b.get("target_id"))
     t = NReviewTask.objects.create(
         code="", tenant_id=d.tenant_id, creator_id=d.user_id,
         security_level=b.get("security_level") or "INTERNAL",
@@ -300,6 +321,7 @@ def invite_experts(request: HttpRequest, id: int):
     t.save(update_fields=["status", "updated_at"])
     invites = list(NReviewInvitation.objects.filter(task_id=t.id))
     if t.biz_type == "MID_CHECK" and t.target_id:
+        _assert_target_owned(t.tenant_id, t.biz_type, t.target_id)
         user_ids = []
         for iv in invites:
             ex = NExpert.objects.filter(id=iv.expert_id).first()
@@ -307,7 +329,7 @@ def invite_experts(request: HttpRequest, id: int):
                 user_ids.append(ex.user_id)
         if user_ids:
             from apps.project.api import set_mid_check_experts
-            set_mid_check_experts(t.target_id, user_ids)
+            set_mid_check_experts(t.target_id, user_ids, tenant_id=t.tenant_id)
     _notify_invitees(t, invites)
     return ok(request, None)
 
@@ -468,31 +490,34 @@ def conclude_review(request: HttpRequest, id: int):
     conclusion = b.get("conclusion")
     if not conclusion:
         raise ApiError(400, CODE_BAD_REQUEST, "请求参数错误")
+    _assert_target_owned(t.tenant_id, t.biz_type, t.target_id)
     summary = _build_score_summary(id)
     t.status = "CONCLUDED"
     t.conclusion = conclusion
     t.score_summary = summary
     t.concluded_at = dj_tz.now()
     t.save(update_fields=["status", "conclusion", "score_summary", "concluded_at", "updated_at"])
-    _conclude_writeback(t.biz_type, t.target_id or 0, t.project_id or 0, conclusion, summary)
+    _conclude_writeback(t.biz_type, t.target_id or 0, t.project_id or 0, conclusion, summary,
+                        tenant_id=t.tenant_id)
     return ok(request, to_api_review_task(t))
 
 
 def _conclude_writeback(biz_type: str, target_id: int, project_id: int,
-                        conclusion: str, summary: dict) -> None:
+                        conclusion: str, summary: dict,
+                        tenant_id: int | None = None) -> None:
     """跨模块写纪律：N NEVER 直接 UPDATE E_/R_ 表；只调 E/R 单一写者导出方法。"""
     from apps.output.api import conclude_output_eval
     from apps.project.api import conclude_final_accept, conclude_mid_check
 
     if biz_type == "MID_CHECK":
-        conclude_mid_check(target_id, project_id, conclusion, summary)
+        conclude_mid_check(target_id, project_id, conclusion, summary, tenant_id=tenant_id)
     elif biz_type == "FINAL_ACCEPT":
         status_map = {"PASS": "APPROVED", "REJECT": "REJECTED", "SUPPLEMENT": "NEED_SUPPLEMENT"}
         status = status_map.get(conclusion)
         if status:
-            conclude_final_accept(target_id, status)
+            conclude_final_accept(target_id, status, tenant_id=tenant_id)
     elif biz_type == "OUTPUT_EVAL":
-        conclude_output_eval(target_id, conclusion == "PASS")
+        conclude_output_eval(target_id, conclusion == "PASS", tenant_id=tenant_id)
     elif biz_type == "GUIDE":
         from apps.p.api import conclude_guide_review
 

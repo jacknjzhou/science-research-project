@@ -621,9 +621,7 @@ def apply_visitor(request: HttpRequest):
 @transaction.atomic
 def approve_visitor(request: HttpRequest, id: int):
     dom = domain_from(request)
-    v = SVisitor.objects.filter(id=id, deleted=0).first()
-    if v is None:
-        raise ApiError(404, CODE_NOT_FOUND, "客座申请不存在")
+    v = _get_visitor_or_404(request, id)
     if v.status != "APPLIED":
         raise ApiError(409, CODE_CONFLICT, f"审批状态机冲突：当前 {v.status}")
     b = read_json(request)

@@ -1289,9 +1289,16 @@ def application_to_project(request: HttpRequest, id: int):
 #   - conclude_final_accept(final_accept_id, status) error
 # ---------------------------------------------------------------------------
 
-def set_mid_check_experts(mid_check_id: int, expert_user_ids: list[int]) -> None:
-    """N.invite(MID_CHECK) 回填 E_MID_CHECK.expert_ids。"""
-    mc = EMidCheck.objects.filter(id=mid_check_id, deleted=0).first()
+def set_mid_check_experts(mid_check_id: int, expert_user_ids: list[int],
+                          tenant_id: int | None = None) -> None:
+    """N.invite(MID_CHECK) 回填 E_MID_CHECK.expert_ids。
+
+    `tenant_id` 由 N 域传入时强制校验归属（E-7 r5 C-2）；缺省保持旧行为供内部调用。
+    """
+    qs = EMidCheck.objects.filter(id=mid_check_id, deleted=0)
+    if tenant_id is not None:
+        qs = qs.filter(tenant_id=tenant_id)
+    mc = qs.first()
     if mc is None:
         return
     mc.expert_ids = list(expert_user_ids)
@@ -1352,10 +1359,16 @@ def _issue_report(project_id: int, tenant_id: int, user_id: int, doc_type: str, 
 
 
 def conclude_mid_check(mid_check_id: int, project_id: int, conclusion: str,
-                       score_detail: Any) -> None:
-    """N.conclude(MID_CHECK) 回写中检结论与打分明细，并签发批文（B3）。"""
+                       score_detail: Any, tenant_id: int | None = None) -> None:
+    """N.conclude(MID_CHECK) 回写中检结论与打分明细，并签发批文（B3）。
+
+    `tenant_id`：N 域传入时强制校验归属，跨租户目标一律不写（E-7 r5 C-2）。
+    """
     with transaction.atomic():
-        mc = EMidCheck.objects.select_for_update().filter(id=mid_check_id, deleted=0).first()
+        qs = EMidCheck.objects.select_for_update().filter(id=mid_check_id, deleted=0)
+        if tenant_id is not None:
+            qs = qs.filter(tenant_id=tenant_id)
+        mc = qs.first()
         if mc is None:
             return
         mc.conclusion = conclusion
@@ -1381,14 +1394,21 @@ def conclude_mid_check(mid_check_id: int, project_id: int, conclusion: str,
         pass
 
 
-def conclude_final_accept(final_accept_id: int, status: str) -> None:
-    """N.conclude(FINAL_ACCEPT) 回写结题验收状态；仅通过时签发批文（B3）。"""
+def conclude_final_accept(final_accept_id: int, status: str,
+                          tenant_id: int | None = None) -> None:
+    """N.conclude(FINAL_ACCEPT) 回写结题验收状态；仅通过时签发批文（B3）。
+
+    `tenant_id`：N 域传入时强制校验归属，跨租户目标一律不写（E-7 r5 C-2）。
+    """
     # 必须整体在事务内：_issue_report 内部有 select_for_update，autocommit 下 PG 会抛
     # TransactionManagementError（sqlite 静默降级，测试掩盖过——见 N-1）
     with transaction.atomic():
-        fa = EFinalAccept.objects.select_for_update().filter(
+        qs = EFinalAccept.objects.select_for_update().filter(
             id=final_accept_id, deleted=0
-        ).first()
+        )
+        if tenant_id is not None:
+            qs = qs.filter(tenant_id=tenant_id)
+        fa = qs.first()
         if fa is None:
             return
         fa.status = status
