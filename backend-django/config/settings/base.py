@@ -132,5 +132,10 @@ EMAIL_HOST_PASSWORD = os.environ.get("ARK_EMAIL_PASSWORD", "")
 EMAIL_USE_TLS = os.environ.get("ARK_EMAIL_TLS", "") == "1"
 DEFAULT_FROM_EMAIL = os.environ.get("ARK_EMAIL_FROM", "noreply@ark.local")
 
+# ---- E-8：是否允许播种演示数据（含工号/固定演示账号）----
+# 生产必须保持 False：容器启动脚本据此决定是否跑 seed_demo，
+# 否则会在生产建出 admin/Admin@123456 这类公开口令账号。
+ALLOW_DEMO_SEED = False
+
 # ---- M2-a：外部机构自助注册落库租户（公开端点，不接受请求体指定）----
 PARTNER_SIGNUP_TENANT_ID = int(os.environ.get("ARK_PARTNER_SIGNUP_TENANT", "1"))

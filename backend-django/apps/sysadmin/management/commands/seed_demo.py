@@ -8,10 +8,12 @@ activity/archive/performance/transform/ethics/staff/procure/asset/confsec + 法�
 from __future__ import annotations
 
 import hashlib
+import os
 from datetime import date, datetime, timedelta
 
 import bcrypt
-from django.core.management.base import BaseCommand
+from django.conf import settings
+from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone as dj_tz
 
 from apps.sysadmin.models import (
@@ -127,7 +129,36 @@ PAGE_GRANTS = [
 class Command(BaseCommand):
     help = "幂等播种演示数据（角色/用户/字典/页面矩阵）"
 
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--force",
+            action="store_true",
+            help="无视 ALLOW_DEMO_SEED 开关（生产仍要求 ARK_SEED_PASSWORD）",
+        )
+
+    def _guard(self, options) -> str | None:
+        """E-8 门禁：演示数据不得在未审批的部署里自动落地。
+
+        返回「覆盖所有演示账号口令」的替代口令（None 表示用各自的默认口令）。
+        两把锁：①是否允许播种；②非开发形态必须由环境提供口令。
+        """
+        demo_mode = bool(getattr(settings, "ALLOW_DEMO_SEED", False))
+        opt_in = bool(options.get("force")) or os.environ.get("ARK_SEED_DEMO") == "1"
+        if not (demo_mode or opt_in):
+            raise CommandError(
+                "演示数据默认不播种。本机开发请用 config.settings.dev；"
+                "部署如需演示数据，请显式设置 ARK_SEED_DEMO=1（或加 --force）。"
+            )
+        env_pwd = os.environ.get("ARK_SEED_PASSWORD") or None
+        if not demo_mode and not env_pwd:
+            raise CommandError(
+                "非开发形态播种演示数据必须设置 ARK_SEED_PASSWORD，"
+                "不接受仓库内置的默认口令（admin/Admin@123456 等公开凭据）。"
+            )
+        return env_pwd
+
     def handle(self, *args, **options):
+        override_pwd = self._guard(options)
         n_roles = n_users = n_dicts = n_items = n_grants = 0
 
         role_objs = {}
@@ -143,12 +174,13 @@ class Command(BaseCommand):
 
         user_objs = {}
         for username, real_name, email, staff_no, sec, pwd in USERS:
+            effective_pwd = override_pwd or pwd
             u, created = SysUser.objects.get_or_create(
                 username=username, tenant_id=1,
                 defaults={
                     "real_name": real_name, "email": email, "staff_no": staff_no,
                     "security_level": sec, "status": "ACTIVE",
-                    "password_hash": bcrypt.hashpw(pwd.encode(), bcrypt.gensalt()).decode(),
+                    "password_hash": bcrypt.hashpw(effective_pwd.encode(), bcrypt.gensalt()).decode(),
                     "creator_id": 1,
                 },
             )

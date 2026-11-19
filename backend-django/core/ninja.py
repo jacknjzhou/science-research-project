@@ -8,8 +8,21 @@ from django.conf import settings
 
 from core.httpx import ApiError, err
 
-# 在线文档开关：DEBUG（dev）默认开；生产须显式 ARK_API_DOCS=1（内网排障用）
-_DOCS = bool(getattr(settings, "DEBUG", False)) or os.environ.get("ARK_API_DOCS") == "1"
+# 在线文档开关（E-8）：默认全关。
+#   ARK_API_DOCS=1 → 强制开（内网排障，需临时启用）
+#   ARK_API_DOCS=0 → 强制关（连本地 dev 也关）
+#   未设置        → 仅 DEBUG=True（本地 dev 形态）时开
+# 生产配置（config.settings.prod）DEBUG=False，因此不设变量就是关着的。
+def docs_enabled() -> bool:
+    flag = os.environ.get("ARK_API_DOCS")
+    if flag == "1":
+        return True
+    if flag == "0":
+        return False
+    return bool(getattr(settings, "DEBUG", False))
+
+
+_DOCS = docs_enabled()
 
 api = ninja.NinjaAPI(
     title="Ark API",
