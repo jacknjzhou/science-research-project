@@ -297,3 +297,45 @@ def test_legacy_expense_with_foreign_line_cannot_be_submitted(seed_auth):
     assert r.status_code == 404, r.content.decode()
     foreign.refresh_from_db()
     assert foreign.amount_frozen == Decimal("0.00")
+
+
+# --- R2-B body 引用未校验：创建接口一律按租户校验引用 ------------------------
+def test_create_expense_rejects_foreign_project(seed_auth):
+    prj = _project(tenant_id=2, code="PRJ-E7-FP")
+    r = Client().post("/api/v1/expenses", data=json.dumps({
+        "project_id": prj.id, "legal_entity_id": 1, "amount": "100.00",
+        "expense_type": "MATERIAL",
+    }), content_type="application/json", **bearer(1, ["R-STAFF"], tenant_id=1))
+    assert r.status_code == 404, r.content.decode()
+    assert _json(r)["code"] == 40401
+
+
+def test_create_outward_rejects_foreign_project(seed_auth):
+    prj = _project(tenant_id=2, code="PRJ-E7-FO")
+    r = Client().post("/api/v1/outwards", data=json.dumps({
+        "project_id": prj.id, "to_unit": "外协单位", "amount": "500.00",
+    }), content_type="application/json", **bearer(1, ["R-MANAGER"], tenant_id=1))
+    assert r.status_code == 404, r.content.decode()
+    assert _json(r)["code"] == 40401
+
+
+def test_create_loan_rejects_foreign_project(seed_auth):
+    prj = _project(tenant_id=2, code="PRJ-E7-FL")
+    r = Client().post("/api/v1/loans", data=json.dumps({
+        "project_id": prj.id, "amount": "800.00", "reason": "差旅借款",
+    }), content_type="application/json", **bearer(1, ["R-MANAGER"], tenant_id=1))
+    assert r.status_code == 404, r.content.decode()
+    assert _json(r)["code"] == 40401
+
+
+def test_create_disclosure_rejects_foreign_output(seed_auth):
+    from apps.output.models import ROutput
+
+    out = ROutput.objects.create(tenant_id=2, creator_id=1, status="CLAIMED",
+                                 title="他租户成果")
+    r = Client().post("/api/v1/disclosure", data=json.dumps({
+        "output_id": out.id, "disclosure_date": "2026-03-01",
+    }), content_type="application/json", **bearer(1, T_ROLES, tenant_id=1))
+    assert r.status_code == 404, r.content.decode()
+    assert _json(r)["code"] == 40401
+    assert not TDisclosure.objects.filter(output_id=out.id).exists()

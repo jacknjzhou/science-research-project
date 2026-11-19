@@ -67,6 +67,7 @@ from apps.funding.models import (
 from apps.notify.models import SysNotification
 from apps.procure.models import GContract
 from apps.project.models import EProject, EProjectCategory
+from apps.sysadmin.models import SysLegalEntity
 from core import approval
 from core.auth.deps import domain_from
 from core.httpx import (
@@ -235,6 +236,22 @@ def _get_budget_or_404(tenant_id: int, budget_id: int) -> FBudget:
     if b is None:
         raise ApiError(404, CODE_NOT_FOUND, "预算不存在")
     return b
+
+
+def _reject_foreign_ref(model, obj_id, tenant_id: int, label: str) -> None:
+    """body 引用归属校验（E-7 B 段）：仅在「对象存在且属于他租户」时 404。
+
+    不强制引用对象必须存在——历史单据/演示数据允许引用尚未建档的 id（无 FK 约束）；
+    真正的越权面是「能指向别人的对象」，那种情况一律 404 且不泄露存在性。
+    """
+    if obj_id in (None, "", 0, "0"):
+        return
+    try:
+        oid = int(obj_id)
+    except (TypeError, ValueError):
+        raise ApiError(400, CODE_BAD_REQUEST, f"{label} id 非法")
+    if model.objects.filter(id=oid, deleted=0).exclude(tenant_id=tenant_id).exists():
+        raise ApiError(404, CODE_NOT_FOUND, f"{label}不存在")
 
 
 def _update_budget_line_or_409(tenant_id: int, line_id: int, **fields) -> None:
@@ -740,7 +757,7 @@ def open_project_account(request: HttpRequest, project_id: int):
         bud = FBudget.objects.create(
             tenant_id=d.tenant_id, creator_id=d.user_id,
             project_id=project_id,
-            legal_entity_id=project.legal_entity_id or 1,
+            legal_entity_id=(project.legal_entity_id if project else 1) or 1,
             mode="预算制",
             total_approved=project.total_budget or Decimal("0.00"),
         )
@@ -795,6 +812,9 @@ def create_expense(request: HttpRequest):
         loan = FLoan.objects.filter(id=related_loan_id, tenant_id=d.tenant_id, deleted=0).first()
         if loan is None:
             raise ApiError(404, CODE_NOT_FOUND, "关联借款不存在")
+    # 项目与法人归属（R2-B）：不得指向他租户项目/法人（存在性不强制，见 helper 说明）
+    _reject_foreign_ref(EProject, b["project_id"], d.tenant_id, "项目")
+    _reject_foreign_ref(SysLegalEntity, b["legal_entity_id"], d.tenant_id, "法人主体")
     fp_hash = None
     invoice_no = b.get("invoice_no")
     invoice_date = b.get("invoice_date")
@@ -1015,6 +1035,12 @@ def create_outward(request: HttpRequest):
     amount = _money(b.get("amount"))
     if (not b.get("project_id") or not b.get("to_unit") or amount is None or amount <= 0):
         raise ApiError(400, CODE_BAD_REQUEST, "参数错误（金额须为正数）")
+    # 项目/预算归属（R2-B）：外拨单据不得指向他租户项目/预算
+    _reject_foreign_ref(EProject, b["project_id"], d.tenant_id, "项目")
+    budget_ref = b.get("budget_id")
+    if budget_ref:
+        budget_ref = int(budget_ref)
+        _reject_foreign_ref(FBudget, budget_ref, d.tenant_id, "预算")
     line_ref = b.get("budget_line_id")
     if line_ref:
         line_ref = int(line_ref)
@@ -1022,7 +1048,7 @@ def create_outward(request: HttpRequest):
             raise ApiError(404, CODE_NOT_FOUND, "预算行不存在")
     o = FOutward.objects.create(
         tenant_id=d.tenant_id, creator_id=d.user_id,
-        project_id=b["project_id"], budget_id=b.get("budget_id"),
+        project_id=b["project_id"], budget_id=budget_ref,
         budget_line_id=line_ref, amount=amount,
         to_unit=b["to_unit"], reason=b.get("reason"),
     )
@@ -2204,6 +2230,8 @@ def create_loan(request: HttpRequest):
     amount = _money(b.get("amount"))
     if not project_id or amount is None or amount <= 0:
         raise ApiError(400, CODE_BAD_REQUEST, "参数错误（projectId、amount>0 必填）")
+    # 项目不得属于他租户（R2-B：此前他租户 project_id 被静默接受，实测 200）
+    _reject_foreign_ref(EProject, project_id, d.tenant_id, "项目")
     project = EProject.objects.filter(id=project_id, tenant_id=d.tenant_id, deleted=0).first()
     line_ref = b.get("budget_line_id") or b.get("budgetLineId")
     if line_ref:
@@ -2214,7 +2242,7 @@ def create_loan(request: HttpRequest):
         tenant_id=d.tenant_id,
         creator_id=d.user_id,
         project_id=project_id,
-        legal_entity_id=project.legal_entity_id if project else 1,
+        legal_entity_id=(project.legal_entity_id if project else 1) or 1,
         applicant_user_id=d.user_id,
         amount=_d2(amount),
         reason=b.get("reason"),
