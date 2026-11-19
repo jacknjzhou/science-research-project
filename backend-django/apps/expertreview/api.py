@@ -373,6 +373,8 @@ def start_review(request: HttpRequest, id: int):
 
 
 _SCORE_DENIED_STATUSES = ("CONCLUDED", "CANCELLED")
+# 尚未开始评审（DRAFT/DRAWN=已抽取未启动）不可打分：必须经 accept → start 进入 IN_REVIEW。
+_SCORE_UNSTARTED_STATUSES = ("DRAFT",)
 
 
 def _require_accepted_invitation(t: NReviewTask, expert: NExpert) -> None:
@@ -386,6 +388,8 @@ def _require_accepted_invitation(t: NReviewTask, expert: NExpert) -> None:
         raise ApiError(403, CODE_FORBIDDEN, "未被邀请参与该评审")
     if iv.response != "ACCEPT":
         raise ApiError(409, CODE_CONFLICT, "尚未接受邀请，不可打分")
+    if t.status in _SCORE_UNSTARTED_STATUSES:
+        raise ApiError(409, CODE_CONFLICT, f"评审尚未开始，不可打分：{t.status}")
     if t.status in _SCORE_DENIED_STATUSES:
         raise ApiError(409, CODE_CONFLICT, f"评审已结束，不可打分：{t.status}")
 

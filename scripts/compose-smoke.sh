@@ -11,7 +11,7 @@ curl -fsS "$BASE/healthz" | grep -q '"ok":true'
 echo "[2/4] login"
 TOKEN=$(curl -fsS -X POST "$BASE/api/v1/auth/login" \
   -H 'Content-Type: application/json' \
-  -d '{"username":"ark","password":"ark"}' \
+  -d '{"username":"admin","password":"Admin@123456"}' \
   | "$PY" -c 'import sys,json;print(json.load(sys.stdin)["data"]["access_token"])')
 [ -n "$TOKEN" ] || { echo "未取得 token"; exit 1; }
 

@@ -364,3 +364,46 @@ def test_asset_convert_rejects_foreign_order(seed_auth):
         **bearer(seed_auth["admin"].id, ["R-STAFF"]),
     )
     assert r.status_code == 404
+
+
+def test_score_rejects_draft_task(seed_auth):
+    """Minor（终审 r1）：任务仍 DRAFT（未启动）时不得打分。"""
+    uid = seed_auth["staff"].id
+    t = _task(1, "未启动评审", status="DRAFT")
+    e = _bound_expert(1, uid)
+    _invite(t, e, response="ACCEPT")
+    r = _score(Client(), t.id, uid)
+    assert r.status_code == 409
+    assert r.json()["code"] == 40901
+
+
+def test_score_rejects_declined_and_expired_invitation(seed_auth):
+    """Minor（终审 r1）：DECLINED/EXPIRED 邀请不得打分。"""
+    uid = seed_auth["staff"].id
+    e = _bound_expert(1, uid)  # 一个专家跑两种邀请状态，避免重复档案
+    for resp in ("DECLINED", "EXPIRED"):
+        t = _task(1, f"邀请 {resp}", status="IN_REVIEW")
+        _invite(t, e, response=resp)
+        r = _score(Client(), t.id, uid)
+        assert r.status_code == 409, resp
+        assert r.json()["code"] == 40901, resp
+
+
+# ---------------------------------------------------------------- 终审 r1：dev 登录租户
+
+
+def test_dev_login_ignores_body_tenant(seed_auth, settings, monkeypatch):
+    """Important（终审 r1）：冒烟后门的数据域由 ARK_DEV_TENANT 固定，请求体指定租户无效。"""
+    from core.auth.jwt_util import parse_token
+
+    settings.DEBUG = True
+    monkeypatch.setenv("ARK_DEV_LOGIN", "1")
+    monkeypatch.setenv("ARK_DEV_TENANT", "1")
+    r = Client().post(
+        "/api/v1/auth/login",
+        data=json.dumps({"username": "ark", "password": "ark", "tenant_id": 2}),
+        content_type="application/json",
+    )
+    assert r.status_code == 200
+    claims = parse_token(r.json()["data"]["access_token"])
+    assert int(claims["tenant_id"]) == 1

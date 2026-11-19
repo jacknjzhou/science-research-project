@@ -2,7 +2,7 @@
 
 面向科研院所的一体化科研管理平台：项目申报立项 → 过程管理 → 经费 → 成果 → 转化 → 诚信伦理 → 人员团队 → 决策大屏 → 采购合同 → 资产耗材 → 涉密多法人治理，共 11 个业务模块，契约驱动、前后端分离、多法人多租户。
 
-> **当前状态**：后端 Django 重写 **Phase 0–4 全部完成**（11 模块全量落地 + svc-ai AI 微服务），全量 487 pytest 通过，PG 端到端冒烟 30 项全过，`develop` 已推送。
+> **当前状态**：后端 Django 重写 **Phase 0–4 全部完成**（11 模块全量落地 + svc-ai AI 微服务），全量 493 pytest 通过，PG 端到端冒烟 30 项全过，`develop` 已推送。
 
 ## 技术栈（方案 C）
 
@@ -26,7 +26,7 @@
 │   ├── svc_ai/              # FastAPI AI 微服务（/ai/*）
 │   ├── config/              # settings(dev/test/base) + 集中路由 + casbin policy
 │   ├── scripts/             # PG 冒烟脚本 smoke_p3.py / smoke_p4.py
-│   └── tests/               # pytest 套件（487 个）
+│   └── tests/               # pytest 套件（493 个）
 ├── frontend/                # Vue3 SPA（契约 mock，13 屏）
 ├── prototype/               # 静态高保真原型
 ├── docs/superpowers/        # 重写 plan 与 spec（backend-django-rewrite-*）
@@ -70,7 +70,12 @@ python manage.py migrate                                    # 默认连 localhos
 python manage.py seed_demo                                  # 幂等播种
 
 # 全量测试（sqlite 内存库，不依赖 PG）
-python -m pytest tests -q                                   # 当前 487 passed
+python -m pytest tests -q                                   # 当前 493 passed
+
+> **冒烟后门（仅本地/演示）**：`ark/ark` 登录默认**关闭**；需同时满足 `DEBUG=True` 与
+> 环境变量 `ARK_DEV_LOGIN=1` 才会签发一个最小权限（`R-STAFF`）令牌，数据域由
+> `ARK_DEV_TENANT`（缺省 1）固定，**不接受请求体指定租户**。生产/CI 请用种子账号
+> （如 `admin/Admin@123456`）登录，`scripts/compose-smoke.sh` 已改用种子账号。
 
 # PG 端到端冒烟（直连 live PG，幂等可重跑）
 python scripts/smoke_p3.py                                  # Phase 3 域 18 项

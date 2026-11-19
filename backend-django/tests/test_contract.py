@@ -63,6 +63,9 @@ def test_contract_full_coverage(seed_contract):
     failures: list[str] = []
     for op in ops:
         if op.template == "/api/v1/auth/login" and op.method == "POST":
+            # 本用例为「无库」契约遍历（不 seed 账号）：冒烟后门默认关闭（E-3），
+            # 故此处应得 401/40102，但仍须返回统一信封。成功登录路径由
+            # tests/test_login_auth.py 的 seed 用例覆盖。
             resp = c.post(
                 "/api/v1/auth/login",
                 data={"username": "ark", "password": "ark"},
@@ -90,6 +93,10 @@ def test_contract_full_coverage(seed_contract):
                     f"{op.method} {op.template} → 信封缺字段 {key}（HTTP {resp.status_code}）"
                 )
                 break
+        if op.template == "/api/v1/auth/login" and op.method == "POST":
+            assert resp.status_code == 401, (
+                f"冒烟后门应默认关闭，实际 HTTP {resp.status_code}"
+            )
         if resp.get("X-Stub") == "true":
             stub_hits.append(f"{op.method} {op.template}")
 

@@ -33,6 +33,14 @@ def _dev_login_enabled() -> bool:
     return bool(getattr(settings, "DEBUG", False)) and os.environ.get("ARK_DEV_LOGIN") == "1"
 
 
+def _dev_tenant_id() -> int:
+    """冒烟后门固定数据域：取 ARK_DEV_TENANT（缺省 1），**不接受请求体指定租户**（终审 r1）。"""
+    try:
+        return max(1, int(os.environ.get("ARK_DEV_TENANT") or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
 def login(request: HttpRequest) -> object:
     body = read_json(request, msg="用户名/密码必填")
     username = (body.get("username") or "").strip()
@@ -60,8 +68,8 @@ def login(request: HttpRequest) -> object:
             raise ApiError(403, CODE_ACCOUNT_DISABLED, "账号已停用或锁定")
 
     if is_dev_login:
-        # 冒烟回退：最小数据域，不授予管理角色（E-3）
-        claims = _issue(request, 1, tenant_id, 0, "INTERNAL", ["R-STAFF"])
+        # 冒烟回退：最小数据域（tenant 由环境变量固定），不授予管理角色（E-3/终审 r1）
+        claims = _issue(request, 1, _dev_tenant_id(), 0, "INTERNAL", ["R-STAFF"])
     else:
         from apps.sysadmin.models import SysUserRole
 
