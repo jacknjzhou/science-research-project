@@ -431,7 +431,8 @@ def revoke_access(request: HttpRequest):
     b = read_json(request)
     if not b.get("grantId") or b.get("action") not in ("FREEZE", "REVOKE"):
         raise ApiError(400, CODE_BAD_REQUEST, "grantId 与 action(FREEZE/REVOKE) 必填")
-    g = XAccessGrant.objects.filter(id=int(b["grantId"]), deleted=0).first()
+    g = XAccessGrant.objects.filter(id=int(b["grantId"]), tenant_id=dom.tenant_id,
+                                    deleted=0).first()
     if g is None:
         raise ApiError(404, CODE_NOT_FOUND, "授权不存在")
     g.status = "FROZEN" if b["action"] == "FREEZE" else "REVOKED"
@@ -496,7 +497,8 @@ def approve_export(request: HttpRequest):
     for k in ("exportId", "stage", "verdict"):
         if b.get(k) is None:
             raise ApiError(400, CODE_BAD_REQUEST, f"{k} 必填")
-    f = XFlowAudit.objects.filter(id=int(b["exportId"]), deleted=0).first()
+    f = XFlowAudit.objects.filter(id=int(b["exportId"]), tenant_id=dom.tenant_id,
+                                  deleted=0).first()
     if f is None:
         raise ApiError(404, CODE_NOT_FOUND, "输出审批单不存在")
     if f.status in ("RELEASED", "REJECTED", "RECORDED"):
@@ -537,7 +539,8 @@ def release_export(request: HttpRequest):
     b = read_json(request)
     if not b.get("exportId") or not b.get("actualPayloadDigest"):
         raise ApiError(400, CODE_BAD_REQUEST, "exportId/actualPayloadDigest 必填")
-    f = XFlowAudit.objects.filter(id=int(b["exportId"]), deleted=0).first()
+    f = XFlowAudit.objects.filter(id=int(b["exportId"]), tenant_id=dom.tenant_id,
+                                  deleted=0).first()
     if f is None:
         raise ApiError(404, CODE_NOT_FOUND, "输出审批单不存在")
     if f.status != "SEC_REVIEW":
@@ -561,7 +564,8 @@ def release_export(request: HttpRequest):
 @transaction.atomic
 def get_export_detail(request: HttpRequest, id: int):
     """查询输出审批状态；涉密正文在非 SECRET_NET 域 403 且不暴露存在性（防探测）。"""
-    f = XFlowAudit.objects.filter(id=id, deleted=0).first()
+    dom = domain_from(request)
+    f = XFlowAudit.objects.filter(id=id, tenant_id=dom.tenant_id, deleted=0).first()
     zone = _zone(request)
     if f is not None and f.security_level in SECRET_LEVELS and zone != "SECRET_NET":
         raise ApiError(403, CODE_FORBIDDEN, "涉密对象在当前网络域不可见")  # 不暴露细节
@@ -603,7 +607,8 @@ def submit_classify(request: HttpRequest):
     else:
         # 对象密级：以资产为例（跨类型对象按需扩展）；AI 提示永不直接生效
         from apps.asset.models import AAsset
-        a = AAsset.objects.filter(id=int(b["targetId"]), deleted=0).first()
+        a = AAsset.objects.filter(id=int(b["targetId"]), tenant_id=dom.tenant_id,
+                                  deleted=0).first()
         if a is not None and target_level:
             a.security_level = target_level
             a.modifier_id = dom.user_id
