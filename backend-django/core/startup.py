@@ -46,12 +46,6 @@ def validate_runtime_secrets() -> None:
     if getattr(dj_settings, "DEBUG", False):
         return  # 本地 dev 形态：允许使用仓库缺省密钥
 
-    env_raw = os.environ.get("ARK_JWT_SECRET")
-    if not env_raw:
-        raise ImproperlyConfigured(
-            f"生产环境必须显式设置 ARK_JWT_SECRET（当前未设置，用的是仓库缺省密钥）。{SECRET_HINT}"
-        )
-
     # 校验**真正用于签名**的值：`core/auth/jwt_util` 读的是 settings.JWT_SECRET，
     # 自定义 settings 可以直接把它覆盖成弱值（而环境变量看起来是合规的）。
     validate_secret_value(
@@ -140,13 +134,22 @@ def find_default_credential_accounts(*, active_only: bool = True) -> list[str]:
 
 
 def _account_table_ready() -> bool | None:
-    """`True`=表在、`False`=表还没建（首次 migrate 前）、`None`=连不上（未知状态）。"""
+    """`True`=可以扫描、`False`=空库（首次 migrate 前）、`None`=状态未知（fail-closed）。
+
+    只有「库连得上且一张表都没有」才算首次初始化；库里有别的表却没有 `sys_user`
+    （权限只暴露部分表、残缺 schema、迁移没跑全）一律按未知处理，不能静默放行。
+    """
     from django.db import DatabaseError, connection
 
     try:
-        return "sys_user" in connection.introspection.table_names()
+        tables = connection.introspection.table_names()
     except DatabaseError:
         return None
+    if "sys_user" in tables:
+        return True
+    if not tables:
+        return False
+    return None
 
 
 def assert_no_default_credentials(*, attempts: int = 5, delay: float = 2.0) -> None:
@@ -196,3 +199,47 @@ def assert_no_default_credentials(*, attempts: int = 5, delay: float = 2.0) -> N
         "启动自检无法确认数据库中的默认口令状态（不会在未知状态下启动）："
         f"{last_error}. 请先确保数据库可用并执行 migrate，然后重试启动。"
     )
+
+
+# —— 进程级守卫：所有 Django 进程（wsgi/asgi/celery/manage/django-admin）都必须过 ——
+# 这些管理命令允许在「库里有默认口令」时运行——它们正是用来修复/初始化状态的。
+GUARD_EXEMPT_COMMANDS = frozenset({
+    "migrate", "makemigrations", "showmigrations",
+    "rotate_demo_credentials", "seed_demo",
+    "test", "shell", "dbshell", "createsuperuser",
+    "dumpdata", "loaddata", "flush", "collectstatic",
+})
+
+
+def _current_management_command() -> str | None:
+    import sys
+
+    argv = list(getattr(sys, "argv", []))
+    if len(argv) < 2:
+        return None
+    if os.path.basename(argv[0]).startswith(("manage.py", "django-admin")):
+        return argv[1].split(":")[0]
+    return None
+
+
+def enforce_process_guard() -> None:
+    """非 DEBUG 形态下，任何 Django 进程启动都要过两道关：
+
+    1. JWT 密钥强度（校验**最终生效**的 `settings.JWT_SECRET`，不限定来自哪个
+       环境变量——自定义 settings 用自己的密钥源同样受检）；
+    2. 库中不得残留公开默认口令账号；但初始化/修复类管理命令除外（否则无法自愈）。
+    """
+    from django.conf import settings as dj_settings
+
+    if getattr(dj_settings, "DEBUG", False):
+        return
+    validate_runtime_secrets()
+    if _current_management_command() in GUARD_EXEMPT_COMMANDS:
+        return
+    assert_no_default_credentials()
+
+
+def enforce_serving_guard() -> None:
+    """服务进程（wsgi/asgi）启动时：密钥 + 默认口令双检，任一不过就拒绝启动。"""
+    validate_runtime_secrets()
+    assert_no_default_credentials()

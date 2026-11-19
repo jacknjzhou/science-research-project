@@ -6,26 +6,31 @@ from django.core.exceptions import ImproperlyConfigured
 
 
 def test_runtime_secret_check_requires_strong_value(monkeypatch, settings):
-    """四段：缺 env、仍是仓库默认值、过短 → 拒绝；32 字符以上 → 通过。"""
+    """判据是**生效值**而非 env 是否存在：默认值/过短拒绝，32 字符以上通过。
+
+    r4-I3：上一版要求「必须显式设置 ARK_JWT_SECRET」，会误杀
+    `from .prod import *` 且用别的密钥源（Vault/自定义 env 名）覆盖
+    `settings.JWT_SECRET` 的合法部署。现在只看最终生效值。
+    """
     from core.startup import validate_runtime_secrets
 
     settings.DEBUG = False
     monkeypatch.delenv("ARK_JWT_SECRET", raising=False)
+
+    settings.JWT_SECRET = "dev-secret-change-me-please-use-32-bytes-min!"
     with pytest.raises(ImproperlyConfigured):
         validate_runtime_secrets()
 
-    monkeypatch.setenv("ARK_JWT_SECRET", "dev-secret-change-me-please-use-32-bytes-min!")
-    with pytest.raises(ImproperlyConfigured):
-        validate_runtime_secrets()
-
-    monkeypatch.setenv("ARK_JWT_SECRET", "short")
     settings.JWT_SECRET = "short"
     with pytest.raises(ImproperlyConfigured):
         validate_runtime_secrets()
 
-    monkeypatch.setenv("ARK_JWT_SECRET", "Z" * 32)
+    settings.JWT_SECRET = ""
+    with pytest.raises(ImproperlyConfigured):
+        validate_runtime_secrets()
+
     settings.JWT_SECRET = "Z" * 32
-    validate_runtime_secrets()  # 通过，不抛
+    validate_runtime_secrets()  # 通过，不抛（即使 env 没设）
 
 
 def test_secret_check_reads_effective_setting_not_env(monkeypatch, settings):
@@ -53,26 +58,43 @@ def test_secret_check_ignores_settings_module_name(monkeypatch, settings):
     assert os.environ.get("DJANGO_SETTINGS_MODULE") == "config.settings.test"
     settings.DEBUG = False
     monkeypatch.delenv("ARK_JWT_SECRET", raising=False)
+    settings.JWT_SECRET = "dev-secret-change-me-please-use-32-bytes-min!"
     with pytest.raises(ImproperlyConfigured):
         validate_runtime_secrets()
 
-    settings.DEBUG = True  # dev 形态放行
+    settings.JWT_SECRET = "Z" * 32
+    validate_runtime_secrets()
+
+    settings.DEBUG = True  # dev 形态放行（连弱值也不管，只在非 DEBUG 生效）
+    settings.JWT_SECRET = "short"
     validate_runtime_secrets()
 
 
-def test_prod_settings_module_refuses_weak_secret_at_import(monkeypatch):
-    """给了 `ARK_JWT_SECRET` 时 import 期即失败（gunicorn bind 之前）。"""
+def test_prod_settings_module_defers_secret_check_to_runtime(monkeypatch, settings):
+    """r4-C2 的取舍：prod **不在 import 期**校验密钥。
+
+    import 期拿不到「最终生效」的 settings（自定义 `from .prod import *` 可能用
+    别的密钥源覆盖 `JWT_SECRET`），在 import 期校验会误杀合法部署；因此改由
+    `core.apps.ready()`（每个 Django 进程都会执行）在运行期校验生效值。
+    """
     import importlib
     import sys
 
     import config.settings.base as base
 
+    from core.startup import validate_runtime_secrets
+
     monkeypatch.setenv("ARK_JWT_SECRET", "short")
     monkeypatch.setattr(base, "JWT_SECRET", "short")
     sys.modules.pop("config.settings.prod", None)
-    with pytest.raises(ImproperlyConfigured):
-        importlib.import_module("config.settings.prod")
+    prod = importlib.import_module("config.settings.prod")  # import 通过
+    assert prod.DEBUG is False
     sys.modules.pop("config.settings.prod", None)
+
+    settings.DEBUG = False
+    settings.JWT_SECRET = "short"
+    with pytest.raises(ImproperlyConfigured):  # 运行期必拒
+        validate_runtime_secrets()
 
 
 def test_prod_settings_defers_missing_env_to_runtime(monkeypatch, settings):
@@ -359,3 +381,86 @@ def test_rotate_reports_remaining_accounts(monkeypatch, settings):
     monkeypatch.setattr(cmd, "find_default_credential_accounts", lambda active_only=True: ["admin"])
     with pytest.raises(CommandError):
         call_command("rotate_demo_credentials", "--password", "Fresh-Str0ng-Pass!")
+
+
+# —— r4 回归（seed 口令强度 / 进程级守卫 / 部分 schema fail-closed）——
+
+def test_seed_demo_rejects_builtin_default_password(monkeypatch, settings):
+    """r4-C1：`ARK_SEED_PASSWORD=Demo@123456` 也能造出公开 R-ADMIN，必须拒绝。"""
+    from django.core.management.base import CommandError
+
+    settings.ALLOW_DEMO_SEED = False
+    monkeypatch.setenv("ARK_SEED_DEMO", "1")
+    legend = ("Demo@123456", "Admin@123456", "Partner@123456")
+    for pwd in legend:
+        monkeypatch.setenv("ARK_SEED_PASSWORD", pwd)
+        with pytest.raises(CommandError):
+            _seed()
+
+
+def test_seed_demo_rejects_short_password(monkeypatch, settings):
+    from django.core.management.base import CommandError
+
+    settings.ALLOW_DEMO_SEED = False
+    monkeypatch.setenv("ARK_SEED_DEMO", "1")
+    monkeypatch.setenv("ARK_SEED_PASSWORD", "Ab1!x")  # 5 位
+    with pytest.raises(CommandError):
+        _seed()
+
+
+@pytest.mark.django_db
+def test_process_guard_blocks_non_exempt_command(settings, monkeypatch):
+    """r4-C2：`django-admin` / worker / 其它进程也要被拦，不只 wsgi/asgi。
+
+    守卫挂在 `core.apps.ready()`，用 `manage.py <cmd>` 模拟「非豁免命令」。
+    """
+    from core import startup
+
+    settings.DEBUG = False
+    settings.JWT_SECRET = "Z" * 40
+    _make_admin_with("Admin@123456")
+    monkeypatch.setattr(startup, "_current_management_command", lambda: "runserver", raising=False)
+    with pytest.raises(ImproperlyConfigured):
+        startup.enforce_process_guard()
+
+
+@pytest.mark.django_db
+def test_process_guard_exempts_remediation_commands(settings, monkeypatch):
+    """修复类命令不能被自己的守卫挡住（否则永远无法自愈）。"""
+    from core import startup
+
+    settings.DEBUG = False
+    settings.JWT_SECRET = "Z" * 40
+    _make_admin_with("Admin@123456")
+    for cmd in ("migrate", "rotate_demo_credentials", "seed_demo", "test"):
+        monkeypatch.setattr(startup, "_current_management_command", lambda c=cmd: c, raising=False)
+        startup.enforce_process_guard()  # 不抛
+
+
+@pytest.mark.django_db
+def test_gate_fails_closed_when_schema_is_partial(settings, monkeypatch):
+    """r4-I1：库里有别的表但没有 sys_user（权限只暴露部分表/残缺 schema）→ 不能放行。"""
+    from core import startup
+
+    settings.DEBUG = False
+    monkeypatch.setattr(startup, "_account_table_ready", lambda: None)
+    with pytest.raises(ImproperlyConfigured):
+        startup.assert_no_default_credentials(attempts=1, delay=0)
+
+
+def test_account_table_ready_treats_partial_schema_as_unknown(settings, monkeypatch):
+    """三态判定本身：有表但无 sys_user → None（未知，fail-closed）。"""
+    from django.db import connection
+
+    from core import startup
+
+    monkeypatch.setattr(
+        connection.introspection, "table_names", lambda *a, **k: ["other_table"]
+    )
+    assert startup._account_table_ready() is None
+    monkeypatch.setattr(connection.introspection, "table_names", lambda *a, **k: [])
+    assert startup._account_table_ready() is False
+    monkeypatch.setattr(
+        connection.introspection, "table_names", lambda *a, **k: ["sys_user"]
+    )
+    assert startup._account_table_ready() is True

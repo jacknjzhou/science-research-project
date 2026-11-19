@@ -18,14 +18,6 @@ ALLOWED_HOSTS = ["*"]
 
 # 自检实现见 core/startup.py：判据是运行期 DEBUG，不依赖 settings 模块名，
 # 因此自定义 `from .prod import *` 的模块同样受保护（wsgi/asgi/manage.py 兜底）。
-import os  # noqa: E402
-
-from core.startup import validate_secret_value  # noqa: E402
-
-# import 期快失败：只在运维确实提供了 `ARK_JWT_SECRET` 时校验本模块定义的值。
-# 没提供时不在这里拦——允许 `from .prod import *` 的自定义 settings 用自己的
-# 密钥来源（例如 Vault 注入后覆盖 `JWT_SECRET`）；运行期由 wsgi/asgi/manage.py
-# 调 `validate_runtime_secrets()` 校验**最终生效**的 `settings.JWT_SECRET`。
-# 二者都不覆盖的情况（缺 env 且无覆盖）会在运行期被拒。
-if os.environ.get("ARK_JWT_SECRET"):
-    validate_secret_value(str(JWT_SECRET or ""), origin="config.settings.prod.JWT_SECRET")
+# 密钥与默认口令的实际校验放在 `core/apps.py::ready()`（`enforce_process_guard`），
+# 因为 import 期拿不到「最终生效」的 settings（自定义 `from .prod import *` 可能
+# 用别的密钥源覆盖 `JWT_SECRET`，在 import 期校验会误杀合法部署）。

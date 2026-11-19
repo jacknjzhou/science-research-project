@@ -4,6 +4,11 @@
 // 3) admin 恢复勾选 → 保存；finance 重新登录 → 菜单恢复
 import { chromium } from 'playwright'
 
+// E-8：演示口令不再写死在脚本里（部署方用 ARK_SEED_PASSWORD 指定）。
+const DEMO_PASSWORDS = {admin: 'Admin@123456', manager: 'Manager@123456',
+  staff: 'Staff@123456', finance: 'Finance@123456'};
+const smokePwd = (who) => process.env.ARK_SMOKE_PASSWORD || DEMO_PASSWORDS[who];
+
 const BASE = 'http://localhost:8080'
 const ok = (m) => console.log('✓', m)
 const fail = (m) => { console.error('✗', m); process.exit(1) }
@@ -28,7 +33,7 @@ const browser = await chromium.launch({ channel: 'chrome' })
 const page = await browser.newPage()
 try {
   // —— admin：矩阵编辑 ——
-  await login(page, 'admin', 'Admin@123456')
+  await login(page, 'admin', smokePwd('admin'))
   await page.goto(BASE + '/#/admin/roles')
   await page.waitForSelector('table.tbl', { timeout: 8000 })
   const row = page.locator('tr:has-text("资产与耗材台账")').first()
@@ -53,14 +58,14 @@ try {
 
   // 2) finance 登录 → 菜单应无「资产与耗材台账」
   await logout(page)
-  await login(page, 'finance', 'Finance@123456')
+  await login(page, 'finance', smokePwd('finance'))
   await page.waitForTimeout(800)
   if (await menuHas(page, '资产与耗材台账')) fail('finance 菜单仍显示资产页（应已隐藏）')
   ok('finance 菜单已隐藏「资产与耗材台账」')
 
   // 3) admin 恢复 → finance 重新登录 → 菜单恢复
   await logout(page)
-  await login(page, 'admin', 'Admin@123456')
+  await login(page, 'admin', smokePwd('admin'))
   await page.goto(BASE + '/#/admin/roles')
   await page.waitForSelector('table.tbl', { timeout: 8000 })
   const row2 = page.locator('tr:has-text("资产与耗材台账")').first()
@@ -71,7 +76,7 @@ try {
   ok('admin 恢复勾选并保存')
 
   await logout(page)
-  await login(page, 'finance', 'Finance@123456')
+  await login(page, 'finance', smokePwd('finance'))
   await page.waitForTimeout(800)
   if (!(await menuHas(page, '资产与耗材台账'))) fail('finance 菜单未恢复资产页')
   ok('finance 菜单已恢复「资产与耗材台账」')
@@ -80,7 +85,7 @@ try {
   //    当前矩阵配置：archive 含 R-STAFF、performance 不含 R-STAFF。
   //    staff 菜单应显示「科研档案」且点击可达；「科研绩效评价」应隐藏。
   await logout(page)
-  await login(page, 'staff', 'Staff@123456')
+  await login(page, 'staff', smokePwd('staff'))
   await page.waitForTimeout(800)
   if (!(await menuHas(page, '科研档案'))) fail('staff 菜单应显示科研档案（矩阵已授予）')
   if (await menuHas(page, '科研绩效评价')) fail('staff 菜单不应显示科研绩效评价（矩阵未授予）')

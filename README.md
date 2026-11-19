@@ -76,7 +76,7 @@ docker compose up -d --build
 | svc-ai | http://localhost:8900/healthz | AI 微服务；`llmConfigured:false` 即降级态 |
 | 接口在线文档 | http://localhost:8081 | Swagger UI 浏览 design/ 全部 16 份 OpenAPI 契约（下拉切模块） |
 
-演示账号（启动时 `seed_demo` 幂等播种）：`admin / Admin@123456`。
+演示账号（`seed_demo` 幂等播种）：用户名 `admin` / `manager` / `staff` / `finance` / `partner` / `expert_ext`；**口令不再固定**——容器形态由部署方 `ARK_SEED_PASSWORD` 指定，本地 dev（`config.settings.dev`）使用 `seed_demo` 内置的开发口令。
 
 常用运维：
 
@@ -101,7 +101,8 @@ python -m pytest tests -q                                   # 当前 522 passed
 > **冒烟后门（仅本地/演示）**：`ark/ark` 登录默认**关闭**；需同时满足 `DEBUG=True` 与
 > 环境变量 `ARK_DEV_LOGIN=1` 才会签发一个最小权限（`R-STAFF`）令牌，数据域由
 > `ARK_DEV_TENANT`（缺省 1）固定，**不接受请求体指定租户**。生产/CI 请用种子账号
-> （如 `admin/Admin@123456`）登录，`scripts/compose-smoke.sh` 已改用种子账号。
+> 登录，`scripts/compose-smoke.sh` 已改用种子账号，口令由 `ARK_SMOKE_USER` /
+> `ARK_SMOKE_PASSWORD` 提供（未设置直接报错，不回落到仓库默认值）。
 >
 > **部署形态**：容器（`docker-compose.yml`）通过 `DJANGO_SETTINGS_MODULE=config.settings.prod`
 > 启用 `DEBUG=False`（`backend-django/config/settings/prod.py`），此时 `ark/ark` **完全不可用**

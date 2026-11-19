@@ -1,5 +1,10 @@
 import { chromium } from 'playwright'
 
+// E-8：演示口令不再写死在脚本里（部署方用 ARK_SEED_PASSWORD 指定）。
+const DEMO_PASSWORDS = {admin: 'Admin@123456', manager: 'Manager@123456',
+  staff: 'Staff@123456', finance: 'Finance@123456'};
+const smokePwd = (who) => process.env.ARK_SMOKE_PASSWORD || DEMO_PASSWORDS[who];
+
 // 冒烟：报销单科目下拉对齐经费配置语义
 // ① staff 报销页「支出科目」仅列所选预算的水位行科目（带余额）
 // ② 明细行「选择科目」仅列末级科目（父级路径展示）
@@ -14,7 +19,7 @@ const page = await browser.newPage()
 page.on('dialog', (d) => (d.type() === 'confirm' ? d.accept() : d.dismiss()))
 await page.goto(BASE + '/#/dash?needLogin=1')
 await page.fill('input[placeholder="请输入登录账号"]', 'staff')
-await page.fill('input[placeholder="••••••••"]', 'Staff@123456')
+await page.fill('input[placeholder="••••••••"]', smokePwd('staff'))
 await page.click('button.login-btn')
 await page.waitForTimeout(1500)
 await page.locator('.nav-item:has-text("报销填单")').click()

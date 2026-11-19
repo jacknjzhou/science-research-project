@@ -155,6 +155,15 @@ class Command(BaseCommand):
                 "非开发形态播种演示数据必须设置 ARK_SEED_PASSWORD，"
                 "不接受仓库内置的默认口令（admin/Admin@123456 等公开凭据）。"
             )
+        if env_pwd is not None:
+            from core.startup import DEFAULT_SEED_PASSWORDS
+
+            if env_pwd in DEFAULT_SEED_PASSWORDS:
+                raise CommandError(
+                    f"ARK_SEED_PASSWORD 不得是仓库内置的默认口令（含 Demo@123456）。"
+                )
+            if len(env_pwd) < 10:
+                raise CommandError("ARK_SEED_PASSWORD 至少 10 位。")
         return env_pwd
 
     def _rotate_password(self, user, override_pwd: str | None) -> bool:

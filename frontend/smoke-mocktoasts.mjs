@@ -3,6 +3,11 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+// E-8：演示口令不再写死在脚本里（部署方用 ARK_SEED_PASSWORD 指定）。
+const DEMO_PASSWORDS = {admin: 'Admin@123456', manager: 'Manager@123456',
+  staff: 'Staff@123456', finance: 'Finance@123456'};
+const smokePwd = (who) => process.env.ARK_SMOKE_PASSWORD || DEMO_PASSWORDS[who];
+
 // 冒烟：mock toast 落地（18 处假提示 → 真端点 / 真 UI / 诚实降级）
 // BASE_URL 可切换环境：默认 :8080（compose 全栈，mock 关）；mock 构建 preview 用 8090。
 const BASE = process.env.BASE_URL || 'http://localhost:8080'
@@ -50,7 +55,7 @@ const nav = (page, hash) => page.goto(BASE + hash)
 // =====================================================================
 console.log('\n[1] 报销填单（staff）· OCR 接 /invoices/ocr + 存草稿接 /expenses')
 {
-  const { ctx, page } = await login('staff', 'Staff@123456')
+  const { ctx, page } = await login('staff', smokePwd('staff'))
   await nav(page, '/#/expense')
   await page.waitForTimeout(2500)
 
@@ -101,7 +106,7 @@ console.log('\n[1] 报销填单（staff）· OCR 接 /invoices/ocr + 存草稿�
 // =====================================================================
 console.log('\n[2] 资产台账（admin）· 盘点导入接 dataio 底座')
 {
-  const { ctx, page } = await login('admin', 'Admin@123456')
+  const { ctx, page } = await login('admin', smokePwd('admin'))
   await nav(page, '/#/asset')
   await page.waitForTimeout(2500)
   const btn = page.locator('button:has-text("盘点导入")')
@@ -130,7 +135,7 @@ console.log('\n[2] 资产台账（admin）· 盘点导入接 dataio 底座')
 // =====================================================================
 console.log('\n[3] 我的项目（staff）· CLOSED 归档项目可正常打开')
 {
-  const { ctx, page } = await login('staff', 'Staff@123456')
+  const { ctx, page } = await login('staff', smokePwd('staff'))
   await nav(page, '/#/projects')
   await page.waitForTimeout(2500)
   const closed = page.locator('.proj-card, .card', { hasText: /CLOSED|已结题|结题/ }).first()
@@ -148,7 +153,7 @@ console.log('\n[3] 我的项目（staff）· CLOSED 归档项目可正常打开'
 // =====================================================================
 console.log('\n[4] 成果认领（staff）· 展开全部做实 + 仲裁诚实降级')
 {
-  const { ctx, page } = await login('staff', 'Staff@123456')
+  const { ctx, page } = await login('staff', smokePwd('staff'))
   await nav(page, '/#/claim')
   await page.waitForTimeout(2500)
 
@@ -177,7 +182,7 @@ console.log('\n[4] 成果认领（staff）· 展开全部做实 + 仲裁诚实�
 // =====================================================================
 console.log('\n[5] 申报指南（staff）· 订阅推送 / 附件下载诚实降级')
 {
-  const { ctx, page } = await login('staff', 'Staff@123456')
+  const { ctx, page } = await login('staff', smokePwd('staff'))
   await nav(page, '/#/guide')
   await page.waitForTimeout(2500)
   const sub = page.locator('button:has-text("订阅推送")')
@@ -201,7 +206,7 @@ console.log('\n[5] 申报指南（staff）· 订阅推送 / 附件下载诚实�
 // =====================================================================
 console.log('\n[6] 申报书撰写（staff）· 看热点接 AI 真流程 / 条款原文 / 附件预览降级')
 {
-  const { ctx, page } = await login('staff', 'Staff@123456')
+  const { ctx, page } = await login('staff', smokePwd('staff'))
   await nav(page, '/#/editor')
   await page.waitForTimeout(3000)
 
@@ -235,7 +240,7 @@ console.log('\n[6] 申报书撰写（staff）· 看热点接 AI 真流程 / 条�
 // =====================================================================
 console.log('\n[7] 转化看板（manager）· 披露详情 / 推介材料 / 修订建议诚实降级')
 {
-  const { ctx, page } = await login('manager', 'Manager@123456')
+  const { ctx, page } = await login('manager', smokePwd('manager'))
   await nav(page, '/#/transfer')
   await page.waitForTimeout(2500)
   const checks = [
@@ -258,7 +263,7 @@ console.log('\n[7] 转化看板（manager）· 披露详情 / 推介材料 / 修
 // =====================================================================
 console.log('\n[8] 采购合同（finance）· 修订建议诚实降级')
 {
-  const { ctx, page } = await login('finance', 'Finance@123456')
+  const { ctx, page } = await login('finance', smokePwd('finance'))
   await nav(page, '/#/procurement')
   await page.waitForTimeout(2500)
   const rev = page.locator('text=查看修订')
@@ -274,7 +279,7 @@ console.log('\n[8] 采购合同（finance）· 修订建议诚实降级')
 // =====================================================================
 console.log('\n[9] PI 画像（manager）· 导出简历诚实降级')
 {
-  const { ctx, page } = await login('manager', 'Manager@123456')
+  const { ctx, page } = await login('manager', smokePwd('manager'))
   await nav(page, '/#/portrait')
   await page.waitForTimeout(2500)
   const exp = page.locator('button:has-text("导出简历")')
@@ -290,7 +295,7 @@ console.log('\n[9] PI 画像（manager）· 导出简历诚实降级')
 // =====================================================================
 console.log('\n[10] 评审工作台（manager）· 暂存 / 高亮对比诚实降级')
 {
-  const { ctx, page } = await login('manager', 'Manager@123456')
+  const { ctx, page } = await login('manager', smokePwd('manager'))
   await nav(page, '/#/review')
   await page.waitForTimeout(2500)
   const draft = page.locator('button:has-text("暂存")').first()

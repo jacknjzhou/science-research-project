@@ -2,6 +2,11 @@
 // Contract assertions: money fields are strings, camelCase keys present (design/03).
 import { chromium } from 'playwright'
 
+// E-8：演示口令不再写死在脚本里（部署方用 ARK_SEED_PASSWORD 指定）。
+const DEMO_PASSWORDS = {admin: 'Admin@123456', manager: 'Manager@123456',
+  staff: 'Staff@123456', finance: 'Finance@123456'};
+const smokePwd = (who) => process.env.ARK_SMOKE_PASSWORD || DEMO_PASSWORDS[who];
+
 const BASE = 'http://localhost:5199'
 const results = []
 const ok = (name, cond, extra = '') => { results.push(`${cond ? 'PASS' : 'FAIL'} ${name}${extra ? ' — ' + extra : ''}`) }
@@ -16,7 +21,7 @@ page.on('pageerror', (e) => results.push(`PAGEERROR ${e.message.slice(0, 160)}`)
 // 1) login as manager (mock override: any password放行, manager = R-MANAGER)
 await page.goto(`${BASE}/#/dash?needLogin=1`, { waitUntil: 'networkidle' })
 await page.fill('#loginScreen input[placeholder="请输入登录账号"]', 'manager')
-await page.fill('#loginScreen input[type="password"]', 'Manager@123456')
+await page.fill('#loginScreen input[type="password"]', smokePwd('manager'))
 await page.click('#loginScreen .login-btn')
 await page.waitForTimeout(1500)
 ok('login manager', !(await page.locator('#loginScreen.on').count()))

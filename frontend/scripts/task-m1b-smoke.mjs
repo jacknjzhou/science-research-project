@@ -6,10 +6,15 @@
 // 注意：page.evaluate 内无法引用外部变量，探针统一从 localStorage(ark_token) 取 token 带 Authorization。
 import { chromium } from 'playwright'
 
+// E-8：演示口令不再写死在脚本里（部署方用 ARK_SEED_PASSWORD 指定）。
+const DEMO_PASSWORDS = {admin: 'Admin@123456', manager: 'Manager@123456',
+  staff: 'Staff@123456', finance: 'Finance@123456'};
+const smokePwd = (who) => process.env.ARK_SMOKE_PASSWORD || DEMO_PASSWORDS[who];
+
 const BASE = 'http://localhost:5199'
 const REAL = process.env.SMOKE_REAL === '1'
 const LOGIN_USER = REAL ? 'finance' : 'manager'
-const LOGIN_PASS = REAL ? 'Finance@123456' : 'Manager@123456'
+const LOGIN_PASS = REAL ? smokePwd('finance') : smokePwd('manager')
 const results = []
 const ok = (name, cond, extra = '') => { results.push(`${cond ? 'PASS' : 'FAIL'} ${name}${extra ? ' — ' + extra : ''}`) }
 

@@ -1,5 +1,10 @@
 import { chromium } from 'playwright'
 
+// E-8：演示口令不再写死在脚本里（部署方用 ARK_SEED_PASSWORD 指定）。
+const DEMO_PASSWORDS = {admin: 'Admin@123456', manager: 'Manager@123456',
+  staff: 'Staff@123456', finance: 'Finance@123456'};
+const smokePwd = (who) => process.env.ARK_SMOKE_PASSWORD || DEMO_PASSWORDS[who];
+
 // 冒烟：经费配置页（plan 2026-10-16-funding-config Phase 3）
 // ① manager 菜单含「经费配置」→ 进入 → 新增子科目 → 树上出现
 // ② 新建预算（2 行科目明细）→ 列表 DRAFT → 提交
@@ -26,7 +31,7 @@ async function menuHas(label) {
 }
 
 console.log('① manager：菜单/进入/建子科目')
-await login('manager', 'Manager@123456')
+await login('manager', smokePwd('manager'))
 if (!(await menuHas('经费配置'))) fail('manager 菜单缺「经费配置」')
 else ok('manager 菜单含「经费配置」（矩阵种子生效）')
 await page.locator('.nav-item:has-text("经费配置")').click()
@@ -52,7 +57,7 @@ const cntBefore = await page.locator('tr:has(button:has-text("水位"))').count(
 
 // 幂等：撞 uk_budget_project_ver 前先经 API 选一个尚无预算的项目
 const be = 'http://localhost:8787/api/v1'
-const mtok = (await (await fetch(`${be}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'manager', password: 'Manager@123456' }) })).json()).data.access_token
+const mtok = (await (await fetch(`${be}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'manager', password: smokePwd('manager') }) })).json()).data.access_token
 const h = { Authorization: `Bearer ${mtok}` }
 const budgeted = new Set(((await (await fetch(`${be}/budgets?size=100`, { headers: h })).json()).data.list || []).map((b) => b.project_id))
 const mine = ((await (await fetch(`${be}/project/mine?size=50`, { headers: h })).json()).data.list || [])
@@ -88,7 +93,7 @@ if ((await draftBtn.count()) === 0) {
 
 console.log('③ finance：页面可见但只读')
 await page.evaluate(() => localStorage.removeItem('ark_token'))
-await login('finance', 'Finance@123456')
+await login('finance', smokePwd('finance'))
 if (!(await menuHas('经费配置'))) fail('finance 菜单缺「经费配置」（种子应含 R-FINANCE）')
 else ok('finance 菜单含「经费配置」（只读授权生效）')
 await page.locator('.nav-item:has-text("经费配置")').click()
@@ -99,7 +104,7 @@ else ok('finance 为只读态（无任何写按钮）')
 
 console.log('④ admin：RolesView 矩阵含 funding-config')
 await page.evaluate(() => localStorage.removeItem('ark_token'))
-await login('admin', 'Admin@123456')
+await login('admin', smokePwd('admin'))
 await page.goto(BASE + '/#/admin/roles')
 await page.waitForTimeout(1500)
 if ((await page.locator('td:has-text("funding-config")').count()) === 0) fail('矩阵缺 funding-config 行')

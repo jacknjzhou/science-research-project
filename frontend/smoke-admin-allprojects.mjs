@@ -1,5 +1,10 @@
 // 冒烟：管理员全量视角——admin 的「项目」列表应显示全部项目，staff 仅显示自己为 PI 的项目
 import { chromium } from 'playwright'
+
+// E-8：演示口令不再写死在脚本里（部署方用 ARK_SEED_PASSWORD 指定）。
+const DEMO_PASSWORDS = {admin: 'Admin@123456', manager: 'Manager@123456',
+  staff: 'Staff@123456', finance: 'Finance@123456'};
+const smokePwd = (who) => process.env.ARK_SMOKE_PASSWORD || DEMO_PASSWORDS[who];
 const BASE = 'http://localhost:8080'
 const fails = []
 const ok = (m) => console.log('  ✓', m)
@@ -31,7 +36,7 @@ async function apiTotal() {
 }
 
 console.log('① staff：我的项目 = PI 视角')
-await login('staff', 'Staff@123456')
+await login('staff', smokePwd('staff'))
 await goProjects()
 const staffTitle = (await page.locator('.page-title').innerText().catch(() => '')).replace(/\s/g, '')
 console.log(`  staff 页面标题: "${staffTitle}"`)
@@ -40,7 +45,7 @@ console.log(`  staff API total = ${staffApi}`)
 
 await logout()
 console.log('② admin：全部项目 = 全库')
-await login('admin', 'Admin@123456')
+await login('admin', smokePwd('admin'))
 await goProjects()
 const adminTitle = (await page.locator('.page-title').innerText().catch(() => '')).replace(/\s/g, '')
 console.log(`  admin 页面标题: "${adminTitle}", 含「全部」: ${adminTitle.includes('全部')}`)

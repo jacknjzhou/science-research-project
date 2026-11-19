@@ -44,7 +44,7 @@ assert all("password_hash" not in u for u in d["data"]["list"]), "泄漏口令"
 print("users:", names)'
 
 echo "[5/5] 越权：R-STAFF 访问 admin 列表应 HTTP 403"
-STAFF_TOKEN=$(login staff 'Staff@123456')
+STAFF_TOKEN=$(login "${ARK_SMOKE_STAFF_USER:-staff}" "${ARK_SMOKE_STAFF_PASSWORD:?请先 export ARK_SMOKE_STAFF_PASSWORD=...（staff 账号口令，不回落到仓库默认值）}")
 code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/v1/admin/users" -H "Authorization: Bearer $STAFF_TOKEN")
 [ "$code" = "403" ] || { echo "期望 403，实得 $code"; exit 1; }
 
