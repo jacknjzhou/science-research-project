@@ -1007,7 +1007,9 @@ def attach_project_category(request: HttpRequest, id: int):
     category_id = body.get("category_id")
     if category_id is None:
         raise ApiError(400, CODE_BAD_REQUEST, "category_id 必填")
-    n = EProject.objects.filter(id=id, deleted=0).update(category_id=category_id, updated_at=dj_tz.now())
+    # E-7 r4 C-2：按租户更新，否则可改他租户项目分类
+    n = EProject.objects.filter(id=id, tenant_id=d.tenant_id, deleted=0).update(
+        category_id=category_id, updated_at=dj_tz.now())
     if n == 0:
         raise ApiError(404, CODE_NOT_FOUND, "项目不存在")
     return ok(request, {"id": id, "category_id": category_id})

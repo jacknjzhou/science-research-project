@@ -48,8 +48,28 @@ def _now():
     return dj_tz.now()
 
 
-def _get_staff_or_404(sid: int) -> SStaff:
-    s = SStaff.objects.filter(id=sid, deleted=0).first()
+def _get_team_or_404(request: HttpRequest, tid: int) -> STeam:
+    """按租户取团队（E-7 r4 C-5）。"""
+    t = STeam.objects.filter(
+        id=tid, tenant_id=domain_from(request).tenant_id, deleted=0).first()
+    if t is None:
+        raise ApiError(404, CODE_NOT_FOUND, "团队不存在")
+    return t
+
+
+def _get_visitor_or_404(request: HttpRequest, vid: int) -> SVisitor:
+    """按租户取访客记录（E-7 r4 C-5）。"""
+    v = SVisitor.objects.filter(
+        id=vid, tenant_id=domain_from(request).tenant_id, deleted=0).first()
+    if v is None:
+        raise ApiError(404, CODE_NOT_FOUND, "访客记录不存在")
+    return v
+
+
+def _get_staff_or_404(request: HttpRequest, sid: int) -> SStaff:
+    """按租户取人员档案（E-7 r4）：此前裸主键，可改他租户员工状态/塞团队。"""
+    s = SStaff.objects.filter(
+        id=sid, tenant_id=domain_from(request).tenant_id, deleted=0).first()
     if s is None:
         raise ApiError(404, CODE_NOT_FOUND, "人员档案不存在")
     return s
@@ -185,7 +205,7 @@ def update_my_research(request: HttpRequest):
 
 
 def get_staff(request: HttpRequest, id: int):
-    s = _get_staff_or_404(id)
+    s = _get_staff_or_404(request, id)
     return ok(request, to_api_staff(s, detail=True))
 
 
@@ -197,7 +217,7 @@ TRANSFER_ACTIONS = {"RESIGN", "RETIRE", "TRANSFER_DEPT", "REHIRE", "LEAVE"}
 def transfer_staff(request: HttpRequest, id: int):
     """异动/离职交接（S-10）：employment_status 迁移 + leave_date + PI 交接。"""
     dom = domain_from(request)
-    s = _get_staff_or_404(id)
+    s = _get_staff_or_404(request, id)
     b = read_json(request)
     action = b.get("action")
     if action not in TRANSFER_ACTIONS:
@@ -223,7 +243,7 @@ def transfer_staff(request: HttpRequest, id: int):
 
 
 def get_portrait(request: HttpRequest, id: int):
-    s = _get_staff_or_404(id)
+    s = _get_staff_or_404(request, id)
     p = SPortrait.objects.filter(staff=s, deleted=0).order_by("-snapshot_date").first()
     if p is None:
         raise ApiError(404, CODE_NOT_FOUND, "暂无画像快照（先触发刷新）")
@@ -254,7 +274,7 @@ def get_portrait(request: HttpRequest, id: int):
 def refresh_portrait(request: HttpRequest, id: int):
     """画像刷新：确定性聚合（项目 pi/成果 authors/学生导师数），人日唯一 upsert。"""
     dom = domain_from(request)
-    s = _get_staff_or_404(id)
+    s = _get_staff_or_404(request, id)
     uid = s.user_id
     from apps.project.models import EProject
     from apps.output.models import ROutput
@@ -296,7 +316,7 @@ def refresh_portrait(request: HttpRequest, id: int):
 
 def get_collab_graph(request: HttpRequest, id: int):
     """S-14 合作网络：时间切片（snapshot_date 参数，缺省最新切片）。"""
-    s = _get_staff_or_404(id)
+    s = _get_staff_or_404(request, id)
     qs = SCollabGraph.objects.filter(tenant_id=domain_from(request).tenant_id, deleted=0)
     if v := request.GET.get("snapshot_date"):
         qs = qs.filter(snapshot_date=_parse_date(v))
@@ -334,7 +354,7 @@ def get_collab_graph(request: HttpRequest, id: int):
 @transaction.atomic
 def ai_expertise(request: HttpRequest, id: int):
     """S-05 AI 方向标签：确定性从自建标签+bio 关键词聚合（LLM 增强由 svc-ai 承接）。"""
-    s = _get_staff_or_404(id)
+    s = _get_staff_or_404(request, id)
     b = read_json_soft(request)
     incremental = bool(b.get("incremental", True))
     max_tags = int(b.get("max_tags") or 8)
@@ -362,7 +382,7 @@ def ai_expertise(request: HttpRequest, id: int):
 @transaction.atomic
 def ai_resume(request: HttpRequest, id: int):
     """S-05 AI 学术简历：从档案+画像+人才计划确定性导出（PDF/DOCX 由模板引擎套打）。"""
-    s = _get_staff_or_404(id)
+    s = _get_staff_or_404(request, id)
     b = read_json(request)
     fmt = b.get("format") or "PDF"
     portrait = SPortrait.objects.filter(staff=s, deleted=0).order_by("-snapshot_date").first()
@@ -436,7 +456,7 @@ def create_team(request: HttpRequest):
         raise ApiError(400, CODE_BAD_REQUEST, "name 必填")
     pi_staff = None
     if b.get("pi_staff_id"):
-        pi_staff = _get_staff_or_404(int(b["pi_staff_id"]))
+        pi_staff = _get_staff_or_404(request, int(b["pi_staff_id"]))
         if not pi_staff.is_pi:
             pi_staff.is_pi = True
             pi_staff.save(update_fields=["is_pi", "updated_at"])
@@ -461,9 +481,7 @@ def create_team(request: HttpRequest):
 
 
 def get_team(request: HttpRequest, id: int):
-    t = STeam.objects.filter(id=id, deleted=0).first()
-    if t is None:
-        raise ApiError(404, CODE_NOT_FOUND, "团队不存在")
+    t = _get_team_or_404(request, id)
     members = SMembership.objects.filter(team=t, deleted=0).order_by("joined_at")
     return ok(request, {
         "id": t.id, "code": t.code, "name": t.name, "team_type": t.team_type,
@@ -480,9 +498,7 @@ def get_team(request: HttpRequest, id: int):
 
 
 def list_team_members(request: HttpRequest, id: int):
-    t = STeam.objects.filter(id=id, deleted=0).first()
-    if t is None:
-        raise ApiError(404, CODE_NOT_FOUND, "团队不存在")
+    t = _get_team_or_404(request, id)
     only_active = request.GET.get("include_left") not in ("true", "1")
     qs = SMembership.objects.filter(team=t, deleted=0)
     if only_active:
@@ -499,13 +515,11 @@ def list_team_members(request: HttpRequest, id: int):
 @transaction.atomic
 def add_team_member(request: HttpRequest, id: int):
     dom = domain_from(request)
-    t = STeam.objects.filter(id=id, deleted=0).first()
-    if t is None:
-        raise ApiError(404, CODE_NOT_FOUND, "团队不存在")
+    t = _get_team_or_404(request, id)
     b = read_json(request)
     if not b.get("staff_id") or b.get("role") not in MEMBER_ROLES:
         raise ApiError(400, CODE_BAD_REQUEST, "staff_id 与 role(LEADER/CORE/MEMBER/STUDENT/VISITOR) 必填")
-    s = _get_staff_or_404(int(b["staff_id"]))
+    s = _get_staff_or_404(request, int(b["staff_id"]))
     if SMembership.objects.filter(team=t, staff=s, deleted=0, left_at__isnull=True).exists():
         raise ApiError(409, CODE_CONFLICT, "成员已在册（同团队在册唯一）")
     m = SMembership.objects.create(
@@ -522,9 +536,7 @@ def add_team_member(request: HttpRequest, id: int):
 @transaction.atomic
 def remove_team_member(request: HttpRequest, id: int):
     dom = domain_from(request)
-    t = STeam.objects.filter(id=id, deleted=0).first()
-    if t is None:
-        raise ApiError(404, CODE_NOT_FOUND, "团队不存在")
+    t = _get_team_or_404(request, id)
     b = read_json(request)
     if not b.get("staff_id"):
         raise ApiError(400, CODE_BAD_REQUEST, "staff_id 必填")
@@ -645,7 +657,7 @@ def register_student(request: HttpRequest):
     for k in ("name", "student_type", "supervisor_staff_id"):
         if b.get(k) is None:
             raise ApiError(400, CODE_BAD_REQUEST, f"{k} 必填")
-    supervisor = _get_staff_or_404(int(b["supervisor_staff_id"]))
+    supervisor = _get_staff_or_404(request, int(b["supervisor_staff_id"]))
     staff = SStaff.objects.create(
         tenant_id=dom.tenant_id, creator_id=dom.user_id,
         user_id=b.get("user_id") or 0, hr_code=b.get("hr_code") or f"STU-{time.time_ns() % 10**8}",
@@ -666,7 +678,7 @@ def register_student(request: HttpRequest):
 
 def list_talent_plans(request: HttpRequest, id: int):
     """S-12 人才计划与称号（画像时间轴数据源）。"""
-    s = _get_staff_or_404(id)
+    s = _get_staff_or_404(request, id)
     qs = STalentPlan.objects.filter(staff=s, deleted=0).order_by("-awarded_year")
     if v := request.GET.get("status"):
         qs = qs.filter(status=v)

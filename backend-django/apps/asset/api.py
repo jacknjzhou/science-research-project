@@ -74,8 +74,10 @@ def _gen_code(prefix: str, tenant_id: int, model, digits: int = 6) -> str:
     return f"{prefix}-{y}-{seq:0{digits}d}"
 
 
-def _get_asset_or_404(aid: int) -> AAsset:
-    a = AAsset.objects.filter(id=aid, deleted=0).first()
+def _get_asset_or_404(request: HttpRequest, aid: int) -> AAsset:
+    """按租户取资产（E-7 r4）：此前裸主键，可跨租户领用/处置资产。"""
+    a = AAsset.objects.filter(
+        id=aid, tenant_id=domain_from(request).tenant_id, deleted=0).first()
     if a is None:
         raise ApiError(404, CODE_NOT_FOUND, "资产不存在")
     return a
@@ -275,7 +277,7 @@ def _txn_event(t: AStockTxn) -> dict:
 
 
 def lifecycle(request: HttpRequest, id: int):
-    a = _get_asset_or_404(id)
+    a = _get_asset_or_404(request, id)
     events = [{"stage": "REGISTER", "refType": "A_ASSET", "refId": a.id,
                "actorId": a.creator_id, "at": a.created_at.isoformat(),
                "detail": {"code": a.code, "sourceType": a.source_type}}]
@@ -298,7 +300,7 @@ def lifecycle(request: HttpRequest, id: int):
 
 def trace(request: HttpRequest, id: int):
     """端到端追溯（→E-17）：申报→招标→订单→资产 链节点。"""
-    a = _get_asset_or_404(id)
+    a = _get_asset_or_404(request, id)
     nodes = [{"nodeSeq": 1, "objectType": "A_ASSET", "objectId": a.id, "bizCode": a.code,
               "action": "REGISTER", "occurredAt": a.created_at.isoformat()}]
     seq = 1
@@ -345,7 +347,7 @@ def _asset_txn(dom, a: AAsset, typ: str, b: dict, operator_id: int, status="ISSU
 @transaction.atomic
 def issue_asset(request: HttpRequest, id: int):
     dom = domain_from(request)
-    a = _get_asset_or_404(id)
+    a = _get_asset_or_404(request, id)
     if a.status not in ("IN_USE", "IDLE"):
         raise ApiError(409, CODE_CONFLICT, f"领用状态机冲突：当前 {a.status}（待验收确认不可领用）")
     b = read_json(request)
@@ -370,7 +372,7 @@ def issue_asset(request: HttpRequest, id: int):
 @transaction.atomic
 def return_asset(request: HttpRequest, id: int):
     dom = domain_from(request)
-    a = _get_asset_or_404(id)
+    a = _get_asset_or_404(request, id)
     if a.status != "IN_USE":
         raise ApiError(409, CODE_CONFLICT, f"归还状态机冲突：当前 {a.status}")
     b = read_json_soft(request)
@@ -391,7 +393,7 @@ def return_asset(request: HttpRequest, id: int):
 def transfer_asset(request: HttpRequest, id: int):
     """调拨：涉密资产须保密审查单（联动 11），否则 403；调拨落地置 IN_USE。"""
     dom = domain_from(request)
-    a = _get_asset_or_404(id)
+    a = _get_asset_or_404(request, id)
     if a.status in ("PENDING_DISPOSE", "DISPOSED"):
         raise ApiError(409, CODE_CONFLICT, f"调拨状态机冲突：当前 {a.status}")
     b = read_json(request)
@@ -644,7 +646,8 @@ def voucher_callback(request: HttpRequest):
     for item in b["items"]:
         if not item.get("depreciationId") or not item.get("voucherId"):
             continue
-        d = ADepreciation.objects.filter(id=int(item["depreciationId"]), deleted=0).first()
+        d = ADepreciation.objects.filter(
+            id=int(item["depreciationId"]), tenant_id=dom.tenant_id, deleted=0).first()
         if d is None:
             continue
         d.voucher_id = int(item["voucherId"])
@@ -678,7 +681,7 @@ def _api_disposal(dp: ADisposal) -> dict:
 def create_disposal(request: HttpRequest, id: int):
     """处置发起（A-10）：残值>原值或为负 → finance_review 标记转财务复核。"""
     dom = domain_from(request)
-    a = _get_asset_or_404(id)
+    a = _get_asset_or_404(request, id)
     if a.status in ("PENDING_DISPOSE", "DISPOSED"):
         raise ApiError(409, CODE_CONFLICT, f"处置状态机冲突：当前 {a.status}")
     b = read_json(request)
@@ -773,7 +776,7 @@ def submit_inventory(request: HttpRequest):
 @transaction.atomic
 def ai_fill(request: HttpRequest, id: int):
     """A-15：读取发票/合同预填建议（降级：从既有卡与 G-13 解析结果回填建议）。"""
-    a = _get_asset_or_404(id)
+    a = _get_asset_or_404(request, id)
     read_json_soft(request)
     suggestions = {k: v for k, v in {
         "brand": a.brand, "model": a.model, "serialNo": a.serial_no,

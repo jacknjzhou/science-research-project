@@ -422,13 +422,38 @@ def submit_amendment(request: HttpRequest, id: int):
     return ok(request, to_api_amendment(a))
 
 
+def _get_amendment_or_404(request: HttpRequest, aid: int) -> CAmendment:
+    """按租户取修正案（E-7 r4 C-1）：此前裸主键，可跨租户决定他租户修正案。"""
+    a = CAmendment.objects.filter(
+        id=aid, tenant_id=domain_from(request).tenant_id, deleted=0).first()
+    if a is None:
+        raise ApiError(404, CODE_NOT_FOUND, "修正案不存在")
+    return a
+
+
+def _get_integrity_or_404(request: HttpRequest, rid: int) -> CIntegrityRecord:
+    """按租户取诚信档案（E-7 r4）。"""
+    r = CIntegrityRecord.objects.filter(
+        id=rid, tenant_id=domain_from(request).tenant_id, deleted=0).first()
+    if r is None:
+        raise ApiError(404, CODE_NOT_FOUND, "诚信档案不存在")
+    return r
+
+
+def _get_hgr_or_404(request: HttpRequest, fid: int) -> CHgrFiling:
+    """按租户取人遗备案（E-7 r4）。"""
+    f = CHgrFiling.objects.filter(
+        id=fid, tenant_id=domain_from(request).tenant_id, deleted=0).first()
+    if f is None:
+        raise ApiError(404, CODE_NOT_FOUND, "人遗备案不存在")
+    return f
+
+
 @validate_body(AmendmentDecisionIn)
 @transaction.atomic
 def decide_amendment(request: HttpRequest, id: int):
     dom = domain_from(request)
-    a = CAmendment.objects.filter(id=id, deleted=0).first()
-    if a is None:
-        raise ApiError(404, CODE_NOT_FOUND, "修正案不存在")
+    a = _get_amendment_or_404(request, id)
     if a.status != "SUBMITTED":
         raise ApiError(409, CODE_CONFLICT, f"修正案决定状态机冲突：当前 {a.status}")
     b = read_json(request)
@@ -583,9 +608,7 @@ def create_integrity_record(request: HttpRequest):
 
 def get_integrity_record(request: HttpRequest, id: int):
     dom = domain_from(request)
-    r = CIntegrityRecord.objects.filter(id=id, deleted=0).first()
-    if r is None:
-        raise ApiError(404, CODE_NOT_FOUND, "失信档案不存在")
+    r = _get_integrity_or_404(request, id)
     if not (set(dom.roles) & AUDITOR_ROLES) and r.user_id != dom.user_id:
         raise ApiError(403, 40301, "仅纪检或本人可查")
     return ok(request, to_api_integrity(r))
@@ -596,9 +619,7 @@ def get_integrity_record(request: HttpRequest, id: int):
 def update_integrity_record(request: HttpRequest, id: int):
     """更新调查结论/处分/申诉裁定（纪检）。"""
     dom = domain_from(request)
-    r = CIntegrityRecord.objects.filter(id=id, deleted=0).first()
-    if r is None:
-        raise ApiError(404, CODE_NOT_FOUND, "失信档案不存在")
+    r = _get_integrity_or_404(request, id)
     b = read_json(request)
     for k in ("decision", "sanction", "event_type", "investigation", "evidence"):
         if b.get(k) is not None:
@@ -629,9 +650,7 @@ def update_integrity_record(request: HttpRequest, id: int):
 def appeal_integrity_record(request: HttpRequest, id: int):
     """本人申诉（独立流程，PRD §11）；申诉期内冻结处分生效。"""
     dom = domain_from(request)
-    r = CIntegrityRecord.objects.filter(id=id, deleted=0).first()
-    if r is None:
-        raise ApiError(404, CODE_NOT_FOUND, "失信档案不存在")
+    r = _get_integrity_or_404(request, id)
     if r.user_id != dom.user_id:
         raise ApiError(403, 40301, "仅被记录人本人可申诉")
     b = read_json(request)
@@ -695,9 +714,7 @@ def list_misconduct_scans(request: HttpRequest):
 def delete_integrity_record(request: HttpRequest, id: int):
     """软删（纪检）；已有申诉的在档记录不可删。"""
     dom = domain_from(request)
-    r = CIntegrityRecord.objects.filter(id=id, deleted=0).first()
-    if r is None:
-        raise ApiError(404, CODE_NOT_FOUND, "失信档案不存在")
+    r = _get_integrity_or_404(request, id)
     if r.appeal_status in ("FILED", "REVIEWING"):
         raise ApiError(409, CODE_CONFLICT, "申诉处理中的档案不可删除")
     r.deleted = 1
@@ -750,9 +767,7 @@ def create_hgr_filing(request: HttpRequest):
 def sync_hgr_filing(request: HttpRequest, id: int):
     """对接国家人遗系统同步（svc-integration 承接；此处确定性模拟回执）。"""
     dom = domain_from(request)
-    f = CHgrFiling.objects.filter(id=id, deleted=0).first()
-    if f is None:
-        raise ApiError(404, CODE_NOT_FOUND, "备案记录不存在")
+    f = _get_hgr_or_404(request, id)
     if f.status not in ("DRAFT", "SUBMITTED", "NATIONAL_RECEIVED"):
         raise ApiError(409, CODE_CONFLICT, f"同步状态机冲突：当前 {f.status}")
     f.status = "NATIONAL_RECEIVED"

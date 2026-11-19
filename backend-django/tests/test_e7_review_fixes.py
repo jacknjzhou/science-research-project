@@ -413,3 +413,115 @@ def test_public_publicity_hides_handle_result(db):
     body = r.content.decode()
     assert "张三丰" not in body and "13800000000" not in body
     assert _json(r)["data"]["objections"][0]["handle_result"] is None
+
+
+# --- R4-C 收口：修正案/团队/资产/纪检档案跨租户一律 404 ----------------------
+def _foreign_case(tenant_id: int = 2, code: str = "ETH-2026-000199"):
+    from apps.ethics.models import CEthicsCase
+
+    return CEthicsCase.objects.create(
+        tenant_id=tenant_id, creator_id=1, code=code, protocol_title="他租户案卷",
+        applicant_user_id=1, review_type="HUMAN", status="SUBMITTED",
+    )
+
+
+def test_ethics_amendment_decision_is_tenant_scoped(seed_auth):
+    from apps.ethics.models import CAmendment
+
+    case = _foreign_case()
+    a = CAmendment.objects.create(
+        tenant_id=2, creator_id=1, case=case, change_summary="扩大样本量",
+        status="SUBMITTED",
+    )
+    r = Client().post(f"/api/v1/ethics/amendment/{a.id}/decision", data=json.dumps({
+        "decision": "APPROVE",
+    }), content_type="application/json", **bearer(1, ["R-ETHICS"], tenant_id=1))
+    assert r.status_code == 404, r.content.decode()
+    a.refresh_from_db()
+    assert a.status == "SUBMITTED", "他租户修正案不得被决定"
+
+
+def test_ethics_integrity_update_is_tenant_scoped(seed_auth):
+    from apps.ethics.models import CIntegrityRecord
+
+    rec = CIntegrityRecord.objects.create(
+        tenant_id=2, creator_id=1, user_id=99, event_type="PLAGIARISM",
+        event_type_code="PLAGIARISM", decision="原结论",
+    )
+    r = Client().put(f"/api/v1/integrity/records/{rec.id}", data=json.dumps({
+        "decision": "跨租户改写",
+    }), content_type="application/json", **bearer(1, ["R-AUDITOR"], tenant_id=1))
+    assert r.status_code == 404, r.content.decode()
+    rec.refresh_from_db()
+    assert rec.decision == "原结论"
+
+
+def test_project_category_attach_is_tenant_scoped(seed_auth):
+    prj = _project(tenant_id=2, code="PRJ-E7-CAT")
+    r = Client().post(f"/api/v1/projects/{prj.id}/category", data=json.dumps({
+        "category_id": 5,
+    }), content_type="application/json", **bearer(1, ["R-STAFF"], tenant_id=1))
+    assert r.status_code == 404, r.content.decode()
+    prj.refresh_from_db()
+    assert prj.category_id is None, "他租户项目分类不得被改写"
+
+
+def test_output_link_projects_is_tenant_scoped(seed_auth):
+    from apps.output.models import ROutput
+
+    o = ROutput.objects.create(tenant_id=2, creator_id=1, title="他租户成果",
+                               status="ASSIGNED_TO_PROJECT")
+    r = Client().put(f"/api/v1/output/{o.id}/projects", data=json.dumps({
+        "project_ids": [1],
+    }), content_type="application/json", **bearer(1, ["R-MANAGER"], tenant_id=1))
+    assert r.status_code == 404, r.content.decode()
+    o.refresh_from_db()
+    assert o.status == "ASSIGNED_TO_PROJECT"
+
+
+def test_staff_transfer_is_tenant_scoped(seed_auth):
+    from apps.staff.models import SStaff
+
+    s = SStaff.objects.create(
+        tenant_id=2, creator_id=1, name="他租户员工", user_id=999,
+        hr_code="HR-S2-001", employment_status="ACTIVE", status="ACTIVE",
+        department_id=1,
+    )
+    r = Client().post(f"/api/v1/staff/{s.id}/transfer", data=json.dumps({
+        "action": "RESIGN", "reason": "跨租户",
+    }), content_type="application/json", **bearer(1, ["R-MANAGER"], tenant_id=1))
+    assert r.status_code == 404, r.content.decode()
+    s.refresh_from_db()
+    assert s.employment_status == "ACTIVE", "他租户员工不得被离职"
+
+
+def test_team_add_member_is_tenant_scoped(seed_auth):
+    from apps.staff.models import SStaff, STeam
+
+    own = SStaff.objects.create(
+        tenant_id=1, creator_id=1, name="本租户员工", user_id=1,
+        hr_code="HR-S1-001", employment_status="ACTIVE", status="ACTIVE",
+        department_id=1,
+    )
+    t = STeam.objects.create(tenant_id=2, creator_id=1, name="他租户团队", status="ACTIVE")
+    r = Client().post(f"/api/v1/teams/{t.id}/members", data=json.dumps({
+        "staff_id": own.id, "role": "MEMBER",
+    }), content_type="application/json", **bearer(1, ["R-MANAGER"], tenant_id=1))
+    assert r.status_code == 404, r.content.decode()
+    t.refresh_from_db()
+    assert own.id not in (t.member_ids or [])
+
+
+def test_asset_issue_is_tenant_scoped(seed_auth):
+    from apps.asset.models import AAsset
+
+    a = AAsset.objects.create(
+        tenant_id=2, creator_id=1, status="IDLE", category_code="DEVICE",
+        name="他租户设备", value=Decimal("1000.00"),
+    )
+    r = Client().post(f"/api/v1/asset/{a.id}/issue", data=json.dumps({
+        "projectId": 1, "custodianId": 1,
+    }), content_type="application/json", **bearer(1, ["R-STAFF"], tenant_id=1))
+    assert r.status_code == 404, r.content.decode()
+    a.refresh_from_db()
+    assert a.status == "IDLE", "他租户资产不得被领用"

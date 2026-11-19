@@ -89,8 +89,10 @@ def _parse_date(s):
     return None
 
 
-def _get_output_or_404(output_id: int) -> ROutput:
-    o = ROutput.objects.filter(id=output_id, deleted=0).first()
+def _get_output_or_404(request: HttpRequest, output_id: int) -> ROutput:
+    """按租户取成果（E-7 r4 C-3）：此前裸主键，4 个写入口可改他租户成果。"""
+    o = ROutput.objects.filter(
+        id=output_id, tenant_id=domain_from(request).tenant_id, deleted=0).first()
     if o is None:
         raise ApiError(404, CODE_NOT_FOUND, "成果不存在")
     return o
@@ -176,7 +178,7 @@ def list_pending_claim(request: HttpRequest):
 
 
 def get_output(request: HttpRequest, id: int):
-    return ok(request, to_api_output(_get_output_or_404(id)))
+    return ok(request, to_api_output(_get_output_or_404(request, id)))
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +268,7 @@ def mark_not_mine(request: HttpRequest):
 def link_projects(request: HttpRequest, id: int):
     """PUT /output/{id}/projects：全量替换关联集合 + CLAIMED→ASSIGNED_TO_PROJECT。"""
     d = domain_from(request)
-    o = _get_output_or_404(id)
+    o = _get_output_or_404(request, id)
     b = read_json(request)
     pids = b.get("project_ids")
     if not isinstance(pids, list):
@@ -291,7 +293,11 @@ def link_projects(request: HttpRequest, id: int):
 # ---------------------------------------------------------------------------
 
 def conclude_output_eval(output_id: int, passed: bool) -> None:
-    """ConcludeOutputEval：pass→ASSIGNED_TO_PROJECT+is_claimed=true；fail→REJECTED。"""
+    """ConcludeOutputEval：pass→ASSIGNED_TO_PROJECT+is_claimed=true；fail→REJECTED。
+
+    跨域回写入口（N 域评审结论回写成果状态）：**tenant 由调用方保证**——
+    调用方必须已按租户取出该成果，本函数不再重复校验。
+    """
     o = ROutput.objects.filter(id=output_id, deleted=0).first()
     if o is None:
         return
@@ -393,7 +399,7 @@ def create_reprint(request: HttpRequest, id: int):
     b = read_json(request)
     if not b.get("name"):
         raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
-    _get_output_or_404(id)
+    _get_output_or_404(request, id)
     rp = RPaperReprint.objects.create(
         tenant_id=d.tenant_id, output_id=id, name=b["name"], type=b.get("type"),
         reprint_date=_parse_date(b.get("reprint_date")), remark=b.get("remark"))
@@ -474,12 +480,12 @@ def ignore_push_item(request: HttpRequest, id: int):
 
 def set_patent_stage(request: HttpRequest, id: int):
     """仅允许按序 +1 或原地幂等。"""
-    _get_output_or_404(id)
+    _get_output_or_404(request, id)
     b = read_json(request)
     stage = b.get("stage")
     if stage not in STAGE_ORDER:
         raise ApiError(400, CODE_BAD_REQUEST, "stage 非法")
-    o = ROutput.objects.get(id=id)
+    o = ROutput.objects.get(id=id, tenant_id=domain_from(request).tenant_id)
     cur = STAGE_ORDER.get(o.stage, 0)
     if STAGE_ORDER[stage] != cur and STAGE_ORDER[stage] != cur + 1:
         raise ApiError(409, CODE_CONFLICT, f"阶段只能按序流转（当前 {o.stage}）")
@@ -490,7 +496,7 @@ def set_patent_stage(request: HttpRequest, id: int):
 
 def create_patent_fee(request: HttpRequest, id: int):
     d = domain_from(request)
-    _get_output_or_404(id)
+    _get_output_or_404(request, id)
     b = read_json(request)
     if not b.get("year") or not b.get("amount"):
         raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
