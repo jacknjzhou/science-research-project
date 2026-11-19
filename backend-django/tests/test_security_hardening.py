@@ -66,3 +66,66 @@ def test_dev_login_enabled_issues_minimal_roles(settings, monkeypatch):
     roles = claims.get("roles") or []
     assert roles == ["R-STAFF"]
     assert "R-MANAGER" not in roles
+
+
+# ---------------------------------------------------------------- E-1 N 域租户
+
+
+def _expert(tenant_id: int, name: str, status: str = "ACTIVE"):
+    from apps.expertreview.models import NExpert
+
+    return NExpert.objects.create(
+        tenant_id=tenant_id, creator_id=1, name=name, status=status,
+        source="INTERNAL", field_tags=[],
+    )
+
+
+def _task(tenant_id: int, title: str, status: str = "DRAFT"):
+    from apps.expertreview.models import NReviewTask
+
+    return NReviewTask.objects.create(
+        tenant_id=tenant_id, creator_id=1, biz_type="OTHER", title=title, status=status,
+    )
+
+
+def test_list_experts_is_tenant_scoped(seed_auth):
+    from tests.conftest import bearer
+
+    mine = _expert(1, "本租户专家")
+    other = _expert(2, "他租户专家")
+    r = Client().get("/api/v1/experts", **bearer(seed_auth["admin"].id, ["R-ADMIN"]))
+    assert r.status_code == 200
+    ids = [x["id"] for x in r.json()["data"]["list"]]
+    assert mine.id in ids
+    assert other.id not in ids
+
+
+def test_list_reviews_is_tenant_scoped(seed_auth):
+    from tests.conftest import bearer
+
+    mine = _task(1, "本租户评审")
+    other = _task(2, "他租户评审")
+    r = Client().get("/api/v1/reviews", **bearer(seed_auth["admin"].id, ["R-ADMIN"]))
+    assert r.status_code == 200
+    ids = [x["id"] for x in r.json()["data"]["list"]]
+    assert mine.id in ids
+    assert other.id not in ids
+
+
+def test_draw_experts_pool_is_tenant_scoped(seed_auth):
+    """只有他租户有 ACTIVE 专家时，本租户任务抽签不得抽到人。"""
+    from apps.expertreview.models import NReviewInvitation
+    from tests.conftest import bearer
+
+    t = _task(1, "本租户抽签", status="DRAFT")
+    _expert(2, "他租户唯一专家")
+    r = Client().post(
+        f"/api/v1/reviews/{t.id}/draw",
+        data=json.dumps({"plan_count": 2}),
+        content_type="application/json",
+        **bearer(seed_auth["admin"].id, ["R-ADMIN"]),
+    )
+    if r.status_code == 200:
+        assert NReviewInvitation.objects.filter(task_id=t.id).count() == 0
+    else:
+        assert r.status_code in (409, 422)

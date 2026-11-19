@@ -91,7 +91,7 @@ def _my_expert_or_403(d) -> NExpert:
 
 def list_experts(request: HttpRequest):
     page, size, limit, offset = page_args(request)
-    qs = NExpert.objects.filter(deleted=0)
+    qs = NExpert.objects.filter(tenant_id=domain_from(request).tenant_id, deleted=0)
     if v := request.GET.get("status"):
         qs = qs.filter(status=v)
     if v := request.GET.get("source"):
@@ -224,7 +224,7 @@ def _build_candidates(experts) -> list[dict]:
 
 def list_reviews(request: HttpRequest):
     page, size, limit, offset = page_args(request)
-    qs = NReviewTask.objects.filter(deleted=0)
+    qs = NReviewTask.objects.filter(tenant_id=domain_from(request).tenant_id, deleted=0)
     if v := request.GET.get("biz_type"):
         qs = qs.filter(biz_type=v)
     if v := request.GET.get("status"):
@@ -267,10 +267,13 @@ def cancel_review(request: HttpRequest, id: int):
 
 def draw_experts(request: HttpRequest, id: int):
     """回避过滤 + 确定性随机 → DRAFT→DRAWN；逐席位落 n_review_invitation。"""
-    t = _get_task_or_404(domain_from(request).tenant_id, id)
+    d = domain_from(request)
+    t = _get_task_or_404(d.tenant_id, id)
     b = read_json_soft(request)
     rule = t.draw_rule or {}
-    experts = list(NExpert.objects.filter(status="ACTIVE", deleted=0))
+    experts = list(
+        NExpert.objects.filter(tenant_id=d.tenant_id, status="ACTIVE", deleted=0)
+    )
     pool = _build_candidates(experts)
     n = b.get("plan_count") if isinstance(b, dict) else None
     if not n or n <= 0:
