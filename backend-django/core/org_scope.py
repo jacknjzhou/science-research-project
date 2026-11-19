@@ -42,33 +42,47 @@ def normalize_roles_for_account(roles: list[str] | None, user_source: str | None
     return codes
 
 
+_MISS = object()
+
+
+def _account_row(d):
+    """请求内一次性取 (org_id, user_source)，缓存在 Domain 上——单请求至多一次查询。
+
+    P 域一个 handler 里 `is_external_account`/`current_org_id` 常有 2-3 次判定，
+    不缓存就会把一个轻量查询放大成 3 次（终审 r3 关注点）。
+    """
+    cached = getattr(d, "_org_scope_row", _MISS)
+    if cached is not _MISS:
+        return cached
+    uid = getattr(d, "user_id", 0) or 0
+    row = None
+    if uid > 0:
+        from apps.sysadmin.models import SysUser
+
+        row = (
+            SysUser.objects.filter(id=uid, deleted=0)
+            .values_list("org_id", "user_source")
+            .first()
+        )
+    try:
+        setattr(d, "_org_scope_row", row)
+    except Exception:  # noqa: BLE001 —— 非 dataclass 宿主退化为不缓存
+        pass
+    return row
+
+
 def current_org_id(d) -> int | None:
     """当前用户所属外部机构 id；院内用户/无 org 返回 None。"""
-    uid = getattr(d, "user_id", 0) or 0
-    if uid <= 0:
-        return None
-    from apps.sysadmin.models import SysUser
-
-    return (
-        SysUser.objects.filter(id=uid, deleted=0)
-        .values_list("org_id", flat=True)
-        .first()
-    )
+    row = _account_row(d)
+    return None if row is None else row[0]
 
 
 def user_source_of(d) -> str | None:
     """当前账号的来源（INTERNAL/EXTERNAL）；无库内账号返回 None。"""
-    uid = getattr(d, "user_id", 0) or 0
-    if uid <= 0:
+    row = _account_row(d)
+    if row is None:
         return None
-    from apps.sysadmin.models import SysUser
-
-    src = (
-        SysUser.objects.filter(id=uid, deleted=0)
-        .values_list("user_source", flat=True)
-        .first()
-    )
-    return (src or "").upper() or None
+    return (row[1] or "").upper() or None
 
 
 def is_external_account(d) -> bool:
