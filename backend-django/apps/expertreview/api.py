@@ -238,8 +238,9 @@ def list_reviews(request: HttpRequest):
 def _assert_target_owned(tenant_id: int, biz_type: str | None, target_id: int | None) -> None:
     """回写目标归属校验（E-7 r5 C-2）：目标存在且属他租户 → 404；不存在则放行。
 
-    只在 HTTP 入口（create/invite/conclude）调用，保证 N 域不会把结论写到别家 E/R 表；
-    对象不存在时放行以兼容历史数据（真正被写坏的场景必然是「指向别人的行」）。
+    只在 HTTP 入口（create/invite/conclude）调用，保证 N 域不会把结论写到别家 E/R 表。
+    语义与 funding `_reject_foreign_ref` 一致：**仅拦「存在且属他租户」**，
+    `target_id` 不存在时放行（历史脏数据/未建档 id 兼容；写回端再按 tenant 过滤一次）。
     """
     if not target_id:
         return

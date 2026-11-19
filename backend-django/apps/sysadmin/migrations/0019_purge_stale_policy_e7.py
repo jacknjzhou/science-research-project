@@ -4,7 +4,8 @@
 早已在 CSV 里删掉的行会永久留在 DB（Casbin 运行时权威是 DB），等于给未来可能
 出现的 detail GET 预授权。
 
-**只删这两条已知下线的规则**，不做全表扫描：运行期通过管理界面自定义的
+**只删 STALE_POLICY 里列出的已知下线规则**（当前 1 条 `GET /api/v1/disclosure/*`），
+不做全表扫描：运行期通过管理界面自定义的
 角色-授权（CSV 里本来就没有对应行）必须保留，广谱清理会误删它们。
 """
 from django.db import migrations

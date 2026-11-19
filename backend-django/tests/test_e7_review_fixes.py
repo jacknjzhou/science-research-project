@@ -576,3 +576,47 @@ def test_expertreview_writeback_rejects_foreign_target(seed_auth):
     assert r.status_code == 404, r.content[:300]
     o.refresh_from_db()
     assert o.status == "CLAIMED" and o.is_claimed is False
+
+
+def test_expertreview_midcheck_and_final_accept_reject_foreign_target(seed_auth):
+    """E-7 r6 M-3：MID_CHECK invite 回填与 FINAL_ACCEPT 回写同样不得跨租户。"""
+    from apps.expertreview.models import NReviewTask
+    from apps.project.models import EProject, EFinalAccept, EMidCheck
+
+    p2 = EProject.objects.create(tenant_id=2, creator_id=1, application_id=1, pi_user_id=1,
+                                 title="他租户项目", status="EXECUTING", member_ids=[])
+    mc = EMidCheck.objects.create(tenant_id=2, creator_id=1, project=p2,
+                                  status="PLANNED", expert_ids=[])
+    fa = EFinalAccept.objects.create(tenant_id=2, creator_id=1, project=p2, status="APPLIED")
+
+    # 入口：create_review 传他租户 target
+    for biz, target in (("MID_CHECK", mc.id), ("FINAL_ACCEPT", fa.id)):
+        r = Client().post("/api/v1/reviews", data=json.dumps({
+            "biz_type": biz, "target_id": target, "title": "越权评审"}),
+            content_type="application/json", **bearer(1, ["R-MANAGER"]))
+        assert r.status_code == 404, (biz, r.content[:200])
+
+    # 兜底：ORM 造脏任务后走 invite / conclude
+    t1 = NReviewTask.objects.create(code="", tenant_id=1, creator_id=1, biz_type="MID_CHECK",
+                                    target_id=mc.id, title="脏中检", status="DRAWN")
+    r = Client().post(f"/api/v1/reviews/{t1.id}/invite", data="{}",
+                      content_type="application/json", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 404, r.content[:200]
+    mc.refresh_from_db()
+    assert mc.expert_ids == []
+
+    t2 = NReviewTask.objects.create(code="", tenant_id=1, creator_id=1, biz_type="MID_CHECK",
+                                    target_id=mc.id, title="脏中检2", status="COLLECTING")
+    r = Client().post(f"/api/v1/reviews/{t2.id}/conclude", data=json.dumps({"conclusion": "PASS"}),
+                      content_type="application/json", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 404, r.content[:200]
+    mc.refresh_from_db()
+    assert mc.status == "PLANNED" and mc.conclusion is None
+
+    t3 = NReviewTask.objects.create(code="", tenant_id=1, creator_id=1, biz_type="FINAL_ACCEPT",
+                                    target_id=fa.id, title="脏验收", status="COLLECTING")
+    r = Client().post(f"/api/v1/reviews/{t3.id}/conclude", data=json.dumps({"conclusion": "PASS"}),
+                      content_type="application/json", **bearer(1, ["R-MANAGER"]))
+    assert r.status_code == 404, r.content[:200]
+    fa.refresh_from_db()
+    assert fa.status == "APPLIED"
