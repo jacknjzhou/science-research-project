@@ -240,6 +240,37 @@ def to_api_dist_record(r: TDistributionRecord) -> dict[str, Any]:
     }
 
 
+def _mask_name(v: Any) -> Any:
+    """异议人姓名脱敏：保留首字，其余打码（公开通道用）。"""
+    if not isinstance(v, str) or not v:
+        return None
+    return v[0] + "*" * max(1, len(v) - 1)
+
+
+def _mask_contact(v: Any) -> Any:
+    """异议人联系方式脱敏：手机 138****0000，其它保留前 2 后 2。"""
+    if not isinstance(v, str) or not v:
+        return None
+    digits = v.strip()
+    if len(digits) >= 7:
+        return digits[:3] + "****" + digits[-4:]
+    if len(digits) > 4:
+        return digits[:2] + "****" + digits[-2:]
+    return "*" * len(digits)
+
+
+def to_api_publicity_public(r: TPublicity) -> dict[str, Any]:
+    """公开通道序列化（R2-I2）：异议人姓名/联系方式一律脱敏，
+    匿名访客无法通过公示页拿到 PII。"""
+    data = to_api_publicity(r)
+    data["objections"] = [
+        {**o, "submitter": _mask_name(o.get("submitter")),
+         "contact": _mask_contact(o.get("contact"))}
+        for o in (r.objections or [])
+    ]
+    return data
+
+
 def to_api_publicity(r: TPublicity) -> dict[str, Any]:
     return {
         "id": r.id,

@@ -237,6 +237,20 @@ def _get_budget_or_404(tenant_id: int, budget_id: int) -> FBudget:
     return b
 
 
+def _update_budget_line_or_409(tenant_id: int, line_id: int, **fields) -> None:
+    """按租户更新预算行，**零行命中即阻断**（R2-I1）。
+
+    漏洞窗口期（E-7 收口前）建的报销/外拨/借款单可能引用他租户预算行；
+    这类单据若继续审批放款，受害租户预算不扣/不解冻而单据照常推进，账实不一致。
+    这里用 update 的返回行数判定归属，0 行 → 409 让整个 atomic 回滚，
+    单据停在原状态等待人工处置（不静默成功）。
+    """
+    n = FBudgetLine.objects.filter(
+        id=line_id, tenant_id=tenant_id, deleted=0).update(**fields)
+    if n == 0:
+        raise ApiError(409, CODE_CONFLICT, "预算行归属异常，审批已阻断")
+
+
 def create_budget(request: HttpRequest):
     d = domain_from(request)
     b = read_json(request)
@@ -922,7 +936,8 @@ def _approve_one(d, expense_id: int, action: str, comment: str):
             new_status = "HUMAN_REVIEW"
         # 预算动作（F-10）：末步批准 → 冻结转实扣；驳回/退回 → 解冻
         if action == "APPROVE" and final and e.budget_line_id and e.submit_mode == "预算制":
-            FBudgetLine.objects.filter(id=e.budget_line_id, tenant_id=d.tenant_id, deleted=0).update(
+            _update_budget_line_or_409(
+                d.tenant_id, e.budget_line_id,
                 amount_frozen=F("amount_frozen") - e.amount,
                 amount_used=F("amount_used") + e.amount, updated_at=dj_tz.now())
             # 平行记账（F-21/4.5）：expense.approved → 借 业务活动费用 / 贷 银行存款
@@ -941,7 +956,8 @@ def _approve_one(d, expense_id: int, action: str, comment: str):
                 ],
             )
         if action in ("REJECT", "RETURN") and e.budget_line_id and e.submit_mode == "预算制":
-            FBudgetLine.objects.filter(id=e.budget_line_id, tenant_id=d.tenant_id, deleted=0).update(
+            _update_budget_line_or_409(
+                d.tenant_id, e.budget_line_id,
                 amount_frozen=F("amount_frozen") - e.amount,
                 amount_released=F("amount_released") + e.amount, updated_at=dj_tz.now())
         approval.log(d.tenant_id, "EXPENSE", expense_id, step.step_order, d.user_id,
@@ -2302,7 +2318,8 @@ def approve_loan(request: HttpRequest, id: int):
     releases = action in ("REJECT", "RETURN")
     with transaction.atomic():
         if releases and loan.budget_line_id:
-            FBudgetLine.objects.filter(id=loan.budget_line_id, tenant_id=d.tenant_id, deleted=0).update(
+            _update_budget_line_or_409(
+                d.tenant_id, loan.budget_line_id,
                 amount_frozen=F("amount_frozen") - loan.amount,
                 amount_released=F("amount_released") + loan.amount,
                 updated_at=dj_tz.now())
@@ -2335,7 +2352,8 @@ def pay_loan(request: HttpRequest, id: int):
         if loan is None:
             raise ApiError(409, CODE_CONFLICT, "仅 APPROVED 状态可放款")
         if loan.budget_line_id:
-            FBudgetLine.objects.filter(id=loan.budget_line_id, tenant_id=d.tenant_id, deleted=0).update(
+            _update_budget_line_or_409(
+                d.tenant_id, loan.budget_line_id,
                 amount_frozen=F("amount_frozen") - loan.amount,
                 amount_used=F("amount_used") + loan.amount,
                 updated_at=dj_tz.now())

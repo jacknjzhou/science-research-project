@@ -164,3 +164,136 @@ def test_delete_subject_foreign_id_is_opaque_404(seed_auth):
     assert r.status_code == 404, r.content.decode()
     parent.refresh_from_db()
     assert parent.deleted == 0
+
+
+# --- R2-I1 存量脏单：引用他租户预算行的单据不得静默推进 ----------------------
+def test_legacy_expense_with_foreign_line_is_blocked_on_approve(seed_auth):
+    """E-7 收口前建的报销单可能已绑他租户预算行；审批放款必须被阻断并回滚。"""
+    from apps.funding.models import FExpense, FExpenseApproval
+
+    _, foreign = _line(tenant_id=2)
+    e = FExpense.objects.create(
+        tenant_id=1, creator_id=1, project_id=11, legal_entity_id=1,
+        applicant_user_id=1, amount=Decimal("500.00"), expense_type="MATERIAL",
+        submit_mode="预算制", budget_line_id=foreign.id, status="SUBMITTED",
+    )
+    FExpenseApproval.objects.create(
+        tenant_id=1, creator_id=1, expense_id=e.id, step_order=1,
+        role="R-MANAGER", status="PENDING",
+    )
+    before_frozen = foreign.amount_frozen
+    r = Client().post(f"/api/v1/expenses/{e.id}/approval", data=json.dumps({
+        "action": "APPROVE", "comment": "终审通过",
+    }), content_type="application/json", **bearer(1, ["R-MANAGER"], tenant_id=1))
+    assert r.status_code == 409, r.content.decode()
+    assert _json(r)["code"] == 40901
+    e.refresh_from_db()
+    foreign.refresh_from_db()
+    assert e.status == "SUBMITTED", "阻断后单据不得推进"
+    assert foreign.amount_frozen == before_frozen, "他租户预算行不得被扣减"
+    assert foreign.amount_used == Decimal("0.00")
+
+
+def test_legacy_loan_with_foreign_line_is_blocked_on_pay(seed_auth):
+    """漏洞窗口期建的借款单放款时同样必须阻断（不得静默 no-op）。"""
+    from apps.funding.models import FLoan
+
+    _, foreign = _line(tenant_id=2)
+    loan = FLoan.objects.create(
+        tenant_id=1, creator_id=1, project_id=11, legal_entity_id=1,
+        applicant_user_id=1, amount=Decimal("400.00"), budget_line_id=foreign.id,
+        status="APPROVED",
+    )
+    r = Client().post(f"/api/v1/loans/{loan.id}/pay", data=json.dumps({}),
+                      content_type="application/json",
+                      **bearer(1, ["R-FINANCE"], tenant_id=1))
+    assert r.status_code == 409, r.content.decode()
+    loan.refresh_from_db()
+    foreign.refresh_from_db()
+    assert loan.status == "APPROVED", "阻断后借款单不得置 PAID"
+    assert loan.paid_at is None
+    assert foreign.amount_used == Decimal("0.00")
+
+
+# --- R2-I2 公开公示：PII 脱敏 + 异议状态守卫 --------------------------------
+def _public_case(status: str = "PUBLISHED", contact: str = "13800000000"):
+    d = TDisclosure.objects.create(
+        tenant_id=1, creator_id=1, output_id=1, disclosed_by=1,
+        disclosure_date=date(2026, 1, 1), status="SUBMITTED",
+    )
+    deal = TDeal.objects.create(
+        tenant_id=1, creator_id=1, disclosure=d, output_id=1,
+        deal_type="转让", partner_name="某公司", contract_amount=Decimal("1000.00"),
+        payment_method="一次性", status="PUBLICIZED",
+    )
+    p = TPublicity.objects.create(
+        tenant_id=1, creator_id=1, deal_id=deal.id, status=status,
+        publish_start_at=dj_tz.now() - timedelta(days=1),
+        publish_end_at=dj_tz.now() + timedelta(days=15), duration_days=15,
+        objection_open=True,
+        objections=[{
+            "objection_id": "OBJ1", "submitter": "张三丰", "contact": contact,
+            "content": "权属存在争议", "submitted_at": dj_tz.now().isoformat(),
+            "handle_status": "OPEN", "handle_result": None, "handled_at": None,
+        }],
+    )
+    return deal, p
+
+
+def test_public_publicity_masks_objector_pii(db):
+    """匿名公示页不得回传异议人手机号/全名（R2-I2）。"""
+    _, p = _public_case()
+    r = Client().get(f"/api/v1/publicity/{p.deal_id}")
+    assert r.status_code == 200, r.content.decode()
+    raw = r.content.decode()
+    assert "13800000000" not in raw, "手机号必须脱敏"
+    assert "张三丰" not in raw, "全名必须脱敏"
+    obj = _json(r)["data"]["objections"][0]
+    assert obj["contact"] == "138****0000"
+    assert obj["submitter"] == "张**"
+
+
+def test_public_objection_rejected_on_closed_publicity(db):
+    """公示已结束（COMPLETED）时不得再被匿名异议翻开（R2-I2）。"""
+    _, p = _public_case(status="COMPLETED")
+    r = Client().post(f"/api/v1/publicity/{p.deal_id}/objection", data=json.dumps({
+        "content": "再提一次", "submitter": "李四", "contact": "13900000000",
+    }), content_type="application/json")
+    assert r.status_code == 409, r.content.decode()
+    p.refresh_from_db()
+    assert p.status == "COMPLETED"
+    assert len(p.objections or []) == 1, "不得追加异议"
+
+
+# --- M3 间接费试算 GET 也要能被业务角色调用 ---------------------------------
+def test_indirect_fee_calculate_get_allowed_for_finance(seed_auth):
+    prj = _project(tenant_id=1, code="PRJ-E7-IF")
+    r = Client().get(
+        f"/api/v1/indirect-fees/calculate?project_id={prj.id}",
+        **bearer(1, ["R-FINANCE"], tenant_id=1),
+    )
+    assert r.status_code != 403, r.content.decode()
+    r2 = Client().get(
+        f"/api/v1/indirect-fees/calculate?project_id={prj.id}",
+        **bearer(1, ["R-MANAGER"], tenant_id=1),
+    )
+    assert r2.status_code != 403, r2.content.decode()
+
+
+# --- M5 脏单在提交时点同样按租户阻断 ---------------------------------------
+def test_legacy_expense_with_foreign_line_cannot_be_submitted(seed_auth):
+    """M5：脏单（submit 前直接落库）提交时也按租户阻断，不留悬空冻结。"""
+    from apps.funding.models import FExpense
+
+    _, foreign = _line(tenant_id=2)
+    prj = _project(code="PRJ-E7-DIRTY")
+    e = FExpense.objects.create(
+        tenant_id=1, creator_id=1, project_id=prj.id, legal_entity_id=1,
+        applicant_user_id=1, amount=Decimal("120.00"), submit_mode="预算制",
+        expense_type="MATERIAL", status="DRAFT", budget_line_id=foreign.id,
+    )
+    r = Client().post(f"/api/v1/expenses/{e.id}/submit",
+                      **bearer(1, ["R-STAFF"], tenant_id=1))
+    assert r.status_code == 404, r.content.decode()
+    foreign.refresh_from_db()
+    assert foreign.amount_frozen == Decimal("0.00")

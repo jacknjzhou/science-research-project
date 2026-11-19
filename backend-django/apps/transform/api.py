@@ -28,6 +28,7 @@ from apps.transform.mappings import (
     to_api_income,
     to_api_partner,
     to_api_publicity,
+    to_api_publicity_public,
     to_api_rule,
     to_api_valuation,
 )
@@ -576,11 +577,12 @@ def sign_deal(request: HttpRequest, id: int):
 
 def get_publicity(request: HttpRequest, dealId: int):
     """公开通道（契约 security: []）：公示期内的公示内容对外可见，属设计如此；
-    返回体只含公示快照（to_api_publicity），不含交易条款敏感字段。"""
+    返回体只含公示快照（脱敏版 to_api_publicity_public），不含异议人 PII。"""
     p = TPublicity.objects.filter(deal_id=dealId, deleted=0).order_by("-id").first()
     if p is None:
         raise ApiError(404, CODE_NOT_FOUND, "公示不存在")
-    return ok(request, to_api_publicity(p))
+    # R2-I2：公开通道一律脱敏异议人 PII（姓名/联系方式）
+    return ok(request, to_api_publicity_public(p))
 
 
 @transaction.atomic
@@ -615,6 +617,9 @@ def submit_objection(request: HttpRequest, dealId: int):
     p = TPublicity.objects.filter(deal_id=dealId, deleted=0).order_by("-id").first()
     if p is None:
         raise ApiError(404, CODE_NOT_FOUND, "公示不存在")
+    # R2-I2：仅公示进行中可提异议（已处理完毕/已终止的公示不再被重新翻开）
+    if p.status not in ("PUBLISHED", "OBJECTION_PENDING"):
+        raise ApiError(409, CODE_CONFLICT, "公示已结束，不再受理异议")
     b = read_json(request)
     if not b.get("content"):
         raise ApiError(400, CODE_BAD_REQUEST, "content 必填")

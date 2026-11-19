@@ -921,5 +921,7 @@ p, R-PARTNER, /api/v1/portal/supplier/inquiries/*:quote,  POST
 p, R-PARTNER, /api/v1/portal/supplier/contracts,          GET
 p, R-MANAGER, /api/v1/portal/supplier/inquiries,          GET
 # E-7 补口：间接费试算（/indirect-fees/calculate）此前无任何角色行，业务角色无法调用
+p, R-MANAGER, /api/v1/indirect-fees/calculate,        GET
 p, R-MANAGER, /api/v1/indirect-fees/calculate,        POST
+p, R-FINANCE, /api/v1/indirect-fees/calculate,        GET
 p, R-FINANCE, /api/v1/indirect-fees/calculate,        POST
