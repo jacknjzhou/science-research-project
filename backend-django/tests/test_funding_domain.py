@@ -96,10 +96,19 @@ def test_subject_delete_guards(seed_auth):
 # 预算生命周期
 # ---------------------------------------------------------------------------
 def test_budget_lifecycle(seed_auth):
+    from decimal import Decimal as _D
+
+    from apps.project.models import EProject
+
+    _proj = EProject.objects.create(
+        tenant_id=1, creator_id=1, code="PRJ-BUD-LC", title="预算生命周期",
+        application_id=9001, pi_user_id=1, status="EXECUTING",
+        legal_entity_id=1, total_budget=_D("50000.50"),
+    )
     c = _c()
     r = c.post(
         "/api/v1/budgets",
-        data=json.dumps({"project_id": 1, "legal_entity_id": 1, "mode": "预算制",
+        data=json.dumps({"project_id": _proj.id, "legal_entity_id": 1, "mode": "预算制",
                          "lines": [{"subject_id": 1, "amount": "30000.00"},
                                    {"subject_id": 2, "amount": "20000.50"}]}),
         content_type="application/json",

@@ -224,8 +224,9 @@ def delete_subject(request: HttpRequest, id: int):
 # ---------------------------------------------------------------------------
 # 预算（F-02/03/04 + T14 追加）
 # ---------------------------------------------------------------------------
-def _get_budget_or_404(budget_id: int) -> FBudget:
-    b = FBudget.objects.filter(id=budget_id, deleted=0).first()
+def _get_budget_or_404(tenant_id: int, budget_id: int) -> FBudget:
+    """按租户取预算；跨租户一律 404，不泄露对方是否存在。"""
+    b = FBudget.objects.filter(id=budget_id, tenant_id=tenant_id, deleted=0).first()
     if b is None:
         raise ApiError(404, CODE_NOT_FOUND, "预算不存在")
     return b
@@ -240,6 +241,10 @@ def create_budget(request: HttpRequest):
         raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
     if mode not in ("预算制", "包干制"):
         raise ApiError(400, CODE_BAD_REQUEST, "mode 仅支持 预算制/包干制")
+    # E-7：项目须属于本租户，避免为他租户项目建预算（跨租户一律 404）
+    if not EProject.objects.filter(id=b["project_id"], tenant_id=d.tenant_id,
+                                   deleted=0).exists():
+        raise ApiError(404, CODE_NOT_FOUND, "项目不存在")
     total = Decimal("0")
     for l in lines:
         amt = _money(l.get("amount"))
@@ -264,7 +269,8 @@ def create_budget(request: HttpRequest):
 
 
 def get_budget(request: HttpRequest, id: int):
-    bud = _get_budget_or_404(id)
+    d = domain_from(request)
+    bud = _get_budget_or_404(d.tenant_id, id)
     lines = FBudgetLine.objects.filter(budget_id=bud.id, deleted=0).order_by("id")
     m = to_api_budget(bud)
     m["lines"] = [to_api_line(l) for l in lines]
@@ -285,24 +291,28 @@ def list_budgets(request: HttpRequest):
 
 
 def list_budget_lines(request: HttpRequest, id: int):
+    d = domain_from(request)
+    _get_budget_or_404(d.tenant_id, id)
     rows = FBudgetLine.objects.filter(budget_id=id, deleted=0).order_by("id")
     return ok(request, {"list": [to_api_line(l) for l in rows], "total": rows.count()})
 
 
 def submit_budget(request: HttpRequest, id: int):
-    n = FBudget.objects.filter(id=id, deleted=0, status="DRAFT").update(status="SUBMITTED", updated_at=dj_tz.now())
+    d = domain_from(request)
+    n = FBudget.objects.filter(id=id, tenant_id=d.tenant_id, deleted=0, status="DRAFT").update(
+        status="SUBMITTED", updated_at=dj_tz.now())
     if n == 0:
         raise ApiError(409, CODE_CONFLICT, "仅 DRAFT 状态可提交")
-    return ok(request, to_api_budget(FBudget.objects.get(id=id)))
+    return ok(request, to_api_budget(_get_budget_or_404(d.tenant_id, id)))
 
 
 def approve_budget(request: HttpRequest, id: int):
     d = domain_from(request)
-    n = FBudget.objects.filter(id=id, deleted=0, status="SUBMITTED").update(
+    n = FBudget.objects.filter(id=id, tenant_id=d.tenant_id, deleted=0, status="SUBMITTED").update(
         status="EXECUTING", approved_at=dj_tz.now(), approved_by=d.user_id, updated_at=dj_tz.now())
     if n == 0:
         raise ApiError(409, CODE_CONFLICT, "仅 SUBMITTED 状态可批复")
-    return ok(request, to_api_budget(FBudget.objects.get(id=id)))
+    return ok(request, to_api_budget(_get_budget_or_404(d.tenant_id, id)))
 
 
 def adjust_budget(request: HttpRequest, id: int):
@@ -312,7 +322,8 @@ def adjust_budget(request: HttpRequest, id: int):
     if not lines:
         raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
     with transaction.atomic():
-        bud = FBudget.objects.filter(id=id, deleted=0, status="EXECUTING").first()
+        bud = FBudget.objects.filter(id=id, tenant_id=d.tenant_id, deleted=0,
+                                     status="EXECUTING").first()
         if bud is None:
             raise ApiError(409, CODE_CONFLICT, "仅 EXECUTING 状态可调整")
         total_delta = Decimal("0")
@@ -329,11 +340,12 @@ def adjust_budget(request: HttpRequest, id: int):
         bud.version += 1
         bud.modifier_id = d.user_id
         bud.save()
-    return ok(request, to_api_budget(FBudget.objects.get(id=id)))
+    return ok(request, to_api_budget(_get_budget_or_404(d.tenant_id, id)))
 
 
 def line_balance(request: HttpRequest, lineId: int):
-    l = FBudgetLine.objects.filter(id=lineId, deleted=0).first()
+    d = domain_from(request)
+    l = FBudgetLine.objects.filter(id=lineId, tenant_id=d.tenant_id, deleted=0).first()
     if l is None:
         raise ApiError(404, CODE_NOT_FOUND, "预算行不存在")
     return ok(request, to_api_line(l))
@@ -352,7 +364,8 @@ def append_budget(request: HttpRequest, id: int):
         if delta is None or delta <= 0:
             raise ApiError(400, CODE_BAD_REQUEST, "delta 须为正数")
         total += delta
-    n = FBudget.objects.filter(id=id, deleted=0, status="EXECUTING").update(
+    n = FBudget.objects.filter(id=id, tenant_id=d.tenant_id, deleted=0,
+                               status="EXECUTING").update(
         pending_delta=F("pending_delta") + total, status="ADJUSTING", updated_at=dj_tz.now())
     if n == 0:
         raise ApiError(409, CODE_CONFLICT, "仅 EXECUTING 预算可追加")
@@ -369,15 +382,16 @@ def append_budget(request: HttpRequest, id: int):
 def approve_budget_append(request: HttpRequest, id: int):
     d = domain_from(request)
     with transaction.atomic():
-        n = FBudget.objects.filter(id=id, deleted=0, status="ADJUSTING").update(
+        n = FBudget.objects.filter(id=id, tenant_id=d.tenant_id, deleted=0,
+                                   status="ADJUSTING").update(
             total_approved=F("total_approved") + F("pending_delta"), pending_delta=Decimal("0"),
             version=F("version") + 1, status="EXECUTING", updated_at=dj_tz.now())
         if n == 0:
             raise ApiError(409, CODE_CONFLICT, "仅 ADJUSTING 状态可批复追加")
-        FBudgetLine.objects.filter(budget_id=id, deleted=0).exclude(pending_delta=0).update(
+        FBudgetLine.objects.filter(budget_id=id, tenant_id=d.tenant_id, deleted=0).exclude(pending_delta=0).update(
             amount_adjusted=F("amount_adjusted") + F("pending_delta"), pending_delta=Decimal("0"),
             updated_at=dj_tz.now())
-    return ok(request, to_api_budget(FBudget.objects.get(id=id)))
+    return ok(request, to_api_budget(_get_budget_or_404(d.tenant_id, id)))
 
 
 # ---------------------------------------------------------------------------
@@ -416,9 +430,9 @@ def list_incomes(request: HttpRequest):
     return ok(request, {"list": [to_api_income(i) for i in rows], "total": total, "page": page, "size": size})
 
 
-def _calc_mgmt_fee(project_id: int, amount: Decimal) -> Decimal | None:
+def _calc_mgmt_fee(tenant_id: int, project_id: int, amount: Decimal) -> Decimal | None:
     """T21：项目分类 mgmt_fee_pct → amount × pct / 100（无分类/无费率 → None）。"""
-    p = EProject.objects.filter(id=project_id, deleted=0).first()
+    p = EProject.objects.filter(id=project_id, tenant_id=tenant_id, deleted=0).first()
     if p is None or p.category_id is None:
         return None
     c = EProjectCategory.objects.filter(id=p.category_id, deleted=0).first()
@@ -499,7 +513,7 @@ def claim_income(request: HttpRequest, id: int):
         inc.claimed_by = d.user_id
         inc.claimed_at = dj_tz.now()
         inc.modifier_id = d.user_id
-        fee = _calc_mgmt_fee(b["project_id"], inc.amount)
+        fee = _calc_mgmt_fee(d.tenant_id, b["project_id"], inc.amount)
         if fee is not None:
             inc.mgmt_fee = fee
         inc.save()
@@ -804,7 +818,8 @@ def list_expenses(request: HttpRequest):
 
 
 def get_expense(request: HttpRequest, id: int):
-    e = FExpense.objects.filter(id=id, deleted=0).first()
+    d = domain_from(request)
+    e = FExpense.objects.filter(id=id, tenant_id=d.tenant_id, deleted=0).first()
     if e is None:
         raise ApiError(404, CODE_NOT_FOUND, "报销单不存在")
     steps = FExpenseApproval.objects.filter(expense_id=e.id, deleted=0).order_by("step_order")
@@ -818,7 +833,8 @@ def submit_expense(request: HttpRequest, id: int):
     任一环节失败回退 DRAFT（对齐 Go 逐段回退语义）。"""
     d = domain_from(request)
     with transaction.atomic():
-        e = FExpense.objects.filter(id=id, deleted=0, status="DRAFT").select_for_update().first()
+        e = FExpense.objects.filter(id=id, tenant_id=d.tenant_id, deleted=0,
+                                   status="DRAFT").select_for_update().first()
         if e is None:
             raise ApiError(409, CODE_CONFLICT, "仅 DRAFT 状态可提交")
         # 三重指纹查重（提交时点）
@@ -866,7 +882,7 @@ def submit_expense(request: HttpRequest, id: int):
 
 def _approve_one(d, expense_id: int, action: str, comment: str):
     """单条报销审批核心（对齐 Go approveOne）。返回错误 tuple 或 None。"""
-    e = FExpense.objects.filter(id=expense_id, deleted=0).first()
+    e = FExpense.objects.filter(id=expense_id, tenant_id=d.tenant_id, deleted=0).first()
     if e is None:
         return 404, CODE_NOT_FOUND, "报销单不存在"
     if e.status not in ("SUBMITTED", "AI_REVIEW", "HUMAN_REVIEW"):
@@ -919,7 +935,8 @@ def _approve_one(d, expense_id: int, action: str, comment: str):
                 amount_released=F("amount_released") + e.amount, updated_at=dj_tz.now())
         approval.log(d.tenant_id, "EXPENSE", expense_id, step.step_order, d.user_id,
                      step.role or "", action, comment)
-        FExpense.objects.filter(id=expense_id).update(status=new_status, updated_at=dj_tz.now())
+        FExpense.objects.filter(id=expense_id, tenant_id=d.tenant_id).update(
+            status=new_status, updated_at=dj_tz.now())
     # 触达报销人（best-effort）
     title, content = {
         "APPROVE": ("报销审批通过" if final else "报销进入下一审批步",
@@ -942,7 +959,7 @@ def approval_action(request: HttpRequest, id: int):
     if err:
         code, biz_code, msg = err
         raise ApiError(code, biz_code, msg)
-    return ok(request, to_api_expense(FExpense.objects.get(id=id)))
+    return ok(request, to_api_expense(FExpense.objects.get(id=id, tenant_id=d.tenant_id)))
 
 
 def approval_batch(request: HttpRequest):
@@ -1258,7 +1275,8 @@ def create_carryover(request: HttpRequest):
         raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
     if int(b["target_year"]) <= int(b["fiscal_year"]):
         raise ApiError(400, CODE_BAD_REQUEST, "目标年度须晚于来源年度")
-    p = EProject.objects.filter(id=b["project_id"], deleted=0).first()
+    p = EProject.objects.filter(id=b["project_id"], tenant_id=d.tenant_id,
+                                deleted=0).first()
     if p is None:
         raise ApiError(404, CODE_NOT_FOUND, "项目不存在")
     if p.status != "CLOSED":
@@ -1347,7 +1365,8 @@ def calculate_indirect_fee(request: HttpRequest):
         raise ApiError(422, "40904", "间接费率须在 0~0.30 内")
     if not b.get("project_id"):
         raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
-    p = EProject.objects.filter(id=b["project_id"], deleted=0).first()
+    p = EProject.objects.filter(id=b["project_id"], tenant_id=d.tenant_id,
+                                deleted=0).first()
     if p is None:
         raise ApiError(404, CODE_NOT_FOUND, "项目不存在")
     income = _sum_claimed_income(d.tenant_id, p.id)
@@ -1523,7 +1542,8 @@ def ai_invoice_review(request: HttpRequest):
     b = read_json(request)
     if not b.get("expenseId"):
         raise ApiError(400, CODE_BAD_REQUEST, "参数错误")
-    e = FExpense.objects.filter(id=b["expenseId"], deleted=0).first()
+    e = FExpense.objects.filter(id=b["expenseId"], tenant_id=d.tenant_id,
+                                deleted=0).first()
     if e is None:
         raise ApiError(404, CODE_NOT_FOUND, "报销单不存在")
     from django.conf import settings
