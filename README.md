@@ -96,7 +96,7 @@ python manage.py migrate                                    # 默认连 localhos
 python manage.py seed_demo                                  # 幂等播种
 
 # 全量测试（sqlite 内存库，不依赖 PG）
-python -m pytest tests -q                                   # 当前 547 passed
+python -m pytest tests -q                                   # 当前 551 passed
 
 > **冒烟后门（仅本地/演示）**：`ark/ark` 登录默认**关闭**；需同时满足 `DEBUG=True` 与
 > 环境变量 `ARK_DEV_LOGIN=1` 才会签发一个最小权限（`R-STAFF`）令牌，数据域由

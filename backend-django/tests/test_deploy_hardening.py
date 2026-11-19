@@ -710,10 +710,26 @@ def test_test_settings_cannot_migrate_persistent_db(tmp_path: Path):
         ("django.db.backends.sqlite3", "file:memdb1?mode=memory&cache=shared", True),
         # r9-I1：不带 mode=memory 的 file:memory:x 会落盘成 `memory:x`
         ("django.db.backends.sqlite3", "file:memory:foo", False),
+        # r10-I1：畸形参数不能被子串匹配蒙过
+        ("django.db.backends.sqlite3", "file:memdb1?xmode=memory", False),
+        ("django.db.backends.sqlite3", "file:memdb1?mode=memory_extra", False),
+        ("django.db.backends.sqlite3", "file:memdb1?mode=memory&mode=disk", False),
+        ("django.db.backends.sqlite3", "file:memdb1?cache=shared&mode=memory", True),
         ("django.db.backends.sqlite3", "/tmp/whatever.sqlite3", False),
         ("django.db.backends.postgresql", "ark", False),
     ],
-    ids=["memory", "empty", "uri-memory", "uri-not-memory", "file", "postgres"],
+    ids=[
+        "memory",
+        "empty",
+        "uri-memory",
+        "uri-not-memory",
+        "uri-xmode",
+        "uri-mode-extra",
+        "uri-mode-duplicated",
+        "uri-mode-with-cache",
+        "file",
+        "postgres",
+    ],
 )
 def test_ephemeral_test_db_detection(settings, engine, name, expected):
     """`_is_ephemeral_test_db()` 只认真正不落盘的库。"""

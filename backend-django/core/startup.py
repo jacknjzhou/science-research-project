@@ -71,8 +71,15 @@ def _is_ephemeral_test_db() -> bool:
     # URI 形态要显式声明内存：`file:memory:foo` 不带 `?mode=memory` 时 SQLite
     # 会把库**写到磁盘**上（r9-I1 实测生成 1.2MB 文件），不能按名字前缀判。
     if name.startswith("file:"):
+        # 必须精确解析成 `mode=memory`：子串匹配会让 `xmode=memory`、`mode=memory_x`
+        # 之类的畸形参数混过去（r10-I1 实测 `file:memdb1?xmode=memory` 会落盘 1.2MB）。
         params = name.split("?", 1)[1] if "?" in name else ""
-        return "mode=memory" in params
+        modes = []
+        for pair in params.split("&"):
+            key, _, value = pair.partition("=")
+            if key.strip().lower() == "mode":
+                modes.append(value.strip().lower())
+        return len(modes) == 1 and modes[0] == "memory"
     return False
 
 
