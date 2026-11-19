@@ -372,6 +372,24 @@ def start_review(request: HttpRequest, id: int):
     return ok(request, None)
 
 
+_SCORE_DENIED_STATUSES = ("CONCLUDED", "CANCELLED")
+
+
+def _require_accepted_invitation(t: NReviewTask, expert: NExpert) -> None:
+    """E-4：打分须「被邀请且已接受」，任务不得已在终态。
+
+    允许集合用「终态拒绝」而不是白名单：合法链路会经过 INVITING/QUORUM/IN_REVIEW/
+    COLLECTING 多个状态，白名单会误伤（既有用例 accept→QUORUM→打分即属此类）。
+    """
+    iv = NReviewInvitation.objects.filter(task_id=t.id, expert_id=expert.id).first()
+    if iv is None:
+        raise ApiError(403, CODE_FORBIDDEN, "未被邀请参与该评审")
+    if iv.response != "ACCEPT":
+        raise ApiError(409, CODE_CONFLICT, "尚未接受邀请，不可打分")
+    if t.status in _SCORE_DENIED_STATUSES:
+        raise ApiError(409, CODE_CONFLICT, f"评审已结束，不可打分：{t.status}")
+
+
 def submit_score(request: HttpRequest, id: int):
     """专家提交打分（Upsert）；已提交数达已接受数→COLLECTING。"""
     t = _get_task_or_404(domain_from(request).tenant_id, id)
@@ -383,6 +401,7 @@ def submit_score(request: HttpRequest, id: int):
     body_expert = b.get("expert_id")
     if body_expert not in (None, "", expert.id) and str(body_expert) != str(expert.id):
         raise ApiError(400, CODE_BAD_REQUEST, "不得代他人打分")
+    _require_accepted_invitation(t, expert)
     sc = NReviewScore.objects.filter(task_id=id, expert_id=expert.id).first()
     if sc is None:
         sc = NReviewScore(tenant_id=t.tenant_id, task_id=id, expert_id=expert.id)

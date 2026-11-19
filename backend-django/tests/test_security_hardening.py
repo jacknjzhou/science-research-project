@@ -192,3 +192,74 @@ def test_create_contract_rejects_foreign_supplier(seed_auth):
     )
     assert r.status_code == 403
     assert r.json()["code"] == 40913
+
+
+# ---------------------------------------------------------------- E-4 打分前置
+
+
+def _bound_expert(tenant_id: int, user_id: int, name: str = "打分专家"):
+    from apps.expertreview.models import NExpert
+
+    return NExpert.objects.create(
+        tenant_id=tenant_id, creator_id=1, name=name, status="ACTIVE",
+        source="INTERNAL", user_id=user_id, field_tags=[],
+    )
+
+
+def _invite(task, expert, response: str = "PENDING"):
+    from django.utils import timezone
+
+    from apps.expertreview.models import NReviewInvitation
+
+    return NReviewInvitation.objects.create(
+        tenant_id=task.tenant_id, task_id=task.id, expert_id=expert.id,
+        seat_no=1, response=response, invited_at=timezone.now(),
+    )
+
+
+def _score(client, task_id: int, uid: int, total: str = "88.00"):
+    return client.post(
+        f"/api/v1/reviews/{task_id}/scores",
+        data=json.dumps({"total_score": total}),
+        content_type="application/json",
+        **bearer(uid, ["R-EXPERT"]),
+    )
+
+
+def test_score_requires_invitation(seed_auth):
+    uid = seed_auth["staff"].id
+    t = _task(1, "未受邀打分", status="IN_REVIEW")
+    _bound_expert(1, uid)
+    r = _score(Client(), t.id, uid)
+    assert r.status_code == 403
+    assert r.json()["code"] == 40301
+
+
+def test_score_rejects_pending_invitation(seed_auth):
+    uid = seed_auth["staff"].id
+    t = _task(1, "待响应邀请", status="IN_REVIEW")
+    e = _bound_expert(1, uid)
+    _invite(t, e, response="PENDING")
+    r = _score(Client(), t.id, uid)
+    assert r.status_code == 409
+    assert r.json()["code"] == 40901
+
+
+def test_score_rejects_concluded_task(seed_auth):
+    uid = seed_auth["staff"].id
+    t = _task(1, "已归档评审", status="CONCLUDED")
+    e = _bound_expert(1, uid)
+    _invite(t, e, response="ACCEPT")
+    r = _score(Client(), t.id, uid)
+    assert r.status_code == 409
+    assert r.json()["code"] == 40901
+
+
+def test_score_allowed_after_accept(seed_auth):
+    uid = seed_auth["staff"].id
+    t = _task(1, "正常打分", status="IN_REVIEW")
+    e = _bound_expert(1, uid)
+    _invite(t, e, response="ACCEPT")
+    r = _score(Client(), t.id, uid)
+    assert r.status_code == 200
+    assert r.json()["data"]["total_score"] == "88.00"
