@@ -373,7 +373,8 @@ def start_review(request: HttpRequest, id: int):
 
 
 _SCORE_DENIED_STATUSES = ("CONCLUDED", "CANCELLED")
-# 尚未开始评审（DRAFT/DRAWN=已抽取未启动）不可打分：必须经 accept → start 进入 IN_REVIEW。
+# 仅「草稿」不可打分：任务一旦抽出专家（DRAWN）并发出邀请（INVITING），
+# 专家接受（ACCEPT）后即可打分；INVITING/QUORUM/IN_REVIEW/COLLECTING 均为合法阶段。
 _SCORE_UNSTARTED_STATUSES = ("DRAFT",)
 
 

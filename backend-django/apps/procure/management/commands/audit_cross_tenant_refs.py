@@ -28,13 +28,14 @@ class Command(BaseCommand):
             ("G_BID", GBid),
             ("G_ORDER", GOrder),
         ):
+            # M-2：软删行同样可能被历史数据引用，纳入审计（deleted=1 会另标）
             qs = model.objects.filter(
-                deleted=0, requisition_id__isnull=False
+                requisition_id__isnull=False
             ).exclude(requisition__isnull=True)
             dirty = [
                 row
                 for row in qs.select_related("requisition").only(
-                    "id", "code", "tenant_id", "requisition__tenant_id"
+                    "id", "code", "tenant_id", "deleted", "requisition__tenant_id"
                 )
                 if row.requisition is not None
                 and row.tenant_id != row.requisition.tenant_id
@@ -45,7 +46,7 @@ class Command(BaseCommand):
                 for row in dirty:
                     self.stdout.write(
                         f"  - {label} id={row.id} code={row.code} "
-                        f"tenant_id={row.tenant_id} "
+                        f"deleted={row.deleted} tenant_id={row.tenant_id} "
                         f"requisition.tenant_id={row.requisition.tenant_id}"
                     )
         if total:

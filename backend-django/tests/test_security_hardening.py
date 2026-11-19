@@ -142,6 +142,14 @@ def _req_row(tenant_id: int, item: str = "他租户采购", status: str = "WAY_D
     )
 
 
+def _bid_row(tenant_id: int, req, status: str = "PUBLICIZING"):
+    from apps.procure.models import GBid
+
+    return GBid.objects.create(
+        tenant_id=tenant_id, creator_id=1, requisition=req, method="询价", status=status,
+    )
+
+
 def _sup_row(tenant_id: int, name: str = "他租户供应商"):
     from apps.procure.models import GSupplier
 
@@ -524,3 +532,86 @@ def test_audit_command_detects_dirty_refs(seed_auth, capsys):
     text = out.getvalue()
     assert "G_CONTRACT: 1 条跨租户引用" in text
     assert "需要修数" in text
+
+
+# ---------------------------------------------------------------- 终审 r3 Minor 收口
+
+
+def test_award_void_blocks_dirty_cross_tenant_requisition(seed_auth):
+    """M-1：废标出口的脏行守卫需有回归（不只依赖探针）。"""
+    from decimal import Decimal
+
+    from apps.funding.models import FBudget, FBudgetLine, FSubject
+    from apps.procure.models import GBid
+
+    sub2 = FSubject.objects.create(
+        tenant_id=2, creator_id=1, code="6602", name="他租户科目B", status="ACTIVE",
+    )
+    bud2 = FBudget.objects.create(
+        tenant_id=2, creator_id=1, project_id=9101, legal_entity_id=1,
+        code="BUD-DIRTY-02", mode="预算制", total_approved=Decimal("3000"),
+    )
+    line2 = FBudgetLine.objects.create(
+        tenant_id=2, creator_id=1, budget_id=bud2.id, subject_id=sub2.id,
+        amount_planned=Decimal("3000"), amount_frozen=Decimal("500"), status="ACTIVE",
+    )
+    req2 = _req_row(2, "他租户脏招标申请", status="BIDDING")
+    req2.frozen_amount = Decimal("500")
+    req2.budget_subject_code = "6602"
+    req2.remark = f"budget_line={line2.id}"
+    req2.save()
+    bid1 = _bid_row(1, req2, status="PUBLICIZING")
+
+    r = Client().post(
+        f"/api/v1/procurement/bids/{bid1.id}/award",
+        data=json.dumps({"voided": True, "void_reason": "脏行验证"}),
+        content_type="application/json",
+        **bearer(seed_auth["admin"].id, ["R-MANAGER"]),
+    )
+    assert r.status_code == 409, r.content
+    line2.refresh_from_db()
+    assert line2.amount_frozen == Decimal("500")
+    req2.refresh_from_db()
+    assert req2.frozen_amount == Decimal("500")
+    bid1.refresh_from_db()
+    assert bid1.status == "PUBLICIZING"
+
+
+def test_score_allowed_at_drawn_and_inviting(seed_auth):
+    """M-5：DRAWN/INVITING 是「已抽专家/已发邀请」的正常阶段，接受后即可打分。"""
+    uid = seed_auth["staff"].id
+    e = _bound_expert(1, uid)
+    for status in ("DRAWN", "INVITING"):
+        t = _task(1, f"可打分-{status}", status=status)
+        _invite(t, e, response="ACCEPT")
+        r = _score(Client(), t.id, uid)
+        assert r.status_code == 200, (status, r.content)
+
+
+def test_audit_command_includes_soft_deleted(seed_auth):
+    """M-2：审计需覆盖软删行。"""
+    from datetime import date, timedelta
+    from decimal import Decimal
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    from apps.procure.models import GContract
+
+    req2 = _req_row(2, "他租户申请（软删脏行）")
+    sup1 = _sup_row(1, "本租户供应商")
+    dirty = GContract.objects.create(
+        tenant_id=1, creator_id=1, supplier=sup1, contract_type="采购",
+        party_a="本单位", party_b=sup1.name, amount=Decimal("1000"),
+        requisition=req2, sign_date=date.today(), start_date=date.today(),
+        end_date=date.today() + timedelta(days=30), status="ACTIVE", deleted=1,
+    )
+    out = StringIO()
+    code = 0
+    try:
+        call_command("audit_cross_tenant_refs", "--verbose", stdout=out)
+    except SystemExit as exc:
+        code = exc.code
+    assert code == 1
+    assert f"id={dirty.id}" in out.getvalue()
+    assert "deleted=1" in out.getvalue()
