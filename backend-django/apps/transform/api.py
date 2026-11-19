@@ -85,22 +85,25 @@ def _dec(v):
         return None
 
 
-def _get_disclosure_or_404(did: int) -> TDisclosure:
-    d = TDisclosure.objects.filter(id=did, deleted=0).first()
+def _get_disclosure_or_404(tenant_id: int, did: int) -> TDisclosure:
+    """E-7：跨租户一律 404，不泄露对方是否存在。"""
+    d = TDisclosure.objects.filter(id=did, tenant_id=tenant_id, deleted=0).first()
     if d is None:
         raise ApiError(404, CODE_NOT_FOUND, "披露不存在")
     return d
 
 
-def _get_deal_or_404(did: int) -> TDeal:
-    d = TDeal.objects.filter(id=did, deleted=0).first()
+def _get_deal_or_404(tenant_id: int, did: int) -> TDeal:
+    """E-7：跨租户一律 404。"""
+    d = TDeal.objects.filter(id=did, tenant_id=tenant_id, deleted=0).first()
     if d is None:
         raise ApiError(404, CODE_NOT_FOUND, "交易不存在")
     return d
 
 
-def _get_income_or_404(iid: int) -> TIncome:
-    r = TIncome.objects.filter(id=iid, deleted=0).first()
+def _get_income_or_404(tenant_id: int, iid: int) -> TIncome:
+    """E-7：跨租户一律 404。"""
+    r = TIncome.objects.filter(id=iid, tenant_id=tenant_id, deleted=0).first()
     if r is None:
         raise ApiError(404, CODE_NOT_FOUND, "到账记录不存在")
     return r
@@ -171,7 +174,7 @@ def create_disclosure(request: HttpRequest):
 @transaction.atomic
 def submit_disclosure(request: HttpRequest, id: int):
     dom = domain_from(request)
-    d = _get_disclosure_or_404(id)
+    d = _get_disclosure_or_404(dom.tenant_id, id)
     if d.status != "DRAFT":
         raise ApiError(409, CODE_CONFLICT, f"提交状态机冲突：当前 {d.status}")
     d.status = "SUBMITTED"
@@ -190,7 +193,7 @@ def submit_disclosure(request: HttpRequest, id: int):
 @transaction.atomic
 def assign_valuation(request: HttpRequest, id: int):
     dom = domain_from(request)
-    d = _get_disclosure_or_404(id)
+    d = _get_disclosure_or_404(dom.tenant_id, id)
     b = read_json(request)
     vtype = b.get("valuator_type")
     if vtype not in ("INTERNAL", "EXTERNAL"):
@@ -217,7 +220,7 @@ def assign_valuation(request: HttpRequest, id: int):
 @transaction.atomic
 def upload_external_report(request: HttpRequest, id: int):
     dom = domain_from(request)
-    v = TValuation.objects.filter(id=id, deleted=0).first()
+    v = TValuation.objects.filter(id=id, tenant_id=dom.tenant_id, deleted=0).first()
     if v is None:
         raise ApiError(404, CODE_NOT_FOUND, "评估记录不存在")
     b = read_json(request)
@@ -303,7 +306,7 @@ def create_deal(request: HttpRequest):
     b = read_json(request)
     if not b.get("disclosure_id"):
         raise ApiError(400, CODE_BAD_REQUEST, "disclosure_id 必填")
-    d = _get_disclosure_or_404(int(b["disclosure_id"]))
+    d = _get_disclosure_or_404(dom.tenant_id, int(b["disclosure_id"]))
     deal = TDeal(
         tenant_id=dom.tenant_id,
         creator_id=dom.user_id,
@@ -325,7 +328,8 @@ def create_deal(request: HttpRequest):
 
 
 def get_deal(request: HttpRequest, id: int):
-    deal = _get_deal_or_404(id)
+    dom = domain_from(request)
+    deal = _get_deal_or_404(dom.tenant_id, id)
     data = to_api_deal(deal)
     chain = TApprovalChain.objects.filter(deal=deal, deleted=0).order_by("step_order")
     data["approval_chain"] = [to_api_chain(c) for c in chain]
@@ -336,7 +340,7 @@ def get_deal(request: HttpRequest, id: int):
 @transaction.atomic
 def save_negotiation(request: HttpRequest, id: int):
     dom = domain_from(request)
-    deal = _get_deal_or_404(id)
+    deal = _get_deal_or_404(dom.tenant_id, id)
     _guard(deal, {"DRAFT", "VALUATED", "NEGOTIATING"}, "谈判")
     b = read_json(request)
     _apply_negotiation(deal, b, dom)
@@ -350,7 +354,7 @@ def save_negotiation(request: HttpRequest, id: int):
 def publish_deal(request: HttpRequest, id: int):
     """T-05 挂牌发布（推送国家技术转移平台）；VALUATED/NEGOTIATING 均可挂牌。"""
     dom = domain_from(request)
-    deal = _get_deal_or_404(id)
+    deal = _get_deal_or_404(dom.tenant_id, id)
     _guard(deal, {"VALUATED", "NEGOTIATING"}, "挂牌发布")
     deal.modifier_id = dom.user_id
     deal.save(update_fields=["modifier_id", "updated_at"])
@@ -426,7 +430,7 @@ def draft_contract(request: HttpRequest):
     b = read_json(request)
     if not b.get("deal_id"):
         raise ApiError(400, CODE_BAD_REQUEST, "deal_id 必填")
-    deal = _get_deal_or_404(int(b["deal_id"]))
+    deal = _get_deal_or_404(dom.tenant_id, int(b["deal_id"]))
     _guard(deal, {"NEGOTIATING", "DRAFT_CONTRACT"}, "合同起草")
     if TContract.objects.filter(deal=deal, deleted=0).exists():
         raise ApiError(409, CODE_CONFLICT, "一交易一有效合同")
@@ -451,7 +455,7 @@ def draft_contract(request: HttpRequest):
 
 
 def get_contract(request: HttpRequest, id: int):
-    c = TContract.objects.filter(id=id, deleted=0).first()
+    c = TContract.objects.filter(id=id, tenant_id=domain_from(request).tenant_id, deleted=0).first()
     if c is None:
         raise ApiError(404, CODE_NOT_FOUND, "合同不存在")
     return ok(request, to_api_contract(c))
@@ -481,7 +485,7 @@ def _build_chain(deal: TDeal, dom) -> None:
 @transaction.atomic
 def approve_deal(request: HttpRequest, id: int):
     dom = domain_from(request)
-    deal = _get_deal_or_404(id)
+    deal = _get_deal_or_404(dom.tenant_id, id)
     b = read_json(request)
     action = b.get("action")
     if action not in ("APPROVE", "REJECT", "RETURN"):
@@ -537,7 +541,7 @@ def approve_deal(request: HttpRequest, id: int):
 @transaction.atomic
 def sign_deal(request: HttpRequest, id: int):
     dom = domain_from(request)
-    deal = _get_deal_or_404(id)
+    deal = _get_deal_or_404(dom.tenant_id, id)
     _guard(deal, {"APPROVED"}, "电子签")
     b = read_json(request)
     contract = TContract.objects.filter(deal=deal, deleted=0).first()
@@ -576,7 +580,7 @@ def get_publicity(request: HttpRequest, dealId: int):
 @transaction.atomic
 def publish_publicity(request: HttpRequest, dealId: int):
     dom = domain_from(request)
-    deal = _get_deal_or_404(dealId)
+    deal = _get_deal_or_404(dom.tenant_id, dealId)
     _guard(deal, {"SIGNED"}, "公示发布")
     b = read_json(request)
     raw_days = b.get("duration_days")
@@ -684,7 +688,7 @@ def register_income(request: HttpRequest):
     b = read_json(request)
     if not b.get("deal_id") or not b.get("received_date") or b.get("amount") is None:
         raise ApiError(400, CODE_BAD_REQUEST, "deal_id/received_date/amount 必填")
-    deal = _get_deal_or_404(int(b["deal_id"]))
+    deal = _get_deal_or_404(dom.tenant_id, int(b["deal_id"]))
     if deal.status not in ("SIGNED", "PUBLICIZED", "EXECUTING", "INCOME_RECEIVED", "DISTRIBUTED"):
         raise ApiError(409, CODE_CONFLICT, f"到账登记状态机冲突：当前 {deal.status}")
     if bfn := b.get("bank_flow_no"):
@@ -715,7 +719,7 @@ def register_income(request: HttpRequest):
 @transaction.atomic
 def match_income(request: HttpRequest, id: int):
     dom = domain_from(request)
-    inc = _get_income_or_404(id)
+    inc = _get_income_or_404(dom.tenant_id, id)
     b = read_json_soft(request)
     if b.get("finance_receipt_id"):
         inc.finance_receipt_id = int(b["finance_receipt_id"])
@@ -774,14 +778,15 @@ def _hit_rule(deal: TDeal, on_date) -> TDistributionRule | None:
 @transaction.atomic
 def generate_distribution(request: HttpRequest, id: int):
     dom = domain_from(request)
-    inc = _get_income_or_404(id)
+    inc = _get_income_or_404(dom.tenant_id, id)
     if TDistributionRecord.objects.filter(income=inc, deleted=0).exists():
         raise ApiError(409, CODE_CONFLICT, "一期到账一分配明细")
     deal = inc.deal
     b = read_json_soft(request)
     rule = None
     if b.get("rule_id"):
-        rule = TDistributionRule.objects.filter(id=int(b["rule_id"]), deleted=0).first()
+        rule = TDistributionRule.objects.filter(
+            id=int(b["rule_id"]), tenant_id=dom.tenant_id, deleted=0).first()
         if rule is None:
             raise ApiError(404, CODE_NOT_FOUND, "分配规则不存在")
     else:
@@ -820,7 +825,7 @@ def generate_distribution(request: HttpRequest, id: int):
 @transaction.atomic
 def issue_distribution(request: HttpRequest, id: int):
     dom = domain_from(request)
-    rec = TDistributionRecord.objects.filter(id=id, deleted=0).first()
+    rec = TDistributionRecord.objects.filter(id=id, tenant_id=dom.tenant_id, deleted=0).first()
     if rec is None:
         raise ApiError(404, CODE_NOT_FOUND, "分配明细不存在")
     b = read_json(request)
@@ -941,7 +946,7 @@ def ai_opportunity(request: HttpRequest):
 @transaction.atomic
 def ai_contract_risk(request: HttpRequest, id: int):
     """T-18：已审查结果直接回放；未审查且 LLM 未配置 → 空清单降级（不阻塞业务）。"""
-    c = TContract.objects.filter(id=id, deleted=0).first()
+    c = TContract.objects.filter(id=id, tenant_id=domain_from(request).tenant_id, deleted=0).first()
     if c is None:
         raise ApiError(404, CODE_NOT_FOUND, "合同不存在")
     if c.ai_risk_report is not None:
@@ -965,7 +970,8 @@ def ai_contract_risk(request: HttpRequest, id: int):
 
 def ai_pricing(request: HttpRequest, id: int):
     """T-19：可比交易库分位数定价区间（确定性），仅供参考。"""
-    deal = _get_deal_or_404(id)
+    dom = domain_from(request)
+    deal = _get_deal_or_404(dom.tenant_id, id)
     comps = list(TDeal.objects.filter(
         tenant_id=deal.tenant_id, deleted=0, deal_type=deal.deal_type,
         status__in=["SIGNED", "EXECUTING", "INCOME_RECEIVED", "DISTRIBUTED", "CLOSED"],
