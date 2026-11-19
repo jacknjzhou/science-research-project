@@ -71,3 +71,32 @@ def notify_inapp(
         biz_ref=biz_ref,
         channel=channel,
     )
+
+
+def notify_user(
+    tenant_id: int,
+    user_id: int,
+    typ: str,
+    title: str,
+    content: str | None,
+    biz_ref: str | None = None,
+) -> SysNotification:
+    """统一投递（C5）：站内信落库 + best-effort 邮件到该用户邮箱。
+
+    邮件失败不影响站内信；用户不存在/无邮箱时只落站内信。
+    """
+    from apps.sysadmin.models import SysUser
+
+    row = notify_inapp(
+        tenant_id, user_id, typ, title, content, biz_ref, channel=CHANNEL_BOTH
+    )
+    try:
+        u = SysUser.objects.filter(id=user_id, tenant_id=tenant_id, deleted=0).first()
+        addr = getattr(u, "email", None) if u is not None else None
+        if addr:
+            send_mail_best_effort(
+                addr, title, content or title, tenant_id=tenant_id, biz_ref=biz_ref or ""
+            )
+    except Exception:  # noqa: BLE001 - 通知永不阻断业务
+        logger.warning("notify_user mail branch failed user=%s", user_id, exc_info=True)
+    return row

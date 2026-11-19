@@ -365,8 +365,44 @@ def award_bid(request: HttpRequest, id: int):
     bid.award_at = _now()
     bid.modifier_id = dom.user_id
     bid.save()
+    _notify_bid_result(bid)
     return ok(request, {"id": bid.id, "status": bid.status,
                         "winner_supplier_id": bid.winner_supplier_id})
+
+
+def _notify_bid_result(bid: GBid) -> None:
+    """C5：定标/废标通知受邀供应商的对接用户（站内信 + 邮件，best-effort）。"""
+    try:
+        from apps.notify.email import notify_user
+        from apps.sysadmin.models import SysUser
+
+        ids = [int(x) for x in (bid.invited_supplier_ids or [])]
+        if not ids:
+            return
+        sups = {s.id: s for s in GSupplier.objects.filter(id__in=ids, deleted=0)}
+        presidents = {}
+        for sid in ids:
+            s = sups.get(sid)
+            if s is None or not s.org_id:
+                continue
+            presidents[sid] = list(
+                SysUser.objects.filter(
+                    tenant_id=bid.tenant_id, org_id=s.org_id, deleted=0, status="ACTIVE"
+                ).values_list("id", flat=True)
+            )
+        awarded = bid.status == "AWARDED"
+        for sid, uids in presidents.items():
+            win = awarded and bid.winner_supplier_id == sid
+            title = "定标结果：中标" if win else "定标结果：未中标"
+            content = (
+                f"询价单 {bid.code or bid.id} 已完成定标，"
+                + ("贵单位为中标单位。" if win else "贵单位未中标，感谢参与。")
+            )
+            for uid in uids:
+                notify_user(bid.tenant_id, uid, "ANNOUNCE", title, content,
+                            f"bid:{bid.id}")
+    except Exception:  # noqa: BLE001 - 通知失败不影响定标
+        pass
 
 
 # ---------------------------------------------------------------------------

@@ -28,15 +28,13 @@ APPLICANT_SOURCE = "EXTERNAL"
 
 
 def _notify_both(tenant_id: int, user_id: int, typ: str, title: str, content: str, biz_ref: str) -> None:
-    """站内信 + 邮件（best-effort，永不阻断主流程）。"""
+    """统一投递（C5）：站内信 + 邮件，best-effort 永不阻断主流程。"""
     try:
-        from apps.notify.email import CHANNEL_BOTH, notify_inapp, send_mail_best_effort
-        from apps.sysadmin.models import SysUser
+        from apps.notify.email import notify_user
 
-        notify_inapp(tenant_id, user_id, typ, title, content, biz_ref, channel=CHANNEL_BOTH)
-        u = SysUser.objects.filter(id=user_id, tenant_id=tenant_id, deleted=0).first()
-        if u is not None and u.email:
-            send_mail_best_effort(u.email, title, content, tenant_id=tenant_id, biz_ref=biz_ref)
+        if not user_id:
+            return
+        notify_user(tenant_id, user_id, typ, title, content, biz_ref)
     except Exception:  # noqa: BLE001 - 通知失败不影响业务
         pass
 

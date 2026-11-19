@@ -13,6 +13,7 @@ from django.utils import timezone as dj_tz
 
 from apps.expertreview.models import NReviewInvitation, NReviewScore, NReviewTask
 from apps.funding.mappings import code_of
+from apps.notify.email import notify_user as _notify_user
 from apps.p.mappings import (
     num2,
     to_api_application,
@@ -859,10 +860,9 @@ def accept_guide_suggestion(request: HttpRequest, id: int):
         s.reviewed_at = dj_tz.now()
         s.save(update_fields=["status", "guideline_id", "review_user_id", "reviewed_at"])
     if s.proposer_user_id:
-        _notify(
-            s.proposer_user_id, "ANNOUNCE", "指南建议已采纳",
+        _notify_user(
+            d.tenant_id, s.proposer_user_id, "ANNOUNCE", "指南建议已采纳",
             f"《{s.title}》已采纳，将纳入指南编制。", f"guide-suggestion:{s.id}",
-            d.tenant_id,
         )
     return ok(request, to_api_guide_suggestion(s))
 
@@ -888,9 +888,9 @@ def reject_guide_suggestion(request: HttpRequest, id: int):
         s.reviewed_at = dj_tz.now()
         s.save(update_fields=["status", "reject_reason", "review_user_id", "reviewed_at"])
     if s.proposer_user_id:
-        _notify(
-            s.proposer_user_id, "ANNOUNCE", "指南建议未采纳",
-            f"《{s.title}》未采纳：{reason}", f"guide-suggestion:{s.id}", d.tenant_id,
+        _notify_user(
+            d.tenant_id, s.proposer_user_id, "ANNOUNCE", "指南建议未采纳",
+            f"《{s.title}》未采纳：{reason}", f"guide-suggestion:{s.id}",
         )
     return ok(request, to_api_guide_suggestion(s))
 
@@ -1090,16 +1090,16 @@ def change_application_pi(request: HttpRequest, id: int):
             tb_now.modifier_id = d.user_id
             tb_now.save(update_fields=["content_snapshot", "modifier_id", "updated_at"])
     try:
-        _notify(
-            new_pi, "TODO", "您被指派为申报负责人",
+        _notify_user(
+            d.tenant_id, new_pi, "TODO", "您被指派为申报负责人",
             f"《{a.title}》的申报负责人已变更，请及时完善并提交。",
-            f"application:{a.id}", d.tenant_id,
+            f"application:{a.id}",
         )
         if old_pi and old_pi != new_pi:
-            _notify(
-                old_pi, "TODO", "申报负责人已变更",
+            _notify_user(
+                d.tenant_id, old_pi, "TODO", "申报负责人已变更",
                 f"《{a.title}》的申报负责人已由您变更为他人。",
-                f"application:{a.id}", d.tenant_id,
+                f"application:{a.id}",
             )
     except Exception:  # noqa: BLE001 - 通知失败不影响改派
         pass
@@ -1176,10 +1176,10 @@ def sign_task_book(request: HttpRequest, id: int):
             a.save(update_fields=["status", "updated_at"])
         tb.save()
     if complete:
-        _notify(
-            a.pi_user_id, "ANNOUNCE", "任务书已签订",
+        _notify_user(
+            d.tenant_id, a.pi_user_id, "ANNOUNCE", "任务书已签订",
             f"《{a.title}》任务书已签订，项目已立项进入执行。",
-            f"task-book:{tb.id}", d.tenant_id,
+            f"task-book:{tb.id}",
         )
     return ok(request, to_api_task_book(tb))
 
