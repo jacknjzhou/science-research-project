@@ -496,3 +496,31 @@ def test_prod_settings_have_debug_off():
 
     prod = importlib.import_module("config.settings.prod")
     assert prod.DEBUG is False
+
+
+def test_audit_command_detects_dirty_refs(seed_auth, capsys):
+    """C-3 配套：审计命令必须能发现「合同挂他租户采购申请」的脏行。"""
+    from datetime import date, timedelta
+    from decimal import Decimal
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    from apps.procure.models import GContract
+
+    req2 = _req_row(2, "他租户申请（脏行源）")
+    sup1 = _sup_row(1, "本租户供应商")
+    GContract.objects.create(
+        tenant_id=1, creator_id=1, supplier=sup1, contract_type="采购",
+        party_a="本单位", party_b=sup1.name, amount=Decimal("1000"),
+        requisition=req2, sign_date=date.today(), start_date=date.today(),
+        end_date=date.today() + timedelta(days=30), status="ACTIVE",
+    )
+    out = StringIO()
+    try:
+        call_command("audit_cross_tenant_refs", "--verbose", stdout=out)
+    except SystemExit as exc:  # 有脏行 → 退出码 1
+        assert exc.code == 1
+    text = out.getvalue()
+    assert "G_CONTRACT: 1 条跨租户引用" in text
+    assert "需要修数" in text
