@@ -574,10 +574,14 @@ def create_contract(request: HttpRequest):
         ).first()
         _check_supplier_usable(supplier)
     is_outsource = b["contract_type"] == "外协分包"
+    requisition = None
+    if b.get("requisition_id") is not None:
+        # 采购申请须同租户（跨租户按 404，避免把他人采购链注入本合同）
+        requisition = _get_req_or_404(dom.tenant_id, int(b["requisition_id"]))
     c = GContract.objects.create(
         tenant_id=dom.tenant_id, creator_id=dom.user_id,
         code=_gen_code("OSC" if is_outsource else "CON", dom.tenant_id),
-        requisition_id=b.get("requisition_id"),
+        requisition=requisition,
         contract_type=b["contract_type"], project_id=b.get("project_id"),
         supplier=supplier, party_a=b.get("party_a"), party_b=b["party_b"],
         amount=_dec(b["amount"]), currency=b.get("currency") or "CNY",
@@ -687,19 +691,20 @@ def ai_risk_contract(request: HttpRequest, id: int):
 
 def trace_contract(request: HttpRequest, id: int):
     """G-12 合同追溯链（联动 E-17）：申请→招标→订单→合同→付款 全链节点。"""
-    c = _get_contract_or_404(domain_from(request).tenant_id, id)
+    tenant_id = domain_from(request).tenant_id
+    c = _get_contract_or_404(tenant_id, id)
     nodes = [{"step": "CONTRACT", "id": c.id, "code": c.code, "status": c.status,
               "at": c.created_at.isoformat()}]
     if c.requisition_id:
-        r = GRequisition.objects.filter(id=c.requisition_id).first()
+        r = GRequisition.objects.filter(id=c.requisition_id, tenant_id=tenant_id).first()
         if r:
             nodes.insert(0, {"step": "REQUISITION", "id": r.id, "code": r.code,
                              "status": r.status, "at": r.created_at.isoformat()})
-            bids = GBid.objects.filter(requisition_id=r.id, deleted=0)
+            bids = GBid.objects.filter(requisition_id=r.id, tenant_id=tenant_id, deleted=0)
             for bid in bids:
                 nodes.insert(1, {"step": "BID", "id": bid.id, "code": bid.code,
                                  "status": bid.status, "at": bid.created_at.isoformat()})
-            orders = GOrder.objects.filter(requisition_id=r.id, deleted=0)
+            orders = GOrder.objects.filter(requisition_id=r.id, tenant_id=tenant_id, deleted=0)
             for o in orders:
                 nodes.append({"step": "ORDER", "id": o.id, "code": o.code,
                               "status": o.status, "at": o.created_at.isoformat()})
@@ -759,7 +764,9 @@ def payment_callback(request: HttpRequest):
     b = read_json(request)
     if not b.get("payment_id") or not b.get("expense_id"):
         raise ApiError(400, CODE_BAD_REQUEST, "payment_id/expense_id 必填")
-    p = GContractPayment.objects.filter(id=int(b["payment_id"]), deleted=0).first()
+    p = GContractPayment.objects.filter(
+        id=int(b["payment_id"]), tenant_id=dom.tenant_id, deleted=0
+    ).first()
     if p is None:
         raise ApiError(404, CODE_NOT_FOUND, "付款计划不存在")
     if p.expense_id and int(p.expense_id) == int(b["expense_id"]) and p.status in ("PAID", "VOUCHER_SYNCED"):

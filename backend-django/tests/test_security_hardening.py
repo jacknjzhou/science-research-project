@@ -295,3 +295,72 @@ def test_contract_list_paid_sum_uses_paid_amount(seed_auth):
     # 管理端列表 paid_sum 既有形态是 float（_api_contract: float(paid_sum)），
     # 本任务只修口径（paid_amount 而非 plan_amount），不改响应类型（契约债另记）。
     assert Decimal(str(row["paid_sum"])) == Decimal("40000")
+
+
+# ---------------------------------------------------------------- 终审 r1：C-1/C-2 余量
+
+
+def test_payment_callback_rejects_foreign_payment(seed_auth):
+    """C-1：他租户付款单不得被本租户回调实扣（含预算冻结→实扣）。"""
+    from datetime import date, timedelta
+    from decimal import Decimal
+
+    from apps.procure.models import GContract, GContractPayment
+
+    sup2 = _sup_row(2, "他租户供应商")
+    c2 = GContract.objects.create(
+        tenant_id=2, creator_id=1, supplier=sup2, contract_type="采购",
+        party_a="他单位", party_b=sup2.name, amount=Decimal("98000"),
+        sign_date=date.today(), start_date=date.today(),
+        end_date=date.today() + timedelta(days=90), status="ACTIVE",
+    )
+    p2 = GContractPayment.objects.create(
+        tenant_id=2, creator_id=1, contract=c2, phase="预付",
+        plan_amount=Decimal("40000"), paid_amount=Decimal("0"), status="PLANNED",
+    )
+    r = Client().post(
+        "/api/v1/finance/expense",
+        data=json.dumps({"payment_id": p2.id, "expense_id": 9001,
+                         "paid_amount": "40000"}),
+        content_type="application/json",
+        **bearer(seed_auth["admin"].id, ["R-FINANCE"]),
+    )
+    assert r.status_code == 404
+    p2.refresh_from_db()
+    assert p2.status == "PLANNED" and p2.paid_amount == Decimal("0")
+
+
+def test_create_contract_rejects_foreign_requisition(seed_auth):
+    """C-2：合同不得挂到他租户的采购申请上（否则 trace 会带出他人采购链）。"""
+    req2 = _req_row(2, "他租户采购申请")
+    r = Client().post(
+        "/api/v1/contract",
+        data=json.dumps({
+            "contract_type": "采购", "party_b": "某相对方", "amount": "1000",
+            "project_id": 5, "requisition_id": req2.id,
+        }),
+        content_type="application/json",
+        **bearer(seed_auth["admin"].id, ["R-MANAGER"]),
+    )
+    assert r.status_code == 404
+
+
+def test_asset_convert_rejects_foreign_order(seed_auth):
+    """E-2 同族：资产转固不得引用他租户订单。"""
+    from decimal import Decimal
+
+    from apps.procure.models import GOrder
+
+    sup2 = _sup_row(2, "他租户供应商")
+    req2 = _req_row(2, "他租户订单来源")
+    o2 = GOrder.objects.create(
+        tenant_id=2, creator_id=1, requisition=req2, supplier=sup2,
+        order_amount=Decimal("1000"), delivery_status="ACCEPTED",
+    )
+    r = Client().post(
+        "/api/v1/asset/from-order",
+        data=json.dumps({"orderId": o2.id, "category": "设备", "name": "服务器"}),
+        content_type="application/json",
+        **bearer(seed_auth["admin"].id, ["R-STAFF"]),
+    )
+    assert r.status_code == 404

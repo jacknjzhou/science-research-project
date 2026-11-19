@@ -186,7 +186,9 @@ def create_from_receipt(request: HttpRequest):
         raise ApiError(400, CODE_BAD_REQUEST, "orderId 必填")
     from apps.procure.models import GOrder
 
-    o = GOrder.objects.filter(id=int(order_id), deleted=0).first()
+    o = GOrder.objects.filter(
+        id=int(order_id), tenant_id=domain_from(request).tenant_id, deleted=0
+    ).first()
     if o is None:
         raise ApiError(404, CODE_NOT_FOUND, "订单不存在")
     if o.converted_asset:
@@ -303,7 +305,9 @@ def trace(request: HttpRequest, id: int):
     if a.source_ref:
         from apps.procure.models import GOrder
 
-        o = GOrder.objects.filter(id=a.source_ref, deleted=0).first()
+        o = GOrder.objects.filter(
+            id=a.source_ref, tenant_id=domain_from(request).tenant_id, deleted=0
+        ).first()
         if o is not None:
             seq += 1
             nodes.append({"nodeSeq": seq, "objectType": "G_ORDER", "objectId": o.id,
