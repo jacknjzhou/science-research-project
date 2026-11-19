@@ -213,7 +213,7 @@ const groups: NavGroup[] = [
     { v: 'portal-task-book', ic: '⎙', label: '任务书签订', roles: ['R-PARTNER', 'R-MANAGER', 'R-LEADER'] },
     { v: 'portal-project-report', ic: '⟳', label: '汇报与验收', roles: ['R-PARTNER', 'R-STAFF', 'R-MANAGER'] },
     // M2-c：外部专家与供应商自助（C3/C4）
-    { v: 'portal-expert-apply', ic: '✧', label: '专家申请', roles: ['R-PARTNER', 'R-EXPERT', 'R-STAFF'] },
+    { v: 'portal-expert-apply', ic: '✧', label: '专家申请', roles: ['R-PARTNER', 'R-EXPERT'] },
     { v: 'portal-expert', ic: '❋', label: '专家门户', roles: ['R-EXPERT'] },
     { v: 'portal-supplier', ic: '⁂', label: '供应商门户', roles: ['R-PARTNER'] },
   ]},

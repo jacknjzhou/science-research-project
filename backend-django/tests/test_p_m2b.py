@@ -581,8 +581,13 @@ def test_i4_leader_can_sign_manager_cannot_be_partner(seed_auth):
     tb = PTaskBook.objects.create(tenant_id=1, creator_id=ua.id, application_id=a.id)
     assert _post(f"/api/v1/apply/task-books/{tb.id}:sign", {"role": "PI"},
                  roles=("R-PARTNER",), uid=ua.id).status_code == 200
+    from apps.sysadmin.models import SysUser
+
+    leader = SysUser.objects.create(
+        username="leader_m2b", real_name="L", password_hash="x", status="ACTIVE",
+        tenant_id=1, creator_id=1, user_source="INTERNAL")
     r = _post(f"/api/v1/apply/task-books/{tb.id}:sign", {"role": "LEADER"},
-              roles=("R-LEADER",), uid=3)
+              roles=("R-LEADER",), uid=leader.id)
     assert r.status_code == 200, r.content
     assert _data(r)["status"] == "SIGNED"
     assert _post(f"/api/v1/apply/task-books/{tb.id}:sign", {"role": "LEADER"},

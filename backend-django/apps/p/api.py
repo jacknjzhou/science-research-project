@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from django.db import transaction
@@ -31,7 +32,7 @@ from apps.p.models import (
 from apps.sysadmin.models import SysUser
 from core.approval import has_role
 from core.auth.deps import domain_from
-from core.org_scope import current_org_id, is_external_only
+from core.org_scope import current_org_id, is_external_account
 from core.httpx import (
     ApiError,
     CODE_BAD_REQUEST,
@@ -43,6 +44,9 @@ from core.httpx import (
     ok,
     read_json,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def page_args(request: HttpRequest) -> tuple[int, int, int, int]:
@@ -258,7 +262,7 @@ def list_applications(request: HttpRequest):
     d = domain_from(request)
     page, size, limit, offset = page_args(request)
     qs = PApplication.objects.filter(tenant_id=d.tenant_id, deleted=0)
-    if is_external_only(d):
+    if is_external_account(d):
         org = current_org_id(d)
         if org is None:  # 外部账号缺机构：一律空集（否则 filter(org=None) 会命中院内申报）
             return ok(request, {"list": [], "total": 0, "page": page, "size": size})
@@ -274,7 +278,7 @@ def list_applications(request: HttpRequest):
 
 def get_application(request: HttpRequest, id: int):
     d = domain_from(request)
-    if is_external_only(d):
+    if is_external_account(d):
         a = _partner_app_or_404(d, id)
     else:
         a = _get_app_or_404(d.tenant_id, id)
@@ -286,7 +290,7 @@ def create_application(request: HttpRequest):
     body = read_json(request)
     title = body.get("title")
     project_type = body.get("project_type")
-    external = is_external_only(d)
+    external = is_external_account(d)
     # 外部机构：PI 与申报机构一律以本人/本机构为准（忽略请求体，防冒名与跨机构挂靠）
     if external:
         pi_user_id = d.user_id
@@ -369,7 +373,7 @@ def _app_scoped_or_404(d, app_id: int) -> PApplication:
     必须 `applicant_org_id == current_org_id(d)`，且 org 为空一律 404。
     """
     a = _get_app_or_404(d.tenant_id, app_id)
-    if is_external_only(d):
+    if is_external_account(d):
         org = current_org_id(d)
         if org is None or a.applicant_org_id is None or a.applicant_org_id != org:
             raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
@@ -600,7 +604,7 @@ def ai_draft(request: HttpRequest):
         f"正文需人工结合最新文献与研究积累改写定稿。"
     )
     ref_qs = PApplication.objects.filter(tenant_id=d.tenant_id, deleted=0).exclude(id=a.id)
-    if is_external_only(d):  # 外部只引用本机构申报，避免跨机构标题泄露（终审 r3 N-2）
+    if is_external_account(d):  # 外部只引用本机构申报，避免跨机构标题泄露（终审 r3 N-2）
         _org = current_org_id(d)
         ref_qs = ref_qs.filter(applicant_org_id=_org) if _org else ref_qs.none()
     refs = [
@@ -765,7 +769,7 @@ def list_guide_suggestions(request: HttpRequest):
     d = domain_from(request)
     page, size, limit, offset = page_args(request)
     qs = PGuideSuggestion.objects.filter(tenant_id=d.tenant_id, deleted=0)
-    if is_external_only(d):
+    if is_external_account(d):
         org = current_org_id(d)
         if org is None:
             return ok(request, {"list": [], "total": 0, "page": page, "size": size})
@@ -787,7 +791,7 @@ def list_guide_suggestions(request: HttpRequest):
 def get_guide_suggestion(request: HttpRequest, id: int):
     """GET /apply/guide-suggestions/{id} —— 跨租户/跨机构一律 404。"""
     d = domain_from(request)
-    if is_external_only(d):
+    if is_external_account(d):
         s = _partner_suggestion_or_404(d, id)
     else:
         s = _guide_suggestion_or_404(d.tenant_id, id)
@@ -803,7 +807,7 @@ def create_guide_suggestion(request: HttpRequest):
         raise ApiError(400, CODE_BAD_REQUEST, "建议标题必填")
     if len(title) > 256:
         raise ApiError(400, CODE_BAD_REQUEST, "建议标题长度不能超过256")
-    if is_external_only(d):
+    if is_external_account(d):
         org_id = current_org_id(d)
         if org_id is None:  # 未绑机构的外部账号不得写 NULL-org 建议（终审 r2 I-3）
             raise ApiError(403, CODE_FORBIDDEN, "外部账号未绑定机构，无法提交建议")
@@ -923,7 +927,7 @@ def _task_book_snapshot(a: PApplication) -> dict:
 
 def _task_book_visible(d, tb: PTaskBook) -> bool:
     """外部机构用户只能看本机构申报的任务书。"""
-    if not is_external_only(d):
+    if not is_external_account(d):
         return True
     a = PApplication.objects.filter(
         id=tb.application_id, tenant_id=d.tenant_id, deleted=0
@@ -946,7 +950,7 @@ def _locked_scoped_app_or_404(d, app_id: int) -> PApplication:
     )
     if a is None:
         raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
-    if is_external_only(d):
+    if is_external_account(d):
         org = current_org_id(d)
         if org is None or a.applicant_org_id is None or a.applicant_org_id != org:
             raise ApiError(404, CODE_NOT_FOUND, "记录不存在")
@@ -1006,7 +1010,7 @@ def decide_application(request: HttpRequest, id: int):
     if decision not in _DECIDE_TARGETS:
         raise ApiError(400, CODE_BAD_REQUEST, "decision 须为 PUBLISHED 或 DECIDED")
     roles = [r for r in (getattr(d, "roles", None) or []) if r]
-    if is_external_only(d) or not (has_role(roles, "R-MANAGER") or has_role(roles, "R-LEADER")):
+    if is_external_account(d) or not (has_role(roles, "R-MANAGER") or has_role(roles, "R-LEADER")):
         raise ApiError(403, CODE_FORBIDDEN, "仅科研管理/院所领导可作出评审决议")
     comment = (body.get("comment") or "").strip()[:512]
     with transaction.atomic():
@@ -1021,13 +1025,39 @@ def decide_application(request: HttpRequest, id: int):
             fields.append("remark")
         a.save(update_fields=fields)
     # C5 终审 C-1：决议通知 PI 必须走双通道（站内信+邮件），否则外部申报人收不到
+    _resolution_title = "申报评审结果已发布" if decision == "PUBLISHED" else "申报已决议"
+    _resolution_text = f"《{a.title}》评审状态更新为 {decision}，可生成任务书并签署立项。"
     _notify_user(
         d.tenant_id, a.pi_user_id, "ANNOUNCE",
-        "申报评审结果已发布" if decision == "PUBLISHED" else "申报已决议",
-        f"《{a.title}》评审状态更新为 {decision}，可生成任务书并签署立项。",
-        f"application:{a.id}",
+        _resolution_title, _resolution_text, f"application:{a.id}",
     )
+    _notify_applicant_org(d.tenant_id, a, _resolution_title, _resolution_text)
     return ok(request, to_api_application(a))
+
+
+def _notify_applicant_org(tenant_id: int, a, title: str, content: str) -> None:
+    """外部申报人的机构邮箱副本（终审 r2 N-2，计划书 :561 要求）。
+
+    PI 本人走站内信+个人邮箱；机构层面再收一份，避免"人离职/停用后机构不知情"。
+    纯 best-effort：机构无联系邮箱、邮件异常都不影响决议本身。
+    """
+    org_id = getattr(a, "applicant_org_id", None)
+    if not org_id:
+        return
+    try:
+        from apps.sysadmin.models import SysPartnerOrg
+        from apps.notify.email import send_mail_best_effort
+
+        org = SysPartnerOrg.objects.filter(
+            id=org_id, tenant_id=tenant_id, deleted=0
+        ).values_list("contact_email", flat=True).first()
+        if org:
+            send_mail_best_effort(
+                org, f"[科研管理] {title}", content,
+                tenant_id=tenant_id, biz_ref=f"application:{a.id}",
+            )
+    except Exception:  # noqa: BLE001 —— 通知永不阻断业务
+        logger.warning("申报机构副本通知失败 application=%s", a.id, exc_info=True)
 
 
 def change_application_pi(request: HttpRequest, id: int):
@@ -1051,7 +1081,7 @@ def change_application_pi(request: HttpRequest, id: int):
     except (TypeError, ValueError):
         raise ApiError(400, CODE_BAD_REQUEST, "piUserId 必须为整数") from None
     roles = [r for r in (getattr(d, "roles", None) or []) if r]
-    if is_external_only(d) or not (has_role(roles, "R-MANAGER") or has_role(roles, "R-LEADER")):
+    if is_external_account(d) or not (has_role(roles, "R-MANAGER") or has_role(roles, "R-LEADER")):
         raise ApiError(403, CODE_FORBIDDEN, "仅科研管理/院所领导可改派申报负责人")
     with transaction.atomic():
         a = _locked_scoped_app_or_404(d, id)
@@ -1154,7 +1184,7 @@ def sign_task_book(request: HttpRequest, id: int):
             signer_id = a.pi_user_id
         else:
             need = "R-MANAGER" if role == "MANAGER" else "R-LEADER"
-            if is_external_only(d) or not has_role(roles, need):
+            if is_external_account(d) or not has_role(roles, need):
                 raise ApiError(403, CODE_FORBIDDEN, f"仅 {need} 可签署 {role}")
             signer_id = d.user_id
         records.append({

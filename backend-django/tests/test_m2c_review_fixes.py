@@ -142,20 +142,33 @@ def test_c1_quote_receipt_notifies_purchaser(seed_auth):
         **bearer(sup_user.id, ["R-PARTNER"]),
     )
     assert r.status_code == 200, r.content
-    assert len(mail.outbox) >= 1, "应价必须给采购发起人发回执"
-    assert any("报价" in m.subject for m in mail.outbox)
+    assert len(mail.outbox) >= 2, "应价必须同时回执采购发起人与供应商本人"
+    assert all("报价" in m.subject for m in mail.outbox)
+    recipients = {addr for m in mail.outbox for addr in m.to}
+    assert "buyer@example.com" in recipients, "采购发起人必须收到回执"
+    assert "sup2@example.com" in recipients, "供应商本人必须收到应价回执（终审 r2 N-3）"
 
 
 def test_c1_decide_application_notifies_pi_by_email(seed_auth):
-    """评审决议 → PI 收到邮件（外部申报人只看站内信等于没通知）。"""
+    """评审决议 → PI 收到邮件，且外部申报人所属机构再收一份副本（终审 r2 N-2）。"""
     from apps.p.models import PApplication
+    from apps.sysadmin.models import SysPartnerOrg, SysUser
 
     seed_auth["staff"].email = "pi1@example.com"
     seed_auth["staff"].save(update_fields=["email"])
+    org = SysPartnerOrg.objects.create(
+        tenant_id=1, code="PTN-T-PI", name="申报机构", credit_code="91310000MA1K3XY90A",
+        org_type="COLLAB", contact_name="机构对接", contact_phone="13800000009",
+        contact_email="org-pi@example.com", status="APPROVED", creator_id=1,
+    )
+    pi_ext = SysUser.objects.create(
+        tenant_id=1, username="pi_ext", real_name="外部PI", email="pi-ext@example.com",
+        status="ACTIVE", user_source="EXTERNAL", org_id=org.id, creator_id=1,
+    )
     app_row = PApplication.objects.create(
         tenant_id=1, code="APP-T-1", title="测试申报", project_type="开放课题",
-        pi_user_id=seed_auth["staff"].id, status="UNDER_REVIEW",
-        total_budget=1000, creator_id=1,
+        pi_user_id=pi_ext.id, status="UNDER_REVIEW", applicant_org_id=org.id,
+        applicant_type="EXTERNAL", total_budget=1000, creator_id=1,
     )
     mail.outbox.clear()
     c = Client()
@@ -164,7 +177,9 @@ def test_c1_decide_application_notifies_pi_by_email(seed_auth):
         {"decision": "PUBLISHED"}, **bearer(2, ["R-MANAGER"]),
     )
     assert r.status_code == 200, r.content
-    assert len(mail.outbox) >= 1, "决议必须通知 PI（邮件）"
+    recipients = {addr for m in mail.outbox for addr in m.to}
+    assert "pi-ext@example.com" in recipients, "决议必须通知 PI（邮件）"
+    assert "org-pi@example.com" in recipients, "外部申报人所属机构必须收到副本（N-2）"
 
 
 # --------------------------------------------------------------------------
@@ -379,3 +394,64 @@ def test_m1_inquiry_list_tolerates_legacy_bid_entries(seed_auth):
     assert r.status_code == 200, r.content
     assert r.json()["data"]["list"][0]["quoted"] is True
     assert r.json()["data"]["list"][0]["my_amount"] is None
+
+
+# --------------------------------------------------------------------------
+# 终审 r2：黑名单不可自助洗白 / 内部专家在 P 域不被当外部 / 跨租户不投递孤儿信
+# --------------------------------------------------------------------------
+def test_r2_blacklisted_expert_cannot_reapply(seed_auth):
+    """N-1：BLACKLIST 是风控结论，自助申请不得把状态刷回 CANDIDATE。"""
+    from apps.expertreview.models import NExpert
+    from apps.sysadmin.models import SysUser
+
+    u = SysUser.objects.create(
+        tenant_id=1, username="bl_user", real_name="黑名单", email="bl@example.com",
+        status="ACTIVE", user_source="EXTERNAL", creator_id=1,
+    )
+    e = NExpert.objects.create(
+        tenant_id=1, name="黑名单", user_id=u.id, status="BLACKLIST",
+        source="EXTERNAL", remark="学术不端", creator_id=1,
+    )
+    c = Client()
+    r = _post(c, "/api/v1/portal/expert-apply", {"name": "换个名字"},
+              **bearer(u.id, ["R-EXPERT"]))
+    assert r.status_code == 403, r.content
+    e.refresh_from_db()
+    assert e.status == "BLACKLIST" and e.remark == "学术不端"
+
+
+def test_r2_internal_expert_is_not_external_in_apply_domain(seed_auth):
+    """N-4：院内专家（R-STAFF+R-EXPERT）在 P 域按院内口径，不被自己挡在门外。"""
+    from apps.sysadmin.models import SysUser
+
+    u = SysUser.objects.create(
+        tenant_id=1, username="inner_exp", real_name="院内专家",
+        email="inner@example.com", status="ACTIVE", user_source="INTERNAL",
+        creator_id=1,
+    )
+    c = Client()
+    r = c.get("/api/v1/apply/applications",
+              **bearer(u.id, ["R-STAFF", "R-EXPERT"]))
+    assert r.status_code == 200, r.content
+    r2 = _post(c, "/api/v1/apply/applications",
+               {"title": "院内专家申报", "project_type": "ZIGE",
+                "total_budget": "1000.00", "pi_user_id": u.id},
+               **bearer(u.id, ["R-STAFF", "R-EXPERT"]))
+    assert r2.status_code == 200, r2.content
+
+
+def test_r2_notify_user_skips_cross_tenant_uid(seed_auth):
+    """Minor：跨租户 uid 不得在本租户写下永远没人能读的孤儿站内信。"""
+    from apps.notify.email import notify_user
+    from apps.notify.models import SysNotification
+    from apps.sysadmin.models import SysUser
+
+    other = SysUser.objects.create(
+        tenant_id=2, username="t2_user", real_name="他租户", email="t2@example.com",
+        status="ACTIVE", creator_id=1,
+    )
+    mail.outbox.clear()
+    before = SysNotification.objects.count()
+    assert notify_user(1, other.id, "TODO", "不该送达", "x", "biz:1") is None
+    assert SysNotification.objects.count() == before
+    assert len(mail.outbox) == 0

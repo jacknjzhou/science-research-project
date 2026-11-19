@@ -72,6 +72,9 @@ def apply_expert(request: HttpRequest):
     ).first()
     if existing is not None and existing.status in ("CANDIDATE", "ACTIVE"):
         raise ApiError(409, CODE_CONFLICT, "已提交过专家申请")
+    if existing is not None and existing.status == "BLACKLIST":
+        # 终审 r2 N-1：黑名单是风控结论，不能靠"重新申请"把状态刷回待审
+        raise ApiError(403, CODE_FORBIDDEN, "该账号已被列入专家黑名单，不接受自助申请")
 
     tags = body.get("field_tags")
     if tags is not None and not isinstance(tags, list):
@@ -88,7 +91,7 @@ def apply_expert(request: HttpRequest):
         existing.phone = (body.get("phone") or "").strip()[:32] or existing.phone
         if tags is not None:
             existing.field_tags = [str(t) for t in tags if str(t).strip()]
-        existing.reject_reason = None
+        existing.remark = None
         existing.modifier_id = d.user_id
         existing.save()
         return ok(request, {"id": existing.id, "status": existing.status, "code": existing.code})

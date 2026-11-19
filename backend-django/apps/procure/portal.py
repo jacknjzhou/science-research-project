@@ -134,7 +134,34 @@ def quote_inquiry(request: HttpRequest, id: int):
         b.save(update_fields=["bids_json", "modifier_id", "updated_at"])
 
     _notify_quote(b, s, amount)
+    _notify_quote_receipt(b, s, amount)
     return ok(request, {"id": b.id, "totalAmount": _num2(amount), "quoted": True})
+
+
+def _notify_quote_receipt(bid, supplier, amount) -> None:
+    """应价回执给供应商侧（终审 r2 N-3）：报价是供应商行为，回执必须回到供应商。
+
+    同一机构下所有 ACTIVE 账号各收一份站内信+邮件；无账号则静默跳过。
+    """
+    try:
+        from apps.notify.email import notify_user
+        from apps.sysadmin.models import SysUser
+
+        if not supplier.org_id:
+            return
+        for uid in SysUser.objects.filter(
+            tenant_id=bid.tenant_id, org_id=supplier.org_id,
+            status="ACTIVE", deleted=0,
+        ).values_list("id", flat=True):
+            notify_user(
+                bid.tenant_id, uid, "TODO", "报价已提交",
+                f"{bid.code} 已提交报价 {_num2(amount)} 元，等待采购方定标。",
+                f"bid:{bid.id}",
+            )
+    except Exception:  # noqa: BLE001 —— 通知永不阻断业务
+        from apps.procure.api import logger
+
+        logger.warning("应价回执通知失败 bid=%s", bid.id, exc_info=True)
 
 
 def _notify_quote(b: GBid, s: GSupplier, amount: Decimal) -> None:

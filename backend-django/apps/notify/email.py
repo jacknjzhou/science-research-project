@@ -90,12 +90,16 @@ def notify_user(
         return None
     from apps.sysadmin.models import SysUser
 
+    # 终审 r2 Minor：跨租户 uid 不得投递——否则会在本租户写一封指向他租户用户的
+    # "孤儿"站内信（收件人永远看不到，却污染了本租户的通知列表）。账号不存在同理跳过。
     row = (
         SysUser.objects.filter(id=user_id, tenant_id=tenant_id, deleted=0)
         .values_list("email", flat=True)
         .first()
     )
-    if row is None and not SysUser.objects.filter(id=user_id, deleted=0).exists():
+    if row is None and not SysUser.objects.filter(
+        id=user_id, tenant_id=tenant_id, deleted=0
+    ).exists():
         return None
 
     note = None
