@@ -2,7 +2,8 @@
 # 用法：docker compose up -d --build     浏览器访问 http://localhost:8080
 # 说明：
 #   · 2026-10-17 起后端为 Django（方案C，backend-django/）：migrate 拥有 schema，
-#     启动时幂等播种演示数据；未实现契约端点由 stub 层返回合规占位（X-Stub: true）。
+#     默认**不播种**演示数据（ARK_SEED_DEMO=0），需要时显式给 ARK_SEED_DEMO=1 +
+#     ARK_SEED_PASSWORD；未实现契约端点由 stub 层返回合规占位（X-Stub: true）。
 #   · 旧 Go/Node 后端已移除，源码快照见 git tag legacy-backend-20261017。
 #   · 重新初始化：docker compose down -v 清空 pgdata 卷再 up。
 

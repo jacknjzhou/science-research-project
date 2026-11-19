@@ -15,8 +15,10 @@ login() { # $1=user $2=pass -> echo token
 echo "[1/5] healthz"
 curl -fsS "$BASE/healthz" | grep -q '"ok":true'
 
-echo "[2/5] 真实 bcrypt 登录(admin/Admin@123456)"
-ADMIN_TOKEN=$(login admin 'Admin@123456')
+: "${ARK_SMOKE_USER:?请先 export ARK_SMOKE_USER=...（自己播种的账号）}"
+: "${ARK_SMOKE_PASSWORD:?请先 export ARK_SMOKE_PASSWORD=...}"
+echo "[2/5] 真实 bcrypt 登录($ARK_SMOKE_USER)"
+ADMIN_TOKEN=$(login "$ARK_SMOKE_USER" "$ARK_SMOKE_PASSWORD")
 [ -n "$ADMIN_TOKEN" ] || { echo "admin 未取得 token"; exit 1; }
 
 echo "[3/5] /auth/me：角色含 R-ADMIN、caps 非空"

@@ -9,9 +9,11 @@ echo "[1/4] healthz"
 curl -fsS "$BASE/healthz" | grep -q '"ok":true'
 
 echo "[2/4] login"
+: "${ARK_SMOKE_USER:?请先 export ARK_SMOKE_USER=...（自己播种的账号）}"
+: "${ARK_SMOKE_PASSWORD:?请先 export ARK_SMOKE_PASSWORD=...（ARK_SEED_PASSWORD 同值）}"
 TOKEN=$(curl -fsS -X POST "$BASE/api/v1/auth/login" \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"Admin@123456"}' \
+  -d "{\"username\":\"$ARK_SMOKE_USER\",\"password\":\"$ARK_SMOKE_PASSWORD\"}" \
   | "$PY" -c 'import sys,json;print(json.load(sys.stdin)["data"]["access_token"])')
 [ -n "$TOKEN" ] || { echo "未取得 token"; exit 1; }
 

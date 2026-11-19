@@ -76,7 +76,16 @@ def validate_secret_value(value: str, *, origin: str = "JWT_SECRET") -> None:
 
 
 # —— 已知的仓库默认口令（seed_demo 用过的全部固定值）——
-# 升级自 E-8 之前的库可能仍带这些口令；生产启动时逐一探测，命中即拒绝服务。
+# 升级自 E-8 之前的库可能仍带这些口令；生产启动逐一探测，命中即拒绝服务。
+DEFAULT_SEED_PASSWORDS: tuple[str, ...] = (
+    "Admin@123456",
+    "Manager@123456",
+    "Staff@123456",
+    "Finance@123456",
+    "Partner@123456",
+    "Expert@123456",
+    "Demo@123456",
+)
 KNOWN_DEFAULT_PASSWORDS = {
     "admin": ("Admin@123456",),
     "manager": ("Manager@123456",),
@@ -85,61 +94,105 @@ KNOWN_DEFAULT_PASSWORDS = {
     "partner": ("Partner@123456",),
     "expert_ext": ("Expert@123456",),
 }
-# 兜底：任何演示账号都可能被上一版 compose 的默认口令覆盖
+# 上一版 compose 用同一个默认口令播全部演示账号
 FALLBACK_DEFAULT_PASSWORDS = ("Demo@123456",)
+
+# 单账号最多试几个候选口令（自身默认 + 兜底），控制启动期 bcrypt 开销
+_MAX_CANDIDATES = 2
 
 
 def _known_defaults_for(username: str) -> tuple[str, ...]:
-    return KNOWN_DEFAULT_PASSWORDS.get(username, ()) + FALLBACK_DEFAULT_PASSWORDS
+    own = KNOWN_DEFAULT_PASSWORDS.get(username, ())
+    return (own + FALLBACK_DEFAULT_PASSWORDS)[:_MAX_CANDIDATES]
 
 
-def find_default_credential_accounts() -> list[str]:
-    """返回仍在用仓库默认口令的账号名（只探测已知演示账号，成本可控）。"""
+def _matches_default(password_hash: str, username: str) -> bool:
     import bcrypt
-    from django.db import DatabaseError
 
+    hashed = password_hash.encode()
+    for pwd in _known_defaults_for(username):
+        try:
+            if bcrypt.checkpw(pwd.encode(), hashed):
+                return True
+        except ValueError:  # 非法 hash → 交给业务层
+            return False
+    return False
+
+
+def find_default_credential_accounts(*, active_only: bool = True) -> list[str]:
+    """返回仍在用仓库默认口令的账号（跨全部租户，只探测已知演示用户名）。
+
+    `active_only=True` 只看能真正登录的账号（状态 ACTIVE）——锁定/停用账号登录会被
+    403 拒掉，不该阻断启动；但 `rotate_demo_credentials` 会连这些账号一起轮换。
+    """
     from apps.sysadmin.models import SysUser
 
+    qs = SysUser.objects.filter(username__in=list(KNOWN_DEFAULT_PASSWORDS), deleted=0)
+    if active_only:
+        qs = qs.filter(status="ACTIVE")
     hits: list[str] = []
-    for username in KNOWN_DEFAULT_PASSWORDS:
-        row = (
-            SysUser.objects.filter(tenant_id=1, username=username, deleted=0)
-            .values_list("password_hash", flat=True)
-            .first()
-        )
-        if not row:
+    for username, password_hash in qs.values_list("username", "password_hash").iterator():
+        if not password_hash:
             continue
-        hashed = str(row).encode()
-        for pwd in _known_defaults_for(username):
-            try:
-                if bcrypt.checkpw(pwd.encode(), hashed):
-                    hits.append(username)
-                    break
-            except ValueError:  # 非法 hash → 交给业务层处理
-                break
+        if _matches_default(str(password_hash), username) and username not in hits:
+            hits.append(username)
     return hits
 
 
-def assert_no_default_credentials() -> None:
+def _account_table_ready() -> bool | None:
+    """`True`=表在、`False`=表还没建（首次 migrate 前）、`None`=连不上（未知状态）。"""
+    from django.db import DatabaseError, connection
+
+    try:
+        return "sys_user" in connection.introspection.table_names()
+    except DatabaseError:
+        return None
+
+
+def assert_no_default_credentials(*, attempts: int = 5, delay: float = 2.0) -> None:
     """生产启动前：库中不得残留仓库默认口令的账号。
 
     升级自 E-8 之前的部署，数据卷里往往还有 `admin/Admin@123456`；此时容器若静默
-    起来，等于把 R-ADMIN 挂在公开口令上。这里 fail-closed，并给出一次性修法。
+    起来，等于把 R-ADMIN 挂在公开口令上。这里 fail-closed：
+      · 只有「表尚未创建」才放行（首次 migrate 之前）；
+      · 连不上库 / 权限错误 → 有限重试后**拒绝启动**（不能当作「没有默认口令」）。
     """
+    import time
+
     from django.conf import settings as dj_settings
-    from django.db import DatabaseError, OperationalError, ProgrammingError
+    from django.db import DatabaseError
 
     if getattr(dj_settings, "DEBUG", False):
         return
-    try:
-        hits = find_default_credential_accounts()
-    except (OperationalError, ProgrammingError, DatabaseError):
-        return  # 表尚未创建（首次 migrate 之前）：交给 migrate 之后的下一次启动
-    if hits:
-        names = "、".join(hits)
-        raise ImproperlyConfigured(
-            f"检测到仍在使用仓库默认口令的账号：{names}。这些口令是公开的，等同没有口令。\n"
-            "请先执行一次性修复（轮换为强口令）再启动：\n"
-            "  python manage.py rotate_demo_credentials --password '<新强口令>'\n"
-            "或直接删除演示库/清空数据卷重新初始化。"
-        )
+
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        ready = _account_table_ready()
+        if ready is False:
+            return  # 首次 migrate 之前
+        if ready is True:
+            try:
+                hits = find_default_credential_accounts()
+            except DatabaseError as exc:  # 权限/只读副本/连接中断
+                last_error = exc
+            else:
+                if hits:
+                    names = "、".join(hits)
+                    raise ImproperlyConfigured(
+                        f"检测到仍在使用仓库默认口令的账号：{names}。这些口令是公开的，等同没有口令。\n"
+                        "请先执行一次性修复（轮换为强口令）再启动：\n"
+                        "  python manage.py rotate_demo_credentials --password '<新强口令>'\n"
+                        "（容器内：docker compose run --rm --no-deps backend python manage.py "
+                        "rotate_demo_credentials --password '<新强口令>'）\n"
+                        "或直接删除演示库/清空数据卷重新初始化。"
+                    )
+                return
+        else:
+            last_error = last_error or RuntimeError("无法读取数据库表清单")
+        if attempt < attempts:
+            time.sleep(delay)
+
+    raise ImproperlyConfigured(
+        "启动自检无法确认数据库中的默认口令状态（不会在未知状态下启动）："
+        f"{last_error}. 请先确保数据库可用并执行 migrate，然后重试启动。"
+    )

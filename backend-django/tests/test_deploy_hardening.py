@@ -60,16 +60,42 @@ def test_secret_check_ignores_settings_module_name(monkeypatch, settings):
     validate_runtime_secrets()
 
 
-def test_prod_settings_module_refuses_to_import_without_secret(monkeypatch):
-    """选中 prod 配置即在 import 期失败（gunicorn bind 之前）。"""
+def test_prod_settings_module_refuses_weak_secret_at_import(monkeypatch):
+    """给了 `ARK_JWT_SECRET` 时 import 期即失败（gunicorn bind 之前）。"""
     import importlib
     import sys
 
-    monkeypatch.delenv("ARK_JWT_SECRET", raising=False)
+    import config.settings.base as base
+
+    monkeypatch.setenv("ARK_JWT_SECRET", "short")
+    monkeypatch.setattr(base, "JWT_SECRET", "short")
     sys.modules.pop("config.settings.prod", None)
     with pytest.raises(ImproperlyConfigured):
         importlib.import_module("config.settings.prod")
     sys.modules.pop("config.settings.prod", None)
+
+
+def test_prod_settings_defers_missing_env_to_runtime(monkeypatch, settings):
+    """I-R3-5：没给 env 时 prod 可以 import（允许自定义 settings 自定密钥源），
+    但运行期自检必须拒绝最终生效的弱值。"""
+    import importlib
+    import sys
+
+    import config.settings.base as base
+
+    from core.startup import validate_runtime_secrets
+
+    monkeypatch.delenv("ARK_JWT_SECRET", raising=False)
+    monkeypatch.setattr(base, "JWT_SECRET", "dev-secret-change-me-please-use-32-bytes-min!")
+    sys.modules.pop("config.settings.prod", None)
+    prod = importlib.import_module("config.settings.prod")
+    assert prod.DEBUG is False
+    sys.modules.pop("config.settings.prod", None)
+
+    settings.DEBUG = False
+    settings.JWT_SECRET = "short"
+    with pytest.raises(ImproperlyConfigured):
+        validate_runtime_secrets()
 
 
 def _seed(*args, **kwargs):
@@ -248,3 +274,88 @@ def test_rotate_command_skips_real_password(settings):
     call_command("rotate_demo_credentials", "--password", "Fresh-Str0ng-Pass!")
     user.refresh_from_db()
     assert user.password_hash == before
+
+
+# —— r3：门禁 fail-closed / 跨租户 / 禁用账号 / 轮换完整性 ——
+
+@pytest.mark.django_db
+def test_gate_is_cross_tenant(settings):
+    """I-R3-1：其他租户的默认口令账号同样拦截。"""
+    import bcrypt
+
+    from apps.sysadmin.models import SysUser
+    from core.startup import assert_no_default_credentials, find_default_credential_accounts
+
+    SysUser.objects.create(
+        tenant_id=2, username="admin", real_name="租户2管理员", status="ACTIVE", creator_id=1,
+        password_hash=bcrypt.hashpw(b"Admin@123456", bcrypt.gensalt()).decode(),
+    )
+    settings.DEBUG = False
+    assert "admin" in find_default_credential_accounts()
+    with pytest.raises(ImproperlyConfigured):
+        assert_no_default_credentials()
+
+
+@pytest.mark.django_db
+def test_gate_ignores_non_active_accounts(settings):
+    """I-R3-3：停用/锁定账号登录会被 403 拒掉，不该阻断启动。"""
+    import bcrypt
+
+    from apps.sysadmin.models import SysUser
+    from core.startup import assert_no_default_credentials, find_default_credential_accounts
+
+    SysUser.objects.create(
+        tenant_id=1, username="admin", real_name="已停用", status="DISABLED", creator_id=1,
+        password_hash=bcrypt.hashpw(b"Admin@123456", bcrypt.gensalt()).decode(),
+    )
+    settings.DEBUG = False
+    assert find_default_credential_accounts() == []
+    assert_no_default_credentials()  # 放行
+
+
+@pytest.mark.django_db
+def test_gate_fails_closed_when_db_unreachable(settings, monkeypatch):
+    """C-R3-1：连不上库时不能当作「没有默认口令」放行。"""
+    from django.db import OperationalError
+
+    from core import startup
+
+    settings.DEBUG = False
+    monkeypatch.setattr(startup, "_account_table_ready", lambda: None)
+    with pytest.raises(ImproperlyConfigured):
+        startup.assert_no_default_credentials(attempts=1, delay=0)
+
+
+@pytest.mark.django_db
+def test_gate_allows_when_table_missing(settings, monkeypatch):
+    """首次 migrate 之前（表还没建）放行。"""
+    from core import startup
+
+    settings.DEBUG = False
+    monkeypatch.setattr(startup, "_account_table_ready", lambda: False)
+    startup.assert_no_default_credentials(attempts=1, delay=0)
+
+
+@pytest.mark.django_db
+def test_rotate_rejects_fallback_default_password(settings):
+    """I-R3-2：`Demo@123456` 也是默认口令，不能用来「修好」。"""
+    from django.core.management.base import CommandError
+    from django.core.management import call_command
+
+    _make_admin_with("Admin@123456")
+    with pytest.raises(CommandError):
+        call_command("rotate_demo_credentials", "--password", "Demo@123456")
+
+
+@pytest.mark.django_db
+def test_rotate_reports_remaining_accounts(monkeypatch, settings):
+    """轮换后自检：若仍有默认口令账号（例如 hash 异常未命中），命令必须报错而不是报成功。"""
+    from django.core.management import call_command
+    from django.core.management.base import CommandError
+
+    from apps.sysadmin.management.commands import rotate_demo_credentials as cmd
+
+    _make_admin_with("Admin@123456")
+    monkeypatch.setattr(cmd, "find_default_credential_accounts", lambda active_only=True: ["admin"])
+    with pytest.raises(CommandError):
+        call_command("rotate_demo_credentials", "--password", "Fresh-Str0ng-Pass!")

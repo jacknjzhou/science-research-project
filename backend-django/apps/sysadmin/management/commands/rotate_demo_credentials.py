@@ -10,32 +10,45 @@ E-8 配套：升级自旧版本的库可能残留 `admin/Admin@123456` 等公开
 """
 from __future__ import annotations
 
+import os
+import sys
+
 import bcrypt
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from apps.sysadmin.models import SysUser
-from core.startup import KNOWN_DEFAULT_PASSWORDS, _known_defaults_for
+from core.startup import DEFAULT_SEED_PASSWORDS, KNOWN_DEFAULT_PASSWORDS, _known_defaults_for, find_default_credential_accounts
 
 
 class Command(BaseCommand):
     help = "把仍在使用仓库默认口令的演示账号轮换为运维指定口令（E-8）"
 
     def add_arguments(self, parser):
-        parser.add_argument("--password", required=True, help="新口令（映射到 ARK_JWT_SECRET 之外的独立凭据）")
+        parser.add_argument(
+            "--password",
+            help="新口令；省略则从环境变量 ARK_ROTATE_PASSWORD 或标准输入读取（避免进 argv/ps）",
+        )
         parser.add_argument("--dry-run", action="store_true", help="只列出将被轮换的账号")
 
     def handle(self, *args, **options):
-        new_pwd = options["password"]
+        new_pwd = options.get("password") or os.environ.get("ARK_ROTATE_PASSWORD") or ""
+        if not new_pwd and not sys.stdin.isatty():
+            new_pwd = sys.stdin.readline().strip()
+        if not new_pwd:
+            raise CommandError("缺少新口令：用 --password、ARK_ROTATE_PASSWORD 或标准输入提供。")
         if len(new_pwd) < 10:
             raise CommandError("新口令至少 10 位（演示账号也是真实登录入口）。")
-        if new_pwd in {p for pwds in KNOWN_DEFAULT_PASSWORDS.values() for p in pwds}:
-            raise CommandError("新口令不得是仓库内置的默认口令。")
+        if new_pwd in DEFAULT_SEED_PASSWORDS:
+            raise CommandError("新口令不得是仓库内置的默认口令（含 Demo@123456）。")
 
         hashed = bcrypt.hashpw(new_pwd.encode(), bcrypt.gensalt()).decode()
         rotated: list[str] = []
-        for username in KNOWN_DEFAULT_PASSWORDS:
-            row = SysUser.objects.filter(tenant_id=1, username=username, deleted=0).first()
+        rows = SysUser.objects.filter(
+            username__in=list(KNOWN_DEFAULT_PASSWORDS), deleted=0
+        ).order_by("tenant_id", "id")
+        for row in rows:
+            username = row.username
             if row is None or not row.password_hash:
                 continue
             current = row.password_hash.encode()
@@ -50,7 +63,7 @@ class Command(BaseCommand):
                     break
             if not hit:
                 continue
-            rotated.append(username)
+            rotated.append(f"{username}@{row.tenant_id}")
             if options["dry_run"]:
                 continue
             row.password_hash = hashed
@@ -61,5 +74,11 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS(f"{verb} {len(rotated)} 个账号：{'、'.join(rotated)}"))
         else:
             self.stdout.write("没有发现仍在使用默认口令的账号。")
-        if not options["dry_run"] and rotated and getattr(settings, "DEBUG", False):
-            self.stdout.write("提示：当前为 DEBUG 形态，仅本机使用。")
+        if not options["dry_run"] and rotated:
+            # 自检：轮换后 gate 必须能放行（否则说明还有漏网账号）
+            remaining = find_default_credential_accounts(active_only=False)
+            if remaining:
+                raise CommandError(
+                    f"仍有账号使用默认口令：{'、'.join(remaining)}；请检查后重试。"
+                )
+            self.stdout.write(self.style.SUCCESS("自检通过：已无默认口令账号。"))

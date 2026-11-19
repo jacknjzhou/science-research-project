@@ -272,7 +272,7 @@ watch(() => route.path, () => { if (auth.isAuthed) loadBadges() })
       <div class="fld"><label>密码</label><input type="password" v-model="loginForm.password" placeholder="••••••••" @keyup.enter="submitLogin" /></div>
       <div v-if="loginErr" style="color:#c0392b;font-size:13px;margin:-4px 0 8px">{{ loginErr }}</div>
       <button class="btn seal login-btn" :disabled="logging" @click="submitLogin">{{ logging ? '登录中…' : '登 录' }}</button>
-      <div class="login-foot">演示账号 <b>admin/Admin@123456</b> · <b>staff/Staff@123456</b> · <b>finance/Finance@123456</b></div>
+      <div class="login-foot">演示账号口令由部署方通过 <code>ARK_SEED_PASSWORD</code> 指定（仓库不含默认口令）</div>
       <div class="login-foot" style="margin-top:6px">
         外部机构首次使用？<a href="#/register" style="color:var(--seal);text-decoration:underline">机构自助注册</a>
       </div>

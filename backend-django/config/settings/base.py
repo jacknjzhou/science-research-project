@@ -133,8 +133,8 @@ EMAIL_USE_TLS = os.environ.get("ARK_EMAIL_TLS", "") == "1"
 DEFAULT_FROM_EMAIL = os.environ.get("ARK_EMAIL_FROM", "noreply@ark.local")
 
 # ---- E-8：是否允许播种演示数据（含工号/固定演示账号）----
-# 生产必须保持 False：容器启动脚本据此决定是否跑 seed_demo，
-# 否则会在生产建出 admin/Admin@123456 这类公开口令账号。
+# 生产必须保持 False（dev/test 置 True）。容器 CMD 另由 `ARK_SEED_DEMO=1` 显式开启
+# （见 Dockerfile），两者任一为假都不会播种——否则会在生产建出公开口令的演示账号。
 ALLOW_DEMO_SEED = False
 
 # ---- M2-a：外部机构自助注册落库租户（公开端点，不接受请求体指定）----

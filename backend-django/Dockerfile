@@ -1,4 +1,5 @@
-# backend-django 开发镜像（生产部署走 systemd 裸机，见 spec §九）
+# backend-django 运行镜像：默认按生产配置启动（DJANGO_SETTINGS_MODULE=config.settings.prod，
+# DEBUG=False）；本地调试请显式覆盖该环境变量。生产部署亦可用 systemd 裸机，见 spec §九
 FROM python:3.13-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
