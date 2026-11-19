@@ -535,7 +535,7 @@ def list_contracts(request: HttpRequest):
             tenant_id=domain_from(request).tenant_id, deleted=0
         )
         .values("contract_id")
-        .annotate(paid_sum=Sum("plan_amount"))
+        .annotate(paid_sum=Sum("paid_amount"))
     }
     return ok(request, {"list": [_api_contract(c, paid.get(c.id, 0)) for c in rows],
                         "total": total, "page": page, "size": size})

@@ -263,3 +263,35 @@ def test_score_allowed_after_accept(seed_auth):
     r = _score(Client(), t.id, uid)
     assert r.status_code == 200
     assert r.json()["data"]["total_score"] == "88.00"
+
+
+# ---------------------------------------------------------------- E-5 已付额口径
+
+
+def test_contract_list_paid_sum_uses_paid_amount(seed_auth):
+    from datetime import date, timedelta
+    from decimal import Decimal
+
+    from apps.procure.models import GContract, GContractPayment
+
+    sup = _sup_row(1, "本租户供应商")
+    c = GContract.objects.create(
+        tenant_id=1, creator_id=1, supplier=sup, contract_type="采购",
+        party_a="本单位", party_b=sup.name, amount=Decimal("98000"),
+        sign_date=date.today(), start_date=date.today(),
+        end_date=date.today() + timedelta(days=90), status="ACTIVE",
+    )
+    GContractPayment.objects.create(
+        tenant_id=1, creator_id=1, contract=c, phase="预付",
+        plan_amount=Decimal("40000"), paid_amount=Decimal("40000"), status="PAID",
+    )
+    GContractPayment.objects.create(
+        tenant_id=1, creator_id=1, contract=c, phase="验收",
+        plan_amount=Decimal("58000"), paid_amount=Decimal("0"), status="PLANNED",
+    )
+    r = Client().get("/api/v1/contract", **bearer(seed_auth["admin"].id, ["R-MANAGER"]))
+    assert r.status_code == 200
+    row = next(x for x in r.json()["data"]["list"] if x["id"] == c.id)
+    # 管理端列表 paid_sum 既有形态是 float（_api_contract: float(paid_sum)），
+    # 本任务只修口径（paid_amount 而非 plan_amount），不改响应类型（契约债另记）。
+    assert Decimal(str(row["paid_sum"])) == Decimal("40000")
