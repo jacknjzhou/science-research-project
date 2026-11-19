@@ -6,8 +6,10 @@ from tests.conftest import bearer
 
 
 @pytest.mark.django_db
-def test_login_dev_fallback():
-    """ark/ark dev 回退：签发固定数据域。"""
+def test_login_dev_fallback(settings, monkeypatch):
+    """ark/ark 冒烟回退：仅在 DEBUG+ARK_DEV_LOGIN=1 时签发最小数据域（E-3 后门收口）。"""
+    settings.DEBUG = True
+    monkeypatch.setenv("ARK_DEV_LOGIN", "1")
     c = Client()
     r = c.post(
         "/api/v1/auth/login",
@@ -19,6 +21,19 @@ def test_login_dev_fallback():
     assert data["token_type"] == "Bearer"
     assert data["access_token"]
     assert data["expires_in"] > 0
+
+
+@pytest.mark.django_db
+def test_login_dev_fallback_closed_by_default():
+    """默认配置（DEBUG=False 或未显式开开关）下 ark/ark 必须与普通账号同路径失败。"""
+    c = Client()
+    r = c.post(
+        "/api/v1/auth/login",
+        data={"username": "ark", "password": "ark"},
+        content_type="application/json",
+    )
+    assert r.status_code == 401
+    assert r.json()["code"] == 40102
 
 
 @pytest.mark.django_db

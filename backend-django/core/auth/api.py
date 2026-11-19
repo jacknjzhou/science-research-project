@@ -1,12 +1,15 @@
 """登录端点（对齐 Go auth/login.go）。
 
 - reader 可用：username+tenant_id 取回身份，bcrypt 校验，命中签发真实数据域 claims；
-- dev 回退：ark/ark 通过即签发固定数据域（冒烟/前端直连零回归）；
+- dev 回退：仅在 DEBUG 且显式 ARK_DEV_LOGIN=1 时生效，签发最小数据域（冒烟/前端直连）；
 - 失败码统一，避免用户名枚举：40102。
 """
 from __future__ import annotations
 
+import os
+
 import bcrypt
+from django.conf import settings
 from django.http import HttpRequest
 
 from apps.sysadmin.models import SysUser
@@ -25,6 +28,11 @@ DEV_USER = "ark"
 DEV_PASSWORD = "ark"
 
 
+def _dev_login_enabled() -> bool:
+    """冒烟后门开关：必须同时满足 DEBUG=True 与显式 ARK_DEV_LOGIN=1（E-3）。"""
+    return bool(getattr(settings, "DEBUG", False)) and os.environ.get("ARK_DEV_LOGIN") == "1"
+
+
 def login(request: HttpRequest) -> object:
     body = read_json(request, msg="用户名/密码必填")
     username = (body.get("username") or "").strip()
@@ -33,8 +41,12 @@ def login(request: HttpRequest) -> object:
         raise ApiError(400, CODE_BAD_REQUEST, "用户名/密码必填")
 
     tenant_id = body.get("tenant_id") or 1
+    is_dev_login = (
+        username == DEV_USER and password == DEV_PASSWORD and _dev_login_enabled()
+    )
     user = None
-    if username != DEV_USER or password != DEV_PASSWORD:
+    if not is_dev_login:
+        # 后门关闭时 ark/ark 与普通账号同路径：库中无此人 → 40102（不泄露后门存在）
         user = (
             SysUser.objects.filter(
                 username=username, tenant_id=tenant_id, deleted=0
@@ -47,9 +59,9 @@ def login(request: HttpRequest) -> object:
         if user.status != "ACTIVE":
             raise ApiError(403, CODE_ACCOUNT_DISABLED, "账号已停用或锁定")
 
-    if user is None:
-        # dev 回退（对齐 Go reader==nil 路径）
-        claims = _issue(request, 1, 1, 0, "INTERNAL", ["R-STAFF", "R-MANAGER"])
+    if is_dev_login:
+        # 冒烟回退：最小数据域，不授予管理角色（E-3）
+        claims = _issue(request, 1, tenant_id, 0, "INTERNAL", ["R-STAFF"])
     else:
         from apps.sysadmin.models import SysUserRole
 
