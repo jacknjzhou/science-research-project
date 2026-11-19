@@ -79,15 +79,15 @@ def _gen_code(prefix: str, tenant_id: int, model=None, year: int | None = None) 
     return f"{prefix}-{y}-{seq:04d}"
 
 
-def _get_req_or_404(rid: int) -> GRequisition:
-    r = GRequisition.objects.filter(id=rid, deleted=0).first()
+def _get_req_or_404(tenant_id: int, rid: int) -> GRequisition:
+    r = GRequisition.objects.filter(id=rid, tenant_id=tenant_id, deleted=0).first()
     if r is None:
         raise ApiError(404, CODE_NOT_FOUND, "采购申请不存在")
     return r
 
 
-def _get_contract_or_404(cid: int) -> GContract:
-    c = GContract.objects.filter(id=cid, deleted=0).first()
+def _get_contract_or_404(tenant_id: int, cid: int) -> GContract:
+    c = GContract.objects.filter(id=cid, tenant_id=tenant_id, deleted=0).first()
     if c is None:
         raise ApiError(404, CODE_NOT_FOUND, "合同不存在")
     return c
@@ -255,7 +255,7 @@ def list_requisitions(request: HttpRequest):
 
 def get_way(request: HttpRequest, id: int):
     """GET 方式判定结果（G-03）：返回已判定的采购方式与依据规则；未判定则即时计算预览。"""
-    r = _get_req_or_404(id)
+    r = _get_req_or_404(domain_from(request).tenant_id, id)
     way, rule_id = _decide_way(r.est_amount, r.category)
     if r.purchase_way:
         way, rule_id = r.purchase_way, r.way_basis_rule_id
@@ -269,7 +269,7 @@ def get_way(request: HttpRequest, id: int):
 def decide_way(request: HttpRequest, id: int):
     """提交并触发 G-02 冻结 + G-03 方式判定（DRAFT→SUBMITTED→WAY_DECIDED）。"""
     dom = domain_from(request)
-    r = _get_req_or_404(id)
+    r = _get_req_or_404(dom.tenant_id, id)
     if r.status not in ("DRAFT",):
         raise ApiError(409, CODE_CONFLICT, f"提交状态机冲突：当前 {r.status}")
     line_id = _freeze_budget(r.tenant_id, r.budget_subject_code, r.est_amount)
@@ -300,12 +300,14 @@ def create_bid(request: HttpRequest):
     if not b.get("requisition_id") or b.get("method") not in (
             "公开招标", "邀请招标", "竞争性谈判", "单一来源", "询价", "自行采购"):
         raise ApiError(400, CODE_BAD_REQUEST, "requisition_id 与 method 必填")
-    r = _get_req_or_404(int(b["requisition_id"]))
+    r = _get_req_or_404(dom.tenant_id, int(b["requisition_id"]))
     if r.status != "WAY_DECIDED":
         raise ApiError(409, CODE_CONFLICT, f"发标状态机冲突：当前 {r.status}")
     # 邀请招标/询价候选供应商校验（黑名单/未入库硬拦截）
     for sid in (b.get("invited_supplier_ids") or []):
-        s = GSupplier.objects.filter(id=int(sid), deleted=0).first()
+        s = GSupplier.objects.filter(
+            id=int(sid), tenant_id=dom.tenant_id, deleted=0
+        ).first()
         _check_supplier_usable(s)
     bid = GBid.objects.create(
         tenant_id=dom.tenant_id, creator_id=dom.user_id,
@@ -354,7 +356,7 @@ def _notify_bid_invite(bid: GBid, req: GRequisition) -> None:
 def award_bid(request: HttpRequest, id: int):
     """定标（G-05）：PUBLICIZING→AWARDED；废标（winner 空）回退释放冻结。"""
     dom = domain_from(request)
-    bid = GBid.objects.filter(id=id, deleted=0).first()
+    bid = GBid.objects.filter(id=id, tenant_id=dom.tenant_id, deleted=0).first()
     if bid is None:
         raise ApiError(404, CODE_NOT_FOUND, "招标不存在")
     if bid.status != "PUBLICIZING":
@@ -365,7 +367,9 @@ def award_bid(request: HttpRequest, id: int):
     if not voided and not winner:
         raise ApiError(400, CODE_BAD_REQUEST, "winner_supplier_id 必填（废标则 voided=true）")
     if winner and not voided:
-        s = GSupplier.objects.filter(id=int(winner), deleted=0).first()
+        s = GSupplier.objects.filter(
+            id=int(winner), tenant_id=dom.tenant_id, deleted=0
+        ).first()
         _check_supplier_usable(s)
         bid.winner_supplier_id = int(winner)
         bid.status = "AWARDED"
@@ -410,7 +414,12 @@ def _notify_bid_result(bid: GBid) -> None:
         ids = [int(x) for x in (bid.invited_supplier_ids or [])]
         if not ids:
             return
-        sups = {s.id: s for s in GSupplier.objects.filter(id__in=ids, deleted=0)}
+        sups = {
+            s.id: s
+            for s in GSupplier.objects.filter(
+                id__in=ids, tenant_id=bid.tenant_id, deleted=0
+            )
+        }
         presidents = {}
         for sid in ids:
             s = sups.get(sid)
@@ -473,10 +482,14 @@ def create_order_from_bid(request: HttpRequest):
     for k in ("bid_id", "supplier_id", "order_amount"):
         if b.get(k) is None:
             raise ApiError(400, CODE_BAD_REQUEST, "bid_id/supplier_id/order_amount 必填")
-    bid = GBid.objects.filter(id=int(b["bid_id"]), deleted=0).first()
+    bid = GBid.objects.filter(
+        id=int(b["bid_id"]), tenant_id=dom.tenant_id, deleted=0
+    ).first()
     if bid is None or bid.status != "AWARDED":
         raise ApiError(409, CODE_CONFLICT, "仅 AWARDED 招标可下单")
-    s = GSupplier.objects.filter(id=int(b["supplier_id"]), deleted=0).first()
+    s = GSupplier.objects.filter(
+        id=int(b["supplier_id"]), tenant_id=dom.tenant_id, deleted=0
+    ).first()
     _check_supplier_usable(s)
     o = GOrder.objects.create(
         tenant_id=dom.tenant_id, creator_id=dom.user_id,
@@ -556,7 +569,9 @@ def create_contract(request: HttpRequest):
             raise ApiError(400, CODE_BAD_REQUEST, f"{k} 必填")
     supplier = None
     if b.get("supplier_id"):
-        supplier = GSupplier.objects.filter(id=int(b["supplier_id"]), deleted=0).first()
+        supplier = GSupplier.objects.filter(
+            id=int(b["supplier_id"]), tenant_id=dom.tenant_id, deleted=0
+        ).first()
         _check_supplier_usable(supplier)
     is_outsource = b["contract_type"] == "外协分包"
     c = GContract.objects.create(
@@ -592,7 +607,7 @@ REVIEW_ROLES = ("tech", "legal", "finance", "security")
 def review_contract(request: HttpRequest, id: int):
     """合同评审（G-07/G-08）：技术/法务/财务/密级四方意见；任一驳回回 DRAFT。"""
     dom = domain_from(request)
-    c = _get_contract_or_404(id)
+    c = _get_contract_or_404(dom.tenant_id, id)
     if c.status not in ("DRAFT", "REVIEW", "AMENDING"):
         raise ApiError(409, CODE_CONFLICT, f"评审状态机冲突：当前 {c.status}")
     b = read_json(request)
@@ -619,7 +634,7 @@ def review_contract(request: HttpRequest, id: int):
 def sign_contract(request: HttpRequest, id: int):
     """签署（G-11）：TO_SIGN→ACTIVE；CA 不可用降级纸质（sign_method=纸质+scan_url）。"""
     dom = domain_from(request)
-    c = _get_contract_or_404(id)
+    c = _get_contract_or_404(dom.tenant_id, id)
     if c.status != "TO_SIGN":
         raise ApiError(409, CODE_CONFLICT, f"签署状态机冲突：当前 {c.status}")
     b = read_json_soft(request)
@@ -638,7 +653,7 @@ def sign_contract(request: HttpRequest, id: int):
 @transaction.atomic
 def ai_parse_contract(request: HttpRequest, id: int):
     """G-13 AI 解析：确定性降级（逐字段来源+置信度，人工确认后落字段）。"""
-    c = _get_contract_or_404(id)
+    c = _get_contract_or_404(domain_from(request).tenant_id, id)
     result = {
         "fields": {
             "party_a": {"value": c.party_a, "source": "MANUAL", "confidence": 1.0},
@@ -656,7 +671,7 @@ def ai_parse_contract(request: HttpRequest, id: int):
 @transaction.atomic
 def ai_risk_contract(request: HttpRequest, id: int):
     """G-14 AI 风险：规则引擎硬约束（条款红线）+ LLM 建议（降级空）。"""
-    c = _get_contract_or_404(id)
+    c = _get_contract_or_404(domain_from(request).tenant_id, id)
     risks = []
     # 规则引擎：无付款条款 / 无交付物清单 → 高风险提示（硬约束可拦截项）
     if not c.pay_terms_json:
@@ -672,7 +687,7 @@ def ai_risk_contract(request: HttpRequest, id: int):
 
 def trace_contract(request: HttpRequest, id: int):
     """G-12 合同追溯链（联动 E-17）：申请→招标→订单→合同→付款 全链节点。"""
-    c = _get_contract_or_404(id)
+    c = _get_contract_or_404(domain_from(request).tenant_id, id)
     nodes = [{"step": "CONTRACT", "id": c.id, "code": c.code, "status": c.status,
               "at": c.created_at.isoformat()}]
     if c.requisition_id:
@@ -706,7 +721,7 @@ def trace_contract(request: HttpRequest, id: int):
 def create_payment_plan(request: HttpRequest, id: int):
     """付款计划（G-08）：Σ plan_amount ≤ 合同额硬拦截（40911）。"""
     dom = domain_from(request)
-    c = _get_contract_or_404(id)
+    c = _get_contract_or_404(dom.tenant_id, id)
     b = read_json(request)
     items = b.get("plans") or ([b] if b.get("plan_amount") else [])
     if not items:

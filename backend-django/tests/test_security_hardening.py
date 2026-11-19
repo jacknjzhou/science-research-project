@@ -11,6 +11,8 @@ import json
 import pytest
 from django.test import Client
 
+from tests.conftest import bearer
+
 pytestmark = pytest.mark.django_db
 
 
@@ -89,8 +91,6 @@ def _task(tenant_id: int, title: str, status: str = "DRAFT"):
 
 
 def test_list_experts_is_tenant_scoped(seed_auth):
-    from tests.conftest import bearer
-
     mine = _expert(1, "本租户专家")
     other = _expert(2, "他租户专家")
     r = Client().get("/api/v1/experts", **bearer(seed_auth["admin"].id, ["R-ADMIN"]))
@@ -101,8 +101,6 @@ def test_list_experts_is_tenant_scoped(seed_auth):
 
 
 def test_list_reviews_is_tenant_scoped(seed_auth):
-    from tests.conftest import bearer
-
     mine = _task(1, "本租户评审")
     other = _task(2, "他租户评审")
     r = Client().get("/api/v1/reviews", **bearer(seed_auth["admin"].id, ["R-ADMIN"]))
@@ -115,8 +113,6 @@ def test_list_reviews_is_tenant_scoped(seed_auth):
 def test_draw_experts_pool_is_tenant_scoped(seed_auth):
     """只有他租户有 ACTIVE 专家时，本租户任务抽签不得抽到人。"""
     from apps.expertreview.models import NReviewInvitation
-    from tests.conftest import bearer
-
     t = _task(1, "本租户抽签", status="DRAFT")
     _expert(2, "他租户唯一专家")
     r = Client().post(
@@ -129,3 +125,70 @@ def test_draw_experts_pool_is_tenant_scoped(seed_auth):
         assert NReviewInvitation.objects.filter(task_id=t.id).count() == 0
     else:
         assert r.status_code in (409, 422)
+
+
+# ---------------------------------------------------------------- E-2 G 域租户
+
+
+def _req_row(tenant_id: int, item: str = "他租户采购", status: str = "WAY_DECIDED"):
+    from decimal import Decimal
+
+    from apps.procure.models import GRequisition
+
+    return GRequisition.objects.create(
+        tenant_id=tenant_id, creator_id=1, project_id=5, applicant_id=1,
+        category="设备", item_name=item, est_amount=Decimal("1000"),
+        status=status,
+    )
+
+
+def _sup_row(tenant_id: int, name: str = "他租户供应商"):
+    from apps.procure.models import GSupplier
+
+    return GSupplier.objects.create(
+        tenant_id=tenant_id, creator_id=1, name=name, status="IN_LIBRARY",
+        qualification_expire_date="2030-12-31",
+    )
+
+
+def test_create_bid_rejects_foreign_requisition(seed_auth):
+    r2 = _req_row(2)
+    r = Client().post(
+        "/api/v1/procurement/bids",
+        data=json.dumps({"requisition_id": r2.id, "method": "询价"}),
+        content_type="application/json",
+        **bearer(seed_auth["admin"].id, ["R-MANAGER"]),
+    )
+    assert r.status_code == 404
+
+
+def test_award_bid_rejects_foreign_bid(seed_auth):
+    from apps.procure.models import GBid
+
+    r2 = _req_row(2)
+    s2 = _sup_row(2)
+    b2 = GBid.objects.create(
+        tenant_id=2, creator_id=1, requisition=r2, method="询价", status="PUBLICIZING",
+    )
+    r = Client().post(
+        f"/api/v1/procurement/bids/{b2.id}/award",
+        data=json.dumps({"winner_supplier_id": s2.id}),
+        content_type="application/json",
+        **bearer(seed_auth["admin"].id, ["R-MANAGER"]),
+    )
+    assert r.status_code == 404
+
+
+def test_create_contract_rejects_foreign_supplier(seed_auth):
+    s2 = _sup_row(2)
+    r = Client().post(
+        "/api/v1/contract",
+        data=json.dumps({
+            "contract_type": "采购", "party_b": "他租户供应商", "supplier_id": s2.id,
+            "amount": "1000", "project_id": 5,
+        }),
+        content_type="application/json",
+        **bearer(seed_auth["admin"].id, ["R-MANAGER"]),
+    )
+    assert r.status_code == 403
+    assert r.json()["code"] == 40913
