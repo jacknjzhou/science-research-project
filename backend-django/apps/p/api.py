@@ -369,7 +369,8 @@ def _app_scoped_or_404(d, app_id: int) -> PApplication:
 
     detail 早已走 `_partner_app_or_404`，但 documents/budget/sections/submit/
     withdraw/terminate 六个入口历史上只按 tenant 过滤，导致外部机构可跨机构
-    读正文/改预算/替他人提交。这里统一收口：外部身份（含混合角色，fail-closed）
+    读正文/改预算/替他人提交。这里统一收口：外部身份由 `is_external_account`
+    判定（持 R-PARTNER 一律按外部 fail-closed，其余看 sys_user.user_source），
     必须 `applicant_org_id == current_org_id(d)`，且 org 为空一律 404。
     """
     a = _get_app_or_404(d.tenant_id, app_id)
@@ -1051,6 +1052,13 @@ def _notify_applicant_org(tenant_id: int, a, title: str, content: str) -> None:
         org = SysPartnerOrg.objects.filter(
             id=org_id, tenant_id=tenant_id, deleted=0
         ).values_list("contact_email", flat=True).first()
+        pi_email = (
+            SysUser.objects.filter(id=a.pi_user_id, tenant_id=tenant_id, deleted=0)
+            .values_list("email", flat=True)
+            .first()
+        )
+        if org and (org or "").lower() == (pi_email or "").lower():
+            return  # PI 邮箱与机构联系人同址，PI 那封已覆盖（终审 r3 m-14）
         if org:
             send_mail_best_effort(
                 org, f"[科研管理] {title}", content,

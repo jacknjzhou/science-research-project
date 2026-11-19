@@ -455,3 +455,78 @@ def test_r2_notify_user_skips_cross_tenant_uid(seed_auth):
     assert notify_user(1, other.id, "TODO", "不该送达", "x", "biz:1") is None
     assert SysNotification.objects.count() == before
     assert len(mail.outbox) == 0
+
+
+# --------------------------------------------------------------------------
+# 终审 r3 I-1：管理端可造出"来源院内 + 角色外部"的两义账号 → 入口拒绝 + 运行期仍 fail-closed
+# --------------------------------------------------------------------------
+def test_r3_assign_partner_role_to_internal_user_is_rejected(seed_auth):
+    """授权入口：R-PARTNER 只能授给 EXTERNAL 账号（两步造态被堵死）。"""
+    from apps.sysadmin.models import SysPartnerOrg, SysUser, SysRole
+
+    org = SysPartnerOrg.objects.create(
+        tenant_id=1, code="PTN-R3", name="机构R3", credit_code="91310000MA1K3XY91B",
+        org_type="COLLAB", status="APPROVED", creator_id=1,
+    )
+    u = SysUser.objects.create(
+        tenant_id=1, username="inner_ptn", real_name="院内待绑", status="ACTIVE",
+        user_source="INTERNAL", org_id=org.id, creator_id=1,
+    )
+    role = SysRole.objects.get(tenant_id=1, code="R-PARTNER")
+    c = Client()
+    r = _post(c, f"/api/v1/admin/users/{u.id}/roles", {"role_id": role.id},
+              **bearer(seed_auth["admin"].id, ["R-ADMIN"]))
+    assert r.status_code == 400, r.content
+    assert r.json()["message"].startswith("外部角色只能授予外部账号")
+
+
+def test_r3_dirty_internal_partner_account_still_fails_closed(seed_auth):
+    """运行期兜底：即使有人绕过入口写脏（来源院内 + R-PARTNER），仍按外部收口。"""
+    from apps.p.models import PApplication
+    from apps.sysadmin.models import SysPartnerOrg, SysUser
+
+    org_a = SysPartnerOrg.objects.create(
+        tenant_id=1, code="PTN-R3A", name="机构R3A", credit_code="91310000MA1K3XY92C",
+        org_type="COLLAB", status="APPROVED", creator_id=1,
+    )
+    org_b = SysPartnerOrg.objects.create(
+        tenant_id=1, code="PTN-R3B", name="机构R3B", credit_code="91310000MA1K3XY93D",
+        org_type="COLLAB", status="APPROVED", creator_id=1,
+    )
+    dirty = SysUser.objects.create(
+        tenant_id=1, username="dirty_ptn", real_name="脏账号", status="ACTIVE",
+        user_source="INTERNAL", org_id=org_a.id, creator_id=1,
+    )
+    other = PApplication.objects.create(
+        tenant_id=1, code="APP-R3-B", title="他机构申报", project_type="开放课题",
+        pi_user_id=seed_auth["staff"].id, status="UNDER_REVIEW",
+        applicant_org_id=org_b.id, applicant_type="EXTERNAL",
+        total_budget=1000, creator_id=1,
+    )
+    c = Client()
+    r = c.get(f"/api/v1/apply/applications/{other.id}",
+              **bearer(dirty.id, ["R-PARTNER"]))
+    assert r.status_code == 404, r.content
+    r2 = c.get("/api/v1/apply/applications", **bearer(dirty.id, ["R-PARTNER"]))
+    assert r2.status_code == 200
+    assert r2.json()["data"]["list"] == []
+
+
+def test_r3_internal_expert_pi_can_report_progress(seed_auth):
+    """I-2：院内专家作为 PI 的项目汇报不能被 E 域当成外部而 404。"""
+    from apps.project.models import EProject
+    from apps.sysadmin.models import SysUser
+
+    u = SysUser.objects.create(
+        tenant_id=1, username="inner_pi", real_name="院内PI", status="ACTIVE",
+        user_source="INTERNAL", creator_id=1,
+    )
+    p = EProject.objects.create(
+        tenant_id=1, code="PRJ-R3-1", title="院内专家项目", status="EXECUTING",
+        pi_user_id=u.id, creator_id=1, application_id=999001,
+    )
+    c = Client()
+    r = _post(c, f"/api/v1/project/{p.id}/progress-report",
+              {"period": "2026Q1", "report_type": "SELF", "content_rich": "进展"},
+              **bearer(u.id, ["R-STAFF", "R-EXPERT"]))
+    assert r.status_code == 200, r.content

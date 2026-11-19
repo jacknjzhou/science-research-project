@@ -332,14 +332,19 @@ def assign_role(request: HttpRequest, id: int):
     if u is None:
         raise ApiError(404, CODE_NOT_FOUND, "用户不存在")
     role = SysRole.objects.filter(id=role_id, tenant_id=d.tenant_id).first()
-    # 双向校验（终审 r2 I-1）：只拦"新增 R-PARTNER"是可绕过的——给已有外部账号追加
-    # 任意内部角色同样会造出混合角色，随后并集权限即可读到院内数据。
+    # 双向校验（终审 r2 I-1 + r3 I-1）：
+    # ①外部账号不能追加内部角色（否则并集权限即可读到院内数据）；
+    # ②外部角色不能授给院内账号——`user_source=INTERNAL + R-PARTNER` 会造出
+    #   "来源说院内、角色说外部"的两义账号，运行期无论怎么判都有歧义，入口直接拒。
     if role is not None:
-        if (
-            (u.user_source or "INTERNAL").upper() == "EXTERNAL"
-            and role.code not in _EXTERNAL_ROLE_CODES
-        ):
+        is_external_account_row = (u.user_source or "INTERNAL").upper() == "EXTERNAL"
+        if is_external_account_row and role.code not in _EXTERNAL_ROLE_CODES:
             raise ApiError(400, CODE_BAD_REQUEST, "外部账号不能追加内部角色")
+        if not is_external_account_row and role.code in _EXTERNAL_ROLE_CODES:
+            raise ApiError(
+                400, CODE_BAD_REQUEST,
+                "外部角色只能授予外部账号（请先通过机构/专家注册流程建号）",
+            )
         existing = list(role_codes_of(id))
         _assert_role_consistency(d.tenant_id, existing + [role.code], u.org_id)
     SysUserRole.objects.get_or_create(user_id=id, role_id=role_id, tenant_id=d.tenant_id)

@@ -52,7 +52,7 @@ from apps.funding.mappings import code_of
 from apps.sysadmin.mappings import fmt_ts
 from core import approval
 from core.auth.deps import domain_from
-from core.org_scope import current_org_id, is_external_only
+from core.org_scope import current_org_id, is_external_account
 from core.httpx import (
     ApiError,
     CODE_BAD_REQUEST,
@@ -276,7 +276,7 @@ _REPORT_TYPES = ("SELF", "MID_CHECK", "ANNUAL")  # 对齐契约 EProgressReportC
 
 def create_progress_report(request: HttpRequest, id: int):
     d = domain_from(request)
-    if is_external_only(d):
+    if is_external_account(d):
         proj = _partner_project_or_404(d, id)
     else:
         proj = _get_project_or_404_tenant(id, d.tenant_id)
@@ -343,7 +343,7 @@ def create_progress_report(request: HttpRequest, id: int):
 def list_progress_reports(request: HttpRequest, id: int):
     """GET /project/{id}/progress-report —— 阶段汇报列表（外部机构仅本机构项目）。"""
     d = domain_from(request)
-    if is_external_only(d):
+    if is_external_account(d):
         _partner_project_or_404(d, id)
     else:
         _get_project_or_404_tenant(id, d.tenant_id)
@@ -752,7 +752,7 @@ def approve_change_batch(request: HttpRequest):
 
 def create_final_accept(request: HttpRequest, id: int):
     d = domain_from(request)
-    if is_external_only(d):
+    if is_external_account(d):
         project = _partner_project_or_404(d, id)
     else:
         project = _get_project_or_404_tenant(id, d.tenant_id)
@@ -780,7 +780,7 @@ def create_final_accept(request: HttpRequest, id: int):
 def get_final_accept(request: HttpRequest, id: int):
     """GET /project/{id}/final-accept —— 该项目最近一次验收申请（外部机构仅本机构）。"""
     d = domain_from(request)
-    if is_external_only(d):
+    if is_external_account(d):
         _partner_project_or_404(d, id)
     else:
         _get_project_or_404_tenant(id, d.tenant_id)

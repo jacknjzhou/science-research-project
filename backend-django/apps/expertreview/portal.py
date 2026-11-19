@@ -91,7 +91,7 @@ def apply_expert(request: HttpRequest):
         existing.phone = (body.get("phone") or "").strip()[:32] or existing.phone
         if tags is not None:
             existing.field_tags = [str(t) for t in tags if str(t).strip()]
-        existing.remark = None
+        # 上一条审核意见（remark）保留：它是唯一的驳回留痕，清空等于抹掉历史
         existing.modifier_id = d.user_id
         existing.save()
         return ok(request, {"id": existing.id, "status": existing.status, "code": existing.code})

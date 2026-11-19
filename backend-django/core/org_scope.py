@@ -92,10 +92,15 @@ def is_external_account(d) -> bool:
     导致院内专家在 P 域被自己的申报挡在门外。这里以 `sys_user.user_source` 为准：
     EXTERNAL → 外部；INTERNAL → 院内；账号不在库里（虚拟/集成令牌）回退到角色判定。
     """
+    roles = [r for r in (getattr(d, "roles", None) or []) if r]
+    # R-PARTNER 语义就是"外部机构用户"——不论 user_source 写成什么，一律按外部
+    # （终审 r3 I-1：管理端可造出 user_source=INTERNAL + R-PARTNER 的账号，
+    #  若只看来源就会让它在 P 域走内部分支、跨机构读写并伪造 PI/机构）。
+    if "R-PARTNER" in roles:
+        return True
     src = user_source_of(d)
     if src:
         return src == "EXTERNAL"
-    roles = [r for r in (getattr(d, "roles", None) or []) if r]
     return has_external_role(roles)
 
 
