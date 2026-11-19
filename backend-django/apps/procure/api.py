@@ -772,6 +772,7 @@ def _my_supplier(d) -> GSupplier | None:
     org_id = current_org_id(d)
     if not org_id:
         return None
+    # 只认已入库供应商：PENDING/REJECTED/EXPIRED/黑名单都不得进门户
     return GSupplier.objects.filter(
-        tenant_id=d.tenant_id, org_id=org_id, deleted=0
+        tenant_id=d.tenant_id, org_id=org_id, deleted=0, status="IN_LIBRARY"
     ).first()

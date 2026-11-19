@@ -1191,10 +1191,14 @@ class Command(BaseCommand):
 
             e_demo = NExpert.objects.filter(tenant_id=T1, name="王振华（演示）").first()
             if e_demo is not None and not e_demo.user_id:
-                # 已生效档案绑定内部账号后，门户「专家门户」可直接演示信用档案
-                e_demo.user_id = expert_u.id if "expert_u" in dir() else None
-                e_demo.field_tags = e_demo.field_tags or ["材料科学"]
-                e_demo.save()
+                # 已生效档案绑定内部专家账号后，「专家门户」可直接演示信用档案
+                demo_expert_user = SysUser.objects.filter(
+                    tenant_id=T1, username="expert", deleted=0
+                ).first()
+                if demo_expert_user is not None:
+                    e_demo.user_id = demo_expert_user.id
+                    e_demo.field_tags = e_demo.field_tags or ["材料科学"]
+                    e_demo.save(update_fields=["user_id", "field_tags"])
 
             # C4 演示：机构 A 绑定供应商 → 询价（应价中）+ 已定标询价 + 合同进度
             sup_ext = put(GSupplier,
