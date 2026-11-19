@@ -142,14 +142,14 @@ _CONTRACT_MASK_KEYS = (
 )
 
 
-def _api_contract_for_supplier(c: GContract, paid: Decimal, phases: int) -> dict:
+def _api_contract_for_supplier(c: GContract, paid: Decimal, phases: int, name: str | None = None) -> dict:
     """对外脱敏视图：只暴露白名单键（不含 party_a/备注/AI 风险/需求单号）。"""
     amount = c.amount or Decimal("0")
     ratio = "0.00" if amount == 0 else f"{(paid / amount):.2f}"
     return {
         "id": c.id,
         "code": c.code,
-        "name": c.name,
+        "name": name or c.contract_type,
         "amount": _num2(amount),
         "signed_at": c.sign_date.isoformat() if getattr(c, "sign_date", None) else None,
         "end_date": c.end_date.isoformat() if getattr(c, "end_date", None) else None,
@@ -171,6 +171,11 @@ def list_supplier_contracts(request: HttpRequest):
         GContract.objects.filter(tenant_id=d.tenant_id, supplier_id=s.id, deleted=0)
         .order_by("-id")[:100]
     )
+    req_ids = [c.requisition_id for c in contracts if c.requisition_id]
+    reqs = {
+        r.id: r
+        for r in GRequisition.objects.filter(tenant_id=d.tenant_id, id__in=req_ids, deleted=0)
+    }
     rows = []
     for c in contracts:
         agg = GContractPayment.objects.filter(
@@ -180,5 +185,6 @@ def list_supplier_contracts(request: HttpRequest):
         phases = GContractPayment.objects.filter(
             tenant_id=d.tenant_id, contract_id=c.id, deleted=0
         ).count()
-        rows.append(_api_contract_for_supplier(c, paid, phases))
+        r = reqs.get(c.requisition_id) if c.requisition_id else None
+        rows.append(_api_contract_for_supplier(c, paid, phases, r.item_name if r else None))
     return ok(request, {"list": rows, "total": len(rows)})

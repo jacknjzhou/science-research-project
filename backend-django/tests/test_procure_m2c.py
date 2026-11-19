@@ -147,3 +147,54 @@ def test_unbound_partner_gets_empty_list(seed_auth):
                       data=json.dumps({"totalAmount": "1.00"}),
                       content_type="application/json", **bearer(u.id, ["R-PARTNER"]))
     assert r.status_code == 403, r.content
+
+
+# ---------------------------------------------------------------- Task 7
+
+def _contract(supplier, amount="100000.00", code="CON-2026-000201", req=None):
+    from apps.procure.models import GContract
+
+    return GContract.objects.create(
+        tenant_id=1, creator_id=1, code=code, contract_type="采购", status="ACTIVE",
+        supplier=supplier, requisition=req, amount=amount, party_a="某某大学",
+        party_b="外部供应商甲", remark="内部备注不可外泄", ai_risk_json={"risk": "高"},
+        sign_date="2026-10-01", end_date="2027-09-30")
+
+
+def _phase(contract, phase="预付", plan="40000.00", paid="40000.00"):
+    from apps.procure.models import GContractPayment
+
+    return GContractPayment.objects.create(
+        tenant_id=1, creator_id=1, contract=contract, phase=phase,
+        plan_amount=plan, paid_amount=paid, status="PAID")
+
+
+def test_supplier_contracts_only_mine_and_masked(seed_auth):
+    org_a, org_b = _org_supplier(seed_auth, "5"), _org_supplier(seed_auth, "6")
+    sa, sb = _supplier(org_a, code="SUP-M2C-05"), _supplier(org_b, code="SUP-M2C-06", name="乙")
+    req = _req(item_name="高性能服务器")
+    mine = _contract(sa, req=req)
+    _phase(mine, plan="40000.00", paid="40000.00")
+    _phase(mine, phase="尾款", plan="60000.00", paid="0.00")
+    _contract(sb, code="CON-2026-000202")  # 他机构的合同
+    ua = _partner(seed_auth, org_a, username="sup_a")
+
+    r = Client().get("/api/v1/portal/supplier/contracts", **bearer(ua.id, ["R-PARTNER"]))
+    assert r.status_code == 200, r.content
+    rows = r.json()["data"]["list"]
+    assert [x["id"] for x in rows] == [mine.id]
+    row = rows[0]
+    assert row["amount"] == "100000.00" and row["paid_amount"] == "40000.00"
+    assert row["paid_ratio"] == "0.40" and row["pay_phase_count"] == 2
+    assert row["name"] == "高性能服务器"
+    # 脱敏：内部字段不得出现
+    blob = json.dumps(row, ensure_ascii=False)
+    for banned in ("party_a", "party_b", "某某大学", "内部备注", "risk", "requisition"):
+        assert banned not in blob
+
+
+def test_unbound_partner_contracts_empty(seed_auth):
+    org = _org_supplier(seed_auth, "7")
+    u = _partner(seed_auth, org, username="no_sup")
+    r = Client().get("/api/v1/portal/supplier/contracts", **bearer(u.id, ["R-PARTNER"]))
+    assert r.status_code == 200 and r.json()["data"]["list"] == []
