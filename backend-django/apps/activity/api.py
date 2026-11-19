@@ -62,8 +62,9 @@ def _parse_d(s):
         return None
 
 
-def _get_activity_or_404(activity_id: int) -> VActivity:
-    a = VActivity.objects.filter(id=activity_id, deleted=0).first()
+def _get_activity_or_404(tenant_id: int, activity_id: int) -> VActivity:
+    """按「租户 + 未删」取活动；跨租户一律 404，不泄露对方是否存在（E-7）。"""
+    a = VActivity.objects.filter(id=activity_id, tenant_id=tenant_id, deleted=0).first()
     if a is None:
         raise ApiError(404, CODE_NOT_FOUND, "活动不存在")
     return a
@@ -165,7 +166,8 @@ def list_activities(request: HttpRequest):
 
 
 def get_activity(request: HttpRequest, id: int):
-    a = _get_activity_or_404(id)
+    d = domain_from(request)
+    a = _get_activity_or_404(d.tenant_id, id)
     parts = list(VActivityParticipant.objects.filter(activity_id=id))
     revs = list(VActivityReview.objects.filter(activity_id=id).order_by("id"))
     out = to_api_activity(a)
@@ -185,7 +187,7 @@ def create_activity(request: HttpRequest):
 
 def update_activity(request: HttpRequest, id: int):
     d = domain_from(request)
-    a = _get_activity_or_404(id)
+    a = _get_activity_or_404(d.tenant_id, id)
     if a.status not in ("DRAFT", "RETURNED"):
         raise ApiError(409, CODE_CONFLICT, "活动不存在或状态不可编辑（仅 DRAFT/RETURNED）")
     b = read_json(request)
@@ -197,7 +199,7 @@ def update_activity(request: HttpRequest, id: int):
 
 def delete_activity(request: HttpRequest, id: int):
     d = domain_from(request)
-    a = _get_activity_or_404(id)
+    a = _get_activity_or_404(d.tenant_id, id)
     a.deleted = 1
     a.modifier_id = d.user_id
     a.save(update_fields=["deleted", "modifier_id", "updated_at"])
@@ -206,7 +208,7 @@ def delete_activity(request: HttpRequest, id: int):
 
 def _transition(request: HttpRequest, id: int, to: str):
     d = domain_from(request)
-    a = _get_activity_or_404(id)
+    a = _get_activity_or_404(d.tenant_id, id)
     if to not in ALLOWED_TRANSITIONS.get(a.status, set()):
         raise ApiError(409, CODE_CONFLICT, f"非法状态迁移：{a.status}→{to}")
     a.status = to
@@ -240,7 +242,7 @@ def _next_on_approve(from_status: str, level: int, action: str) -> str | None:
 
 def approve_activity(request: HttpRequest, id: int):
     d = domain_from(request)
-    a = _get_activity_or_404(id)
+    a = _get_activity_or_404(d.tenant_id, id)
     b = read_json(request)
     action = b.get("action")
     if not action:
@@ -262,7 +264,7 @@ def approve_activity(request: HttpRequest, id: int):
 
 def hold_activity(request: HttpRequest, id: int):
     d = domain_from(request)
-    a = _get_activity_or_404(id)
+    a = _get_activity_or_404(d.tenant_id, id)
     if a.status != "APPROVED":
         raise ApiError(409, CODE_CONFLICT, "仅 APPROVED 可标记举办")
     b = read_json_soft(request)
@@ -276,7 +278,7 @@ def hold_activity(request: HttpRequest, id: int):
 
 def archive_activity(request: HttpRequest, id: int):
     d = domain_from(request)
-    a = _get_activity_or_404(id)
+    a = _get_activity_or_404(d.tenant_id, id)
     if a.status != "HELD":
         raise ApiError(409, CODE_CONFLICT, "仅 HELD 可归档")
     b = read_json(request)
@@ -292,7 +294,7 @@ def archive_activity(request: HttpRequest, id: int):
 
 def cancel_activity(request: HttpRequest, id: int):
     d = domain_from(request)
-    a = _get_activity_or_404(id)
+    a = _get_activity_or_404(d.tenant_id, id)
     if a.status not in ALLOWED_TRANSITIONS or "CANCELLED" not in ALLOWED_TRANSITIONS.get(a.status, set()):
         raise ApiError(409, CODE_CONFLICT, "终态不可取消")
     b = read_json_soft(request)
@@ -341,13 +343,15 @@ def activity_stats(request: HttpRequest):
 
 
 def list_participants(request: HttpRequest, id: int):
+    d = domain_from(request)
+    _get_activity_or_404(d.tenant_id, id)  # 先确认活动属于本租户
     rows = list(VActivityParticipant.objects.filter(activity_id=id).order_by("id"))
     return ok(request, {"list": [to_api_participant(p) for p in rows]})
 
 
 def add_participant(request: HttpRequest, id: int):
     d = domain_from(request)
-    _get_activity_or_404(id)
+    _get_activity_or_404(d.tenant_id, id)
     b = read_json(request)
     if not b.get("role"):
         raise ApiError(400, CODE_BAD_REQUEST, "请求参数错误")
@@ -360,6 +364,8 @@ def add_participant(request: HttpRequest, id: int):
 
 
 def remove_participant(request: HttpRequest, id: int, pid: int):
+    d = domain_from(request)
+    _get_activity_or_404(d.tenant_id, id)  # 先确认活动属于本租户
     n, _ = VActivityParticipant.objects.filter(id=pid, activity_id=id).delete()
     if n == 0:
         raise ApiError(404, CODE_NOT_FOUND, "参与人不存在")
