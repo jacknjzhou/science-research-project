@@ -33,13 +33,25 @@ SECRET_HINT = "生成方式：openssl rand -base64 32"
 def running_under_tests() -> bool:
     """当前进程是不是测试进程（pytest / manage.py test）。
 
+    判据是**进程入口**（`sys.argv[0]`），不是 `"pytest" in sys.modules`：
+    后者只要业务代码 `import pytest` 就成立，等于给了「想绕过测试配置拒绝的人」
+    一个开关（r7-C1：`from config.settings.test import *` + `import pytest` 即可
+    让 `django.setup()` 通过）。入口判据无法通过 import 伪造。
+
     只用来判断「测试专用配置能否生效」，不用于放宽任何生产检查。
     """
     import sys
 
-    if "pytest" in sys.modules:
+    if _current_management_command() == "test":
         return True
-    return _current_management_command() == "test"
+    argv = list(getattr(sys, "argv", []))
+    if not argv:
+        return False
+    entry = os.path.basename(argv[0])
+    if entry.startswith(("pytest", "py.test")):
+        return True
+    # `python -m pytest`：argv[0] 形如 .../site-packages/pytest/__main__.py
+    return entry == "__main__.py" and "/pytest/" in argv[0].replace(os.sep, "/")
 
 
 def _assert_settings_module_deployable() -> None:
@@ -73,7 +85,7 @@ def _assert_settings_module_deployable() -> None:
         )
 
 
-def validate_runtime_secrets() -> None:
+def validate_runtime_secrets(*, check_deployable: bool = True) -> None:
     """生产形态（`settings.DEBUG is False`）的 JWT 密钥硬化检查。
 
     抛 `ImproperlyConfigured`（Django 对配置错误的约定异常），让进程在
@@ -89,7 +101,10 @@ def validate_runtime_secrets() -> None:
     if getattr(dj_settings, "DEBUG", False):
         return  # 本地 dev 形态：允许使用仓库缺省密钥
 
-    _assert_settings_module_deployable()
+    # 初始化/修复类管理命令（migrate/makemigrations/collectstatic…）允许在测试配置
+    # 下使用：它们不起服务，而 pytest 之外的本地恢复流程会用到（r7-I3）。
+    if check_deployable:
+        _assert_settings_module_deployable()
 
     # 校验**真正用于签名**的值：`core/auth/jwt_util` 读的是 settings.JWT_SECRET，
     # 自定义 settings 可以直接把它覆盖成弱值（而环境变量看起来是合规的）。
@@ -291,15 +306,10 @@ def enforce_process_guard() -> None:
 
     if getattr(dj_settings, "DEBUG", False):
         return
-    validate_runtime_secrets()
-    if running_under_tests():
-        return
-    if _current_management_command() in GUARD_EXEMPT_COMMANDS:
+    exempt = _current_management_command() in GUARD_EXEMPT_COMMANDS
+    validate_runtime_secrets(check_deployable=not exempt)
+    if running_under_tests() or exempt:
         return
     assert_no_default_credentials()
 
 
-def enforce_serving_guard() -> None:
-    """服务进程（wsgi/asgi）启动时：密钥 + 默认口令双检，任一不过就拒绝启动。"""
-    validate_runtime_secrets()
-    assert_no_default_credentials()

@@ -539,6 +539,7 @@ def test_demo_seed_switch_ignored_outside_debug_and_tests(settings, monkeypatch)
 
 import os
 import subprocess
+import time
 import sys
 import textwrap
 from pathlib import Path
@@ -634,3 +635,62 @@ def test_alias_test_settings_module_is_refused(tmp_path: Path):
     res = _run([sys.executable, "-c", "import django; django.setup()"], env)
     assert res.returncode != 0
     assert "IS_TEST_SETTINGS" in res.stderr
+
+
+def test_alias_settings_with_pytest_import_still_refused(tmp_path: Path):
+    """r7-C1：别名配置 + `import pytest` 也不能让测试配置变成可部署。
+
+    上一版用 `"pytest" in sys.modules` 判「是不是测试进程」，于是任何代码
+    `import pytest` 就能短路拒绝逻辑。现在按进程入口（`sys.argv[0]`）判定。
+    """
+    alias_dir = tmp_path / "aliaspkg2"
+    alias_dir.mkdir()
+    (alias_dir / "mydeploy.py").write_text("from config.settings.test import *  # noqa\n")
+    env = _env(tmp_path / "alias2.sqlite3", prod=False)
+    env["DJANGO_SETTINGS_MODULE"] = "mydeploy"
+    env["PYTHONPATH"] = f"{alias_dir}{os.pathsep}{BACKEND_DIR}"
+    res = _run(
+        [sys.executable, "-c", "import pytest; import django; django.setup(); print('SETUP_OK')"],
+        env,
+    )
+    assert res.returncode != 0, f"import pytest 不该放行: {res.stdout}"
+    assert "SETUP_OK" not in res.stdout
+    assert "IS_TEST_SETTINGS" in res.stderr
+
+
+def test_runserver_autoreload_exits_instead_of_hanging(legacy_db: Path):
+    """r7-I1：默认 `runserver`（自动重载）守卫失败时必须退出，而不是挂到被 kill。
+
+    自动重载的父进程会吞掉 `django.setup()` 的异常继续等文件变化，只抛异常时
+    只能靠 `timeout` 杀掉（退出码 124）。守卫因此改为在真实进程里直接 `os._exit(1)`。
+    """
+    env = _env(legacy_db, prod=True)
+    started = time.monotonic()
+    try:
+        res = _run([sys.executable, "manage.py", "runserver", "127.0.0.1:8971"], env)
+    finally:
+        elapsed = time.monotonic() - started
+    assert res.returncode == 1, f"期望 exit 1，实际 {res.returncode}"
+    assert elapsed < 60, f"拒绝启动耗时 {elapsed:.1f}s，像是挂住了"
+    assert "默认口令" in res.stderr
+
+
+def test_guard_scans_credentials_once_per_process(tmp_path: Path):
+    """r7-I2：`ready()` 与 wsgi 入口各扫一次 = 每进程两条同样的查询。
+
+    守卫现在只挂在 `CoreConfig.ready()`，wsgi/asgi 不再重复调用。用空库
+    （表清单为空时守卫放行）统计 `enforce_process_guard` 的调用次数。
+    """
+    probe = (
+        "import core.startup as s;"
+        "calls=[];"
+        "orig=s.enforce_process_guard;"
+        "s.enforce_process_guard=lambda *a, **k: (calls.append(1), orig(*a, **k))[1];"
+        "import django; django.setup();"
+        "import config.wsgi;"
+        "print('CALLS', len(calls))"
+    )
+    env = _env(tmp_path / "scan_once.sqlite3", prod=True)
+    res = _run([sys.executable, "-c", probe], env)
+    assert res.returncode == 0, res.stderr[-2000:]
+    assert "CALLS 1" in res.stdout, res.stdout

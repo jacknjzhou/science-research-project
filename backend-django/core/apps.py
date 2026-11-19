@@ -19,14 +19,30 @@ class CoreConfig(AppConfig):
         "Accessing the database during app initialization" 告警——这是有意为之的
         启动期检查，不是顺手查询。
         """
+        import os
+        import sys
         import warnings
 
-        from core.startup import enforce_process_guard
+        from django.core.exceptions import ImproperlyConfigured
 
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message="Accessing the database during app initialization.*",
-                category=RuntimeWarning,
-            )
-            enforce_process_guard()
+        from core.startup import enforce_process_guard, running_under_tests
+
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="Accessing the database during app initialization.*",
+                    category=RuntimeWarning,
+                )
+                enforce_process_guard()
+        except ImproperlyConfigured as exc:
+            # 测试进程内保留异常语义（用例要 `pytest.raises`）。
+            if running_under_tests():
+                raise
+            # 真实进程：必须让**整个进程**死掉。`runserver` 的自动重载父进程会把
+            # `django.setup()` 的异常吞掉继续等文件变化，只抛异常时 `timeout` 之后
+            # 是 SIGTERM(124) 而不是启动失败（r7-I1）；`os._exit` 让父进程当场退出，
+            # 不再派生子进程。
+            sys.stderr.write(f"[启动自检] 拒绝启动：{exc}\n")
+            sys.stderr.flush()
+            os._exit(1)
