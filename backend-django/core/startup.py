@@ -77,8 +77,10 @@ def _is_ephemeral_test_db() -> bool:
         modes = []
         for pair in params.split("&"):
             key, _, value = pair.partition("=")
-            if key.strip().lower() == "mode":
-                modes.append(value.strip().lower())
+            # SQLite 的参数名区分大小写、也不忽略空白：`MODE=memory`、`mode = memory`
+            # 都不是 `mode=memory`，会被当磁盘库（r11-I1 实测各落盘 1.2MB）。
+            if key == "mode":
+                modes.append(value)
         return len(modes) == 1 and modes[0] == "memory"
     return False
 
