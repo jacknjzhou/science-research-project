@@ -638,8 +638,10 @@ def write_sec_log(request: HttpRequest):
     for k in ("actorId", "networkZone", "action", "objectType", "objectId", "result"):
         if b.get(k) is None:
             raise ApiError(400, CODE_BAD_REQUEST, f"{k} 必填")
+    # E-7：审计链归属恒取令牌租户，忽略 body.tenantId（否则可向他租户链注入记录，
+    # 且 _sec_log 会以该租户的链尾做前向哈希，污染对方审计完整性校验）。
     log = _sec_log(
-        b.get("tenantId") or dom.tenant_id,
+        dom.tenant_id,
         legal_entity_id=b.get("legalEntityId"), actor_id=int(b["actorId"]),
         actor_role=b.get("actorRole"), network_zone=b["networkZone"],
         action=b["action"], object_type=b["objectType"], object_id=int(b["objectId"]),

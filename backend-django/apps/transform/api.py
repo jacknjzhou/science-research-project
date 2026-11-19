@@ -293,7 +293,11 @@ def _apply_negotiation(deal: TDeal, b: dict, dom) -> None:
     deal.term_end = _parse_date(b.get("term_end"))
     # 工商核验快照：命中企业库异常 → 签约前标红（PRD §11）
     if deal.enterpartner_id:
-        ep = TEnterpartner.objects.filter(id=deal.enterpartner_id, deleted=0).first()
+        ep = TEnterpartner.objects.filter(
+            id=deal.enterpartner_id, tenant_id=dom.tenant_id, deleted=0).first()
+        if ep is None:
+            # E-7：企业库条目不可跨租户引用（否则会用他租户数据回填本租户交易快照）
+            raise ApiError(404, CODE_NOT_FOUND, "合作企业不存在")
         if ep is not None:
             deal.partner_check_abnormal = ep.check_abnormal
             deal.partner_checked_at = ep.last_checked_at
@@ -571,6 +575,8 @@ def sign_deal(request: HttpRequest, id: int):
 
 
 def get_publicity(request: HttpRequest, dealId: int):
+    """公开通道（契约 security: []）：公示期内的公示内容对外可见，属设计如此；
+    返回体只含公示快照（to_api_publicity），不含交易条款敏感字段。"""
     p = TPublicity.objects.filter(deal_id=dealId, deleted=0).order_by("-id").first()
     if p is None:
         raise ApiError(404, CODE_NOT_FOUND, "公示不存在")
@@ -635,7 +641,9 @@ def submit_objection(request: HttpRequest, dealId: int):
 @transaction.atomic
 def handle_objection(request: HttpRequest, dealId: int):
     dom = domain_from(request)
-    p = TPublicity.objects.filter(deal_id=dealId, deleted=0).order_by("-id").first()
+    # E-7：异议处置是租户内管理动作，跨租户一律 404（否则可用他租户 dealId 终止其交易）
+    p = TPublicity.objects.filter(
+        deal_id=dealId, tenant_id=dom.tenant_id, deleted=0).order_by("-id").first()
     if p is None:
         raise ApiError(404, CODE_NOT_FOUND, "公示不存在")
     b = read_json(request)

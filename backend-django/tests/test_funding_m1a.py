@@ -861,10 +861,8 @@ def test_loan_submit_freeze_and_conflict(seed_auth):
     assert r.status_code == 200
     line.refresh_from_db()
     assert line.amount_frozen == Decimal("500.00")
-    # 预算行不存在（悬空 budget_line_id）→ 40401
-    _create_loan_via_api(c, amount="100.00", budget_line_id=999999)
-    cid4 = FLoan.objects.order_by("-id").first().id
-    r = c.post(f"/api/v1/loans/{cid4}/submit", **bearer(2, ["R-MANAGER"]))
+    # 悬空 / 他租户 budget_line_id → 建单即 40401（E-7：不再等到提交时才暴露）
+    r = _create_loan_via_api(c, amount="100.00", budget_line_id=999999)
     assert r.status_code == 404
     assert r.json()["code"] == 40401
 

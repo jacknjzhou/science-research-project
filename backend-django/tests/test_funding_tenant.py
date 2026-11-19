@@ -140,5 +140,5 @@ def test_indirect_fee_rejects_foreign_project(seed_auth):
     )
     r = Client().post("/api/v1/indirect-fees/calculate", data=json.dumps({
         "project_id": p2.id, "basis": "DIRECT_COST", "rate": "0.10",
-    }), content_type="application/json", **bearer(1, ["R-ADMIN"], tenant_id=1))
+    }), content_type="application/json", **bearer(1, FIN, tenant_id=1))
     assert r.status_code in (400, 404), r.content.decode()

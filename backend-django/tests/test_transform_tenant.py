@@ -32,9 +32,9 @@ def _mk_chain(tenant_id: int = 1):
 
 def test_cross_tenant_disclosure_detail_and_submit_are_404(seed_auth):
     d, _, _, _ = _mk_chain()
-    c = Client()
-    assert c.get(f"/api/v1/disclosure/{d.id}", **bearer(1, T_ROLES, tenant_id=2)).status_code == 404
-    r = c.post(f"/api/v1/disclosure/{d.id}/submit", **bearer(1, T_ROLES, tenant_id=2))
+    # 注意：/disclosure/{id} 无详情路由（契约与 config/api.py 都只有列表/submit/valuation），
+    # 因此这里只断言 submit —— 用 GET 详情断言 404 会是 stub 造成的假绿。
+    r = Client().post(f"/api/v1/disclosure/{d.id}/submit", **bearer(1, T_ROLES, tenant_id=2))
     assert r.status_code == 404, r.content.decode()
     d.refresh_from_db()
     assert d.status == "DRAFT", "他租户不得提交本租户披露"

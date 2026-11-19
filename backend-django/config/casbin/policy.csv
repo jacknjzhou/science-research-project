@@ -602,11 +602,9 @@ p, R-FINANCE, /api/v1/tasks/*,                GET
 # 披露：R-STAFF 创建/提交/查；估值分派 R-MANAGER
 p, R-STAFF,   /api/v1/disclosure,                      GET
 p, R-STAFF,   /api/v1/disclosure,                      POST
-p, R-STAFF,   /api/v1/disclosure/*,                    GET
 p, R-STAFF,   /api/v1/disclosure/*/submit,             POST
 p, R-MANAGER, /api/v1/disclosure,                      GET
 p, R-MANAGER, /api/v1/disclosure,                      POST
-p, R-MANAGER, /api/v1/disclosure/*,                    GET
 p, R-MANAGER, /api/v1/disclosure/*/submit,             POST
 p, R-MANAGER, /api/v1/disclosure/*/valuation,          POST
 p, R-MANAGER, /api/v1/valuation/*/external-report,     POST
@@ -922,3 +920,6 @@ p, R-PARTNER, /api/v1/portal/supplier/inquiries,          GET
 p, R-PARTNER, /api/v1/portal/supplier/inquiries/*:quote,  POST
 p, R-PARTNER, /api/v1/portal/supplier/contracts,          GET
 p, R-MANAGER, /api/v1/portal/supplier/inquiries,          GET
+# E-7 补口：间接费试算（/indirect-fees/calculate）此前无任何角色行，业务角色无法调用
+p, R-MANAGER, /api/v1/indirect-fees/calculate,        POST
+p, R-FINANCE, /api/v1/indirect-fees/calculate,        POST

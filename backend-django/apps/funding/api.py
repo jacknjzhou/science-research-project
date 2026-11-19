@@ -210,14 +210,19 @@ def update_subject(request: HttpRequest, id: int):
 
 
 def delete_subject(request: HttpRequest, id: int):
+    """删除科目（软删）。E-7：先按租户判定存在性，再做下级/引用检查——
+    否则他租户 id 会经 409/404 差异泄露对方数据形态（存在性预言机）。"""
     d = domain_from(request)
-    if FSubject.objects.filter(parent_id=id, deleted=0).exists():
-        raise ApiError(409, CODE_CONFLICT, "存在下级科目，禁止删除")
-    if FBudgetLine.objects.filter(subject_id=id, deleted=0).exists():
-        raise ApiError(409, CODE_CONFLICT, "科目已被预算引用，禁止删除")
-    n = FSubject.objects.filter(id=id, tenant_id=d.tenant_id, deleted=0).update(deleted=1, updated_at=dj_tz.now())
-    if n == 0:
+    s = FSubject.objects.filter(id=id, tenant_id=d.tenant_id, deleted=0).first()
+    if s is None:
         raise ApiError(404, CODE_NOT_FOUND, "科目不存在")
+    if FSubject.objects.filter(parent_id=id, tenant_id=d.tenant_id, deleted=0).exists():
+        raise ApiError(409, CODE_CONFLICT, "存在下级科目，禁止删除")
+    if FBudgetLine.objects.filter(subject_id=id, tenant_id=d.tenant_id, deleted=0).exists():
+        raise ApiError(409, CODE_CONFLICT, "科目已被预算引用，禁止删除")
+    s.deleted = 1
+    s.updated_at = dj_tz.now()
+    s.save(update_fields=["deleted", "updated_at"])
     return ok(request, {"id": id})
 
 
@@ -779,12 +784,17 @@ def create_expense(request: HttpRequest):
     fp_hash = None
     invoice_no = b.get("invoice_no")
     invoice_date = b.get("invoice_date")
+    line_ref = b.get("budget_line_id")
+    if line_ref:
+        line_ref = int(line_ref)
+        if not FBudgetLine.objects.filter(id=line_ref, tenant_id=d.tenant_id, deleted=0).exists():
+            raise ApiError(404, CODE_NOT_FOUND, "预算行不存在")
     if invoice_no:
         fp_hash = _fingerprint(invoice_no, str(b["amount"]), invoice_date or "")
     try:
         e = FExpense.objects.create(
             tenant_id=d.tenant_id, creator_id=d.user_id,
-            project_id=b["project_id"], budget_line_id=b.get("budget_line_id"),
+            project_id=b["project_id"], budget_line_id=line_ref,
             legal_entity_id=b["legal_entity_id"], applicant_user_id=d.user_id,
             amount=amount, expense_category=b.get("expense_category"),
             expense_type=b["expense_type"], description=b.get("description"),
@@ -846,7 +856,8 @@ def submit_expense(request: HttpRequest, id: int):
                 raise ApiError(409, "40903", "同一发票（号码+金额+日期）已存在在途报销单")
         # 预算冻结（F-10）：FOR UPDATE 校验余额
         if e.submit_mode == "预算制" and e.budget_line_id:
-            line = FBudgetLine.objects.select_for_update().filter(id=e.budget_line_id, deleted=0).first()
+            line = FBudgetLine.objects.select_for_update().filter(
+                id=e.budget_line_id, tenant_id=d.tenant_id, deleted=0).first()
             if line is None:
                 raise ApiError(404, CODE_NOT_FOUND, "预算行不存在")
             if line.remaining < e.amount:
@@ -911,7 +922,7 @@ def _approve_one(d, expense_id: int, action: str, comment: str):
             new_status = "HUMAN_REVIEW"
         # 预算动作（F-10）：末步批准 → 冻结转实扣；驳回/退回 → 解冻
         if action == "APPROVE" and final and e.budget_line_id and e.submit_mode == "预算制":
-            FBudgetLine.objects.filter(id=e.budget_line_id, deleted=0).update(
+            FBudgetLine.objects.filter(id=e.budget_line_id, tenant_id=d.tenant_id, deleted=0).update(
                 amount_frozen=F("amount_frozen") - e.amount,
                 amount_used=F("amount_used") + e.amount, updated_at=dj_tz.now())
             # 平行记账（F-21/4.5）：expense.approved → 借 业务活动费用 / 贷 银行存款
@@ -930,7 +941,7 @@ def _approve_one(d, expense_id: int, action: str, comment: str):
                 ],
             )
         if action in ("REJECT", "RETURN") and e.budget_line_id and e.submit_mode == "预算制":
-            FBudgetLine.objects.filter(id=e.budget_line_id, deleted=0).update(
+            FBudgetLine.objects.filter(id=e.budget_line_id, tenant_id=d.tenant_id, deleted=0).update(
                 amount_frozen=F("amount_frozen") - e.amount,
                 amount_released=F("amount_released") + e.amount, updated_at=dj_tz.now())
         approval.log(d.tenant_id, "EXPENSE", expense_id, step.step_order, d.user_id,
@@ -988,10 +999,15 @@ def create_outward(request: HttpRequest):
     amount = _money(b.get("amount"))
     if (not b.get("project_id") or not b.get("to_unit") or amount is None or amount <= 0):
         raise ApiError(400, CODE_BAD_REQUEST, "参数错误（金额须为正数）")
+    line_ref = b.get("budget_line_id")
+    if line_ref:
+        line_ref = int(line_ref)
+        if not FBudgetLine.objects.filter(id=line_ref, tenant_id=d.tenant_id, deleted=0).exists():
+            raise ApiError(404, CODE_NOT_FOUND, "预算行不存在")
     o = FOutward.objects.create(
         tenant_id=d.tenant_id, creator_id=d.user_id,
         project_id=b["project_id"], budget_id=b.get("budget_id"),
-        budget_line_id=b.get("budget_line_id"), amount=amount,
+        budget_line_id=line_ref, amount=amount,
         to_unit=b["to_unit"], reason=b.get("reason"),
     )
     return ok(request, to_api_outward(o))
@@ -1043,7 +1059,8 @@ def outward_action(request: HttpRequest, id: int):
         if o.status != "PENDING":
             raise ApiError(409, CODE_CONFLICT, "单据不在待终审状态")
         if o.budget_line_id:
-            line = FBudgetLine.objects.select_for_update().filter(id=o.budget_line_id, deleted=0).first()
+            line = FBudgetLine.objects.select_for_update().filter(
+                id=o.budget_line_id, tenant_id=d.tenant_id, deleted=0).first()
             if line is None or line.remaining < o.amount:
                 raise ApiError(409, CODE_CONFLICT_REF, "预算行余额不足，外拨无法入账")
             line.amount_used = _d2(line.amount_used + o.amount)
@@ -2172,6 +2189,11 @@ def create_loan(request: HttpRequest):
     if not project_id or amount is None or amount <= 0:
         raise ApiError(400, CODE_BAD_REQUEST, "参数错误（projectId、amount>0 必填）")
     project = EProject.objects.filter(id=project_id, tenant_id=d.tenant_id, deleted=0).first()
+    line_ref = b.get("budget_line_id") or b.get("budgetLineId")
+    if line_ref:
+        line_ref = int(line_ref)
+        if not FBudgetLine.objects.filter(id=line_ref, tenant_id=d.tenant_id, deleted=0).exists():
+            raise ApiError(404, CODE_NOT_FOUND, "预算行不存在")
     loan = FLoan.objects.create(
         tenant_id=d.tenant_id,
         creator_id=d.user_id,
@@ -2180,7 +2202,7 @@ def create_loan(request: HttpRequest):
         applicant_user_id=d.user_id,
         amount=_d2(amount),
         reason=b.get("reason"),
-        budget_line_id=b.get("budget_line_id") or b.get("budgetLineId"),
+        budget_line_id=line_ref,
     )
     loan.code = code_of("LOAN", loan.id)
     loan.save(update_fields=["code", "updated_at"])
@@ -2223,7 +2245,7 @@ def submit_loan(request: HttpRequest, id: int):
         if loan.budget_line_id:
             # 预算制：锁定预算行并冻结（包干制跳过，语义与 submit_expense 一致）
             line = FBudgetLine.objects.select_for_update().filter(
-                id=loan.budget_line_id, deleted=0).first()
+                id=loan.budget_line_id, tenant_id=d.tenant_id, deleted=0).first()
             if line is None:
                 raise ApiError(404, CODE_NOT_FOUND, "预算行不存在")
             if line.remaining < loan.amount:
@@ -2280,7 +2302,7 @@ def approve_loan(request: HttpRequest, id: int):
     releases = action in ("REJECT", "RETURN")
     with transaction.atomic():
         if releases and loan.budget_line_id:
-            FBudgetLine.objects.filter(id=loan.budget_line_id, deleted=0).update(
+            FBudgetLine.objects.filter(id=loan.budget_line_id, tenant_id=d.tenant_id, deleted=0).update(
                 amount_frozen=F("amount_frozen") - loan.amount,
                 amount_released=F("amount_released") + loan.amount,
                 updated_at=dj_tz.now())
@@ -2313,7 +2335,7 @@ def pay_loan(request: HttpRequest, id: int):
         if loan is None:
             raise ApiError(409, CODE_CONFLICT, "仅 APPROVED 状态可放款")
         if loan.budget_line_id:
-            FBudgetLine.objects.filter(id=loan.budget_line_id, deleted=0).update(
+            FBudgetLine.objects.filter(id=loan.budget_line_id, tenant_id=d.tenant_id, deleted=0).update(
                 amount_frozen=F("amount_frozen") - loan.amount,
                 amount_used=F("amount_used") + loan.amount,
                 updated_at=dj_tz.now())
