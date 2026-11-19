@@ -484,9 +484,15 @@ def list_contracts(request: HttpRequest):
             pass
     total = qs.count()
     rows = list(qs.order_by("-id")[offset:offset + limit])
-    paid = {p.contract_id: p.paid_sum for p in GContractPayment.objects.filter(
-        tenant_id=domain_from(request).tenant_id, deleted=0)
-        .values("contract_id").annotate(paid_sum=Sum("plan_amount"))}
+    # values()+annotate() 返回 dict，须按键取（M2-c 种子引入付款计划后该分支被覆盖）
+    paid = {
+        row["contract_id"]: row["paid_sum"]
+        for row in GContractPayment.objects.filter(
+            tenant_id=domain_from(request).tenant_id, deleted=0
+        )
+        .values("contract_id")
+        .annotate(paid_sum=Sum("plan_amount"))
+    }
     return ok(request, {"list": [_api_contract(c, paid.get(c.id, 0)) for c in rows],
                         "total": total, "page": page, "size": size})
 

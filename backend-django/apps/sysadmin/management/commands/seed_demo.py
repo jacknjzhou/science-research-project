@@ -110,6 +110,17 @@ PAGE_GRANTS = [
     # M2-a：外部机构门户（R-PARTNER）与资质审核台（R-MANAGER/R-ADMIN；镜像 auth.ts PAGE_GRANTS）
     ("portal", "R-PARTNER"),
     ("admin-partner-orgs", "R-MANAGER"), ("admin-partner-orgs", "R-ADMIN"),
+    # M2-b：开放课题全流程（机构申报/指南建议/任务书/汇报/结题；镜像 auth.ts PAGE_GRANTS）
+    ("portal-applications", "R-PARTNER"),
+    ("portal-guide-suggest", "R-PARTNER"),
+    ("portal-task-book", "R-PARTNER"),
+    ("portal-project-report", "R-PARTNER"),
+    ("admin-guide-suggestions", "R-MANAGER"),
+    # M2-c：外部专家与供应商协同（C3/C4；镜像 auth.ts PAGE_GRANTS）
+    ("admin-expert-applications", "R-MANAGER"),
+    ("portal-expert-apply", "R-PARTNER"), ("portal-expert-apply", "R-EXPERT"),
+    ("portal-expert", "R-EXPERT"),
+    ("portal-supplier", "R-PARTNER"),
 ]
 
 
@@ -209,7 +220,9 @@ class Command(BaseCommand):
         from apps.output.models import RDataset, RJournalSource, ROutput
         from apps.p.models import PApplication, PGuideline, PGuideSuggestion, PTaskBook
         from apps.performance.models import MPayout, MRecord, MScheme, MSchemeFactor
-        from apps.procure.models import GBid, GContract, GOrder, GRequisition, GSupplier
+        from apps.procure.models import (  # noqa: F401
+            GBid, GContract, GContractPayment, GOrder, GRequisition, GSupplier,
+        )
         from apps.project.models import EProject, EProgressReport, EMilestone, ETask
         from apps.staff.models import SMembership, SStaff, SStudent, STeam, SVisitor
         from apps.transform.models import (
@@ -1157,5 +1170,85 @@ class Command(BaseCommand):
                  "next_plan": "完成融合模型训练与首轮验证。",
                  "status": "SUBMITTED", "submitted_at": now,
                  "creator_id": partner_user.id}, "project")
+
+        # ---- M2-c：外部专家与供应商协同（C3/C4/C5）-----------------------
+        if ptn_a is not None and partner_user is not None:
+            # C3 演示：①待审专家申请（审核台有数据可操作）②已生效专家档案（门户可直接看）
+            from apps.expertreview.models import NExpert  # noqa: F401  (已在上方导入，保持一致)
+
+            app_h = put(NExpert,
+                        {"tenant_id": T1, "user_id": partner_user.id, "deleted": 0},
+                        {"name": "合作单位联系人（演示申请）", "title": "副教授",
+                         "org_name": "合作示例大学", "email": "partner@example.edu.cn",
+                         "phone": "13800000001", "source": "EXTERNAL",
+                         "status": "CANDIDATE", "expertise_level": "EXPERT",
+                         "field_tags": ["人工智能", "数据治理"],
+                         "creator_id": partner_user.id,
+                         "remark": "M2-c 演示：待审核专家申请"}, "partner")
+            if not app_h.code:
+                app_h.code = f"NEX-{today.year}-{app_h.id:06d}"
+                app_h.save(update_fields=["code"])
+
+            e_demo = NExpert.objects.filter(tenant_id=T1, name="王振华（演示）").first()
+            if e_demo is not None and not e_demo.user_id:
+                # 已生效档案绑定内部账号后，门户「专家门户」可直接演示信用档案
+                e_demo.user_id = expert_u.id if "expert_u" in dir() else None
+                e_demo.field_tags = e_demo.field_tags or ["材料科学"]
+                e_demo.save()
+
+            # C4 演示：机构 A 绑定供应商 → 询价（应价中）+ 已定标询价 + 合同进度
+            sup_ext = put(GSupplier,
+                          {"tenant_id": T1, "code": "SUP-DEMO-M2C-01"},
+                          {"name": "合作大学资产经营公司（演示）", "credit_code": "91310000MA1K3XY12A",
+                           "type": "供应商", "status": "IN_LIBRARY", "grade": "B",
+                           "org_id": ptn_a.id, "creator_id": C1,
+                           "remark": "M2-c 演示：绑定外部机构 A，供应商门户可应价"}, "procure")
+            if sup_ext is not None and sup_ext.org_id != ptn_a.id:
+                sup_ext.org_id = ptn_a.id
+                sup_ext.save(update_fields=["org_id"])
+
+            req_ext = put(GRequisition,
+                          {"tenant_id": T1, "code": "REQ-DEMO-M2C-01"},
+                          {"project_id": ext_prj.id if "ext_prj" in dir() else 1,
+                           "applicant_id": partner_user.id, "category": "设备",
+                           "item_name": "高性能计算服务器（演示）", "est_amount": 120000,
+                           "purchase_way": "询价", "status": "BIDDING",
+                           "creator_id": C1}, "procure")
+            bid_open = put(GBid,
+                           {"tenant_id": T1, "code": "BID-DEMO-M2C-01"},
+                           {"requisition": req_ext,
+                            "method": "询价", "status": "PUBLICIZING",
+                            "invited_supplier_ids": [sup_ext.id] if sup_ext else [],
+                            "bids_json": [], "creator_id": C1,
+                            "publish_at": now, "bid_open_at": now + timedelta(days=7),
+                            "remark": "M2-c 演示：供应商门户可在线应价"}, "procure")
+            bid_won = put(GBid,
+                          {"tenant_id": T1, "code": "BID-DEMO-M2C-02"},
+                          {"requisition": req_ext, "method": "询价", "status": "AWARDED",
+                           "invited_supplier_ids": [sup_ext.id] if sup_ext else [],
+                           "winner_supplier_id": sup_ext.id if sup_ext else None,
+                           "bids_json": [{"supplierId": sup_ext.id if sup_ext else 0,
+                                          "supplierName": "合作大学资产经营公司（演示）",
+                                          "totalAmount": "98000.00", "remark": "含税包邮"}],
+                           "creator_id": C1, "award_at": now, "publish_at": now - timedelta(days=20),
+                           "remark": "M2-c 演示：已定标（不可再应价）"}, "procure")
+            con_ext = put(GContract,
+                          {"tenant_id": T1, "code": "CON-DEMO-M2C-01"},
+                          {"contract_type": "采购", "supplier": sup_ext,
+                           "requisition": req_ext, "project_id": ext_prj.id if "ext_prj" in dir() else 1,
+                           "amount": 98000, "status": "ACTIVE", "sign_date": today - timedelta(days=20),
+                           "start_date": today - timedelta(days=20), "end_date": today + timedelta(days=345),
+                           "party_a": "某某研究院", "party_b": "合作大学资产经营公司",
+                           "creator_id": C1,
+                           "remark": "M2-c 演示：供应商门户可见脱敏进度"}, "procure")
+            put(GContractPayment,
+                {"tenant_id": T1, "contract": con_ext, "phase": "预付"},
+                {"plan_amount": 40000, "plan_date": today - timedelta(days=10),
+                 "paid_amount": 40000, "paid_at": now, "status": "PAID",
+                 "creator_id": C1}, "procure")
+            put(GContractPayment,
+                {"tenant_id": T1, "contract": con_ext, "phase": "验收"},
+                {"plan_amount": 58000, "plan_date": today + timedelta(days=90),
+                 "paid_amount": 0, "status": "PLANNED", "creator_id": C1}, "procure")
 
         return cnt

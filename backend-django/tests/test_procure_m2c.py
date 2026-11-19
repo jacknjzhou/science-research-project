@@ -198,3 +198,42 @@ def test_unbound_partner_contracts_empty(seed_auth):
     u = _partner(seed_auth, org, username="no_sup")
     r = Client().get("/api/v1/portal/supplier/contracts", **bearer(u.id, ["R-PARTNER"]))
     assert r.status_code == 200 and r.json()["data"]["list"] == []
+
+
+def test_seed_m2c_demo_chain_is_usable(db, seed_auth):
+    """种子闭环（C3/C4 验收口径）：待审专家申请 + 已绑机构的供应商 + 被邀询价可报价。"""
+    from django.core.management import call_command
+
+    from apps.expertreview.models import NExpert
+    from apps.procure.models import GBid, GSupplier
+
+    call_command("seed_demo", verbosity=0)
+
+    app_row = NExpert.objects.filter(tenant_id=1, status="CANDIDATE").first()
+    assert app_row is not None and app_row.code and app_row.user_id
+    sup = GSupplier.objects.get(tenant_id=1, code="SUP-DEMO-M2C-01")
+    assert sup.org_id is not None
+    open_bid = GBid.objects.filter(tenant_id=1, code="BID-DEMO-M2C-01").first()
+    assert open_bid is not None and sup.id in [int(x) for x in open_bid.invited_supplier_ids]
+    assert open_bid.status == "PUBLICIZING"
+
+    # 该机构账号登录后可看到被邀询价并应价（走真实端点）
+    from apps.sysadmin.models import SysUser
+
+    partner = SysUser.objects.get(username="partner")
+    c = Client()
+    r = c.get("/api/v1/portal/supplier/inquiries", **bearer(partner.id, ["R-PARTNER"]))
+    assert r.status_code == 200
+    codes = [x["code"] for x in r.json()["data"]["list"]]
+    assert "BID-DEMO-M2C-01" in codes
+
+    r = c.post(
+        f"/api/v1/portal/supplier/inquiries/{open_bid.id}:quote",
+        data=json.dumps({"totalAmount": "118000.00"}),
+        content_type="application/json",
+        **bearer(partner.id, ["R-PARTNER"]),
+    )
+    assert r.status_code == 200, r.content
+    open_bid.refresh_from_db()
+    mine = [x for x in open_bid.bids_json if int(x["supplierId"]) == sup.id]
+    assert len(mine) == 1 and mine[0]["totalAmount"] == "118000.00"
