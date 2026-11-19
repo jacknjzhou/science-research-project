@@ -54,7 +54,22 @@ def running_under_tests() -> bool:
     return entry == "__main__.py" and "/pytest/" in argv[0].replace(os.sep, "/")
 
 
-def _assert_settings_module_deployable() -> None:
+def _is_ephemeral_test_db() -> bool:
+    """当前连的是不是「用完就没有」的库——只有内存库算。
+
+    不看目录（`/tmp` 下的文件库同样能在进程退出后留下来），只认内存 sqlite：
+    测试配置 + 落盘库 = 把 schema 迁到持久库上，属于必须挡住的操作。
+    """
+    from django.conf import settings as dj_settings
+
+    db = (getattr(dj_settings, "DATABASES", {}) or {}).get("default", {}) or {}
+    if not str(db.get("ENGINE", "")).endswith("sqlite3"):
+        return False
+    name = str(db.get("NAME", "") or "")
+    return name in ("", ":memory:") or name.startswith("file:memory")
+
+
+def _assert_settings_module_deployable(*, strict: bool = True) -> None:
     """`config.settings.test` / `.dev` 不是部署形态，误用即拒绝服务。
 
     这两份配置带着仓库内置的密钥与「允许播种演示账号」开关；一旦被当成生产
@@ -66,6 +81,10 @@ def _assert_settings_module_deployable() -> None:
     from django.conf import settings as dj_settings
 
     if running_under_tests():
+        return
+
+    # 豁免命令（migrate 等）只有在临时测试库上才放过：持久库 + 测试配置是脚枪。
+    if not strict and _is_ephemeral_test_db():
         return
 
     # 判据一：settings 里带 `IS_TEST_SETTINGS` 标记。用模块名判断会被
@@ -102,9 +121,10 @@ def validate_runtime_secrets(*, check_deployable: bool = True) -> None:
         return  # 本地 dev 形态：允许使用仓库缺省密钥
 
     # 初始化/修复类管理命令（migrate/makemigrations/collectstatic…）允许在测试配置
-    # 下使用：它们不起服务，而 pytest 之外的本地恢复流程会用到（r7-I3）。
-    if check_deployable:
-        _assert_settings_module_deployable()
+    # 下跑——但**只允许落在临时测试库上**（r8-I1：否则
+    # `DJANGO_SETTINGS_MODULE=<别名> manage.py migrate` 会把整份 schema 迁到持久库，
+    # 事后起服务才被拒，属于运维脚枪）。
+    _assert_settings_module_deployable(strict=check_deployable)
 
     # 校验**真正用于签名**的值：`core/auth/jwt_util` 读的是 settings.JWT_SECRET，
     # 自定义 settings 可以直接把它覆盖成弱值（而环境变量看起来是合规的）。

@@ -472,34 +472,6 @@ def test_account_table_ready_treats_partial_schema_as_unknown(settings, monkeypa
 
 # —— r5 回归（manage 命令也要拦 / 测试配置不可部署）——
 
-@pytest.mark.django_db
-def test_manage_command_gate_blocks_check_on_default_credentials(settings, monkeypatch):
-    """r5-C1：`manage.py check` 在旧库上不能 exit 0——运维必须看到「库里有默认口令」。"""
-    from core import startup
-
-    settings.DEBUG = False
-    settings.JWT_SECRET = "Z" * 40
-    _make_admin_with("Admin@123456")
-    monkeypatch.setattr(startup, "_current_management_command", lambda: "check", raising=False)
-    monkeypatch.setattr(startup, "running_under_tests", lambda: False, raising=False)
-    with pytest.raises(ImproperlyConfigured):
-        startup.enforce_process_guard()
-
-
-@pytest.mark.django_db
-def test_manage_command_gate_still_allows_remediation(settings, monkeypatch):
-    """修复命令不被拦（否则 `manage.py rotate_demo_credentials` 永远跑不起来）。"""
-    from core import startup
-
-    settings.DEBUG = False
-    settings.JWT_SECRET = "Z" * 40
-    _make_admin_with("Admin@123456")
-    monkeypatch.setattr(
-        startup, "_current_management_command", lambda: "rotate_demo_credentials", raising=False
-    )
-    startup.enforce_process_guard()
-
-
 def test_test_settings_module_is_not_deployable(settings, monkeypatch):
     """r5-I2：`config.settings.test` 带内置密钥与播种开关，不能被当成部署配置。"""
     from core import startup
@@ -606,16 +578,27 @@ def test_manage_check_blocks_legacy_db(legacy_db: Path, settings_arg: str):
     assert "rotate_demo_credentials" in res.stderr
 
 
-def test_django_admin_check_blocks_legacy_db(legacy_db: Path):
-    """`python -m django check`（不经 manage.py）同样要过凭据门禁。"""
+def test_python_dash_m_django_check_blocks_legacy_db(legacy_db: Path):
+    """`python -m django check`（argv[0] 是 django/__main__.py）也要过凭据门禁。"""
     res = _run([sys.executable, "-m", "django", "check"], _env(legacy_db, prod=True))
     assert res.returncode == 1
     assert "默认口令" in res.stderr
 
 
-def test_manage_help_still_works_on_legacy_db(legacy_db: Path):
-    """`help` 是纯信息命令：库不可用/带病时也必须能看出这是哪个版本。"""
-    res = _run([sys.executable, "manage.py", "help"], _env(legacy_db, prod=True))
+def test_django_admin_console_script_blocks_legacy_db(legacy_db: Path):
+    """真正的 `django-admin` 入口（entry point，不是 `python -m django`）同样被拦。"""
+    admin = Path(sys.executable).parent / "django-admin"
+    if not admin.exists():  # pragma: no cover - venv 未装 console script
+        pytest.skip("django-admin console script 不可用")
+    res = _run([str(admin), "check"], _env(legacy_db, prod=True))
+    assert res.returncode == 1, f"期望被拦，实际 {res.returncode}: {res.stdout}{res.stderr}"
+    assert "默认口令" in res.stderr
+
+
+def test_manage_help_still_works_when_db_is_broken(tmp_path: Path):
+    """`help` 是纯信息命令：连不上库时也必须能看出这是哪个版本（不能抛守卫异常）。"""
+    bad = tmp_path / "no_such_dir" / "x.sqlite3"  # 目录不存在 → 连库必失败
+    res = _run([sys.executable, "manage.py", "help"], _env(bad, prod=True))
     assert res.returncode == 0, res.stderr[-2000:]
     assert "rotate_demo_credentials" in res.stdout
 
@@ -694,3 +677,26 @@ def test_guard_scans_credentials_once_per_process(tmp_path: Path):
     res = _run([sys.executable, "-c", probe], env)
     assert res.returncode == 0, res.stderr[-2000:]
     assert "CALLS 1" in res.stdout, res.stdout
+
+
+def test_test_settings_cannot_migrate_persistent_db(tmp_path: Path):
+    """r8-I1：测试配置只允许落在临时库上，不许把 schema 迁到持久库。
+
+    曾经的豁免是「命令在豁免表里就跳过测试配置检查」，于是
+    `DJANGO_SETTINGS_MODULE=<别名> manage.py migrate` 会安静地把整库建到持久
+    路径上，事后起服务才被拒——运维脚枪。
+    """
+    alias_dir = tmp_path / "aliaspkg3"
+    alias_dir.mkdir()
+    (alias_dir / "mydeploy_persist.py").write_text(
+        "from config.settings.test import *  # noqa\n"
+        "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3',"
+        " 'NAME': %r}}\n" % str(tmp_path / "persist.sqlite3")
+    )
+    env = _env(tmp_path / "unused.sqlite3", prod=False)
+    env["DJANGO_SETTINGS_MODULE"] = "mydeploy_persist"
+    env["PYTHONPATH"] = f"{alias_dir}{os.pathsep}{BACKEND_DIR}"
+    res = _run([sys.executable, "manage.py", "migrate", "--noinput"], env)
+    assert res.returncode != 0, f"持久库 + 测试配置不该迁移成功: {res.stdout[-500:]}"
+    assert "IS_TEST_SETTINGS" in res.stderr
+    assert not (tmp_path / "persist.sqlite3").exists(), "持久库文件不该被创建"
