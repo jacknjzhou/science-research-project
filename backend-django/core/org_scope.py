@@ -88,9 +88,13 @@ def user_source_of(d) -> str | None:
 def is_external_account(d) -> bool:
     """按**账号来源**判定外部身份（M2-c 终审 r2 N-4）。
 
-    `is_external_only` 只看角色，会把"院内专家（R-STAFF+R-EXPERT）"也当成外部，
-    导致院内专家在 P 域被自己的申报挡在门外。这里以 `sys_user.user_source` 为准：
-    EXTERNAL → 外部；INTERNAL → 院内；账号不在库里（虚拟/集成令牌）回退到角色判定。
+    判定顺序（先硬后软）：
+    1. 令牌里出现 **R-PARTNER** → 恒为外部（不看 user_source）。R-PARTNER 就是
+       "外部机构用户"的身份标签，来源字段写错也不能让它走内部分支；
+    2. 否则看 `sys_user.user_source`：EXTERNAL → 外部，INTERNAL → 院内；
+    3. 账号不在库里（虚拟/集成令牌）→ 回退到角色判定。
+    这样院内专家（R-STAFF+R-EXPERT）不会被当成外部挡住自己的申报，
+    而"来源院内 + 角色机构"的两义账号仍按外部收口（fail-closed）。
     """
     roles = [r for r in (getattr(d, "roles", None) or []) if r]
     # R-PARTNER 语义就是"外部机构用户"——不论 user_source 写成什么，一律按外部
@@ -101,17 +105,4 @@ def is_external_account(d) -> bool:
     src = user_source_of(d)
     if src:
         return src == "EXTERNAL"
-    return has_external_role(roles)
-
-
-def is_external_only(d) -> bool:
-    """外部身份判定：**只要持有 R-PARTNER 即按外部口径处理（fail-closed）**。
-
-    终审 M2-b I2：早期实现用「角色集恰为 {R-PARTNER}」精确比较，导致
-    `R-PARTNER + R-STAFF` 这类混合账号走内部分支，从而可伪造 pi_user_id /
-    applicant_org_id（实测 200）。混合角色在业务上不是合法形态（见
-    `apps/sysadmin/api.py` 的授权一致性校验），运行期一律按外部（更严）处理：
-    调用方只给本机构数据、跨机构一律 404。
-    """
-    roles = [r for r in (getattr(d, "roles", None) or []) if r]
     return has_external_role(roles)

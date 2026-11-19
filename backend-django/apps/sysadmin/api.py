@@ -340,10 +340,12 @@ def assign_role(request: HttpRequest, id: int):
         is_external_account_row = (u.user_source or "INTERNAL").upper() == "EXTERNAL"
         if is_external_account_row and role.code not in _EXTERNAL_ROLE_CODES:
             raise ApiError(400, CODE_BAD_REQUEST, "外部账号不能追加内部角色")
-        if not is_external_account_row and role.code in _EXTERNAL_ROLE_CODES:
+        # R-EXPERT 不在此列：院内专家（R-STAFF+R-EXPERT）是合法形态（计划书 :194），
+        # 只有 R-PARTNER 必须来自外部注册流程——它是"机构用户"的身份标签。
+        if not is_external_account_row and role.code == _EXTERNAL_ROLE_CODE:
             raise ApiError(
                 400, CODE_BAD_REQUEST,
-                "外部角色只能授予外部账号（请先通过机构/专家注册流程建号）",
+                "外部机构角色只能授予外部账号（请先走机构注册流程建号）",
             )
         existing = list(role_codes_of(id))
         _assert_role_consistency(d.tenant_id, existing + [role.code], u.org_id)

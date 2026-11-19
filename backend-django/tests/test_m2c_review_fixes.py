@@ -477,7 +477,7 @@ def test_r3_assign_partner_role_to_internal_user_is_rejected(seed_auth):
     r = _post(c, f"/api/v1/admin/users/{u.id}/roles", {"role_id": role.id},
               **bearer(seed_auth["admin"].id, ["R-ADMIN"]))
     assert r.status_code == 400, r.content
-    assert r.json()["message"].startswith("外部角色只能授予外部账号")
+    assert r.json()["message"].startswith("外部机构角色只能授予外部账号")
 
 
 def test_r3_dirty_internal_partner_account_still_fails_closed(seed_auth):
@@ -530,3 +530,19 @@ def test_r3_internal_expert_pi_can_report_progress(seed_auth):
               {"period": "2026Q1", "report_type": "SELF", "content_rich": "进展"},
               **bearer(u.id, ["R-STAFF", "R-EXPERT"]))
     assert r.status_code == 200, r.content
+
+
+def test_r4_internal_user_can_be_granted_expert_role(seed_auth):
+    """Important-1：R-EXPERT 不是机构标签，院内专家走管理端授权应成功（计划 :194）。"""
+    from apps.sysadmin.models import SysRole, SysUser, SysUserRole
+
+    u = SysUser.objects.create(
+        tenant_id=1, username="inner_expert2", real_name="院内专家二",
+        status="ACTIVE", user_source="INTERNAL", creator_id=1,
+    )
+    role = SysRole.objects.get(tenant_id=1, code="R-EXPERT")
+    c = Client()
+    r = _post(c, f"/api/v1/admin/users/{u.id}/roles", {"role_id": role.id},
+              **bearer(seed_auth["admin"].id, ["R-ADMIN"]))
+    assert r.status_code == 200, r.content
+    assert SysUserRole.objects.filter(user_id=u.id, role_id=role.id).exists()
