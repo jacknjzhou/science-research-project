@@ -57,7 +57,11 @@ const routes: RouteRecordRaw[] = [
   { path: '/portal/applications', name: 'portal-applications', meta: { zh: '我的申报', en: 'MY APPLICATIONS', roles: ['R-PARTNER'] }, component: () => import('@/views/portal/ApplicationsView.vue') },
   { path: '/portal/guide-suggest', name: 'portal-guide-suggest', meta: { zh: '指南建议', en: 'GUIDE SUGGESTION', roles: ['R-PARTNER'] }, component: () => import('@/views/portal/GuideSuggestView.vue') },
   { path: '/portal/task-book', name: 'portal-task-book', meta: { zh: '任务书签订', en: 'TASK BOOK', roles: ['R-PARTNER', 'R-MANAGER', 'R-LEADER'] }, component: () => import('@/views/portal/TaskBookView.vue') },
+  { path: '/portal/expert-apply', name: 'portal-expert-apply', meta: { zh: '专家申请', en: 'EXPERT APPLY', roles: ['R-PARTNER', 'R-EXPERT', 'R-STAFF'] }, component: () => import('@/views/portal/ExpertApplyView.vue') },
+  { path: '/portal/expert', name: 'portal-expert', meta: { zh: '专家门户', en: 'EXPERT PORTAL', roles: ['R-EXPERT'] }, component: () => import('@/views/portal/ExpertPortalView.vue') },
+  { path: '/portal/supplier', name: 'portal-supplier', meta: { zh: '供应商门户', en: 'SUPPLIER PORTAL', roles: ['R-PARTNER'] }, component: () => import('@/views/portal/SupplierPortalView.vue') },
   { path: '/portal/project-report', name: 'portal-project-report', meta: { zh: '汇报与验收', en: 'REPORT & ACCEPT', roles: ['R-PARTNER', 'R-STAFF', 'R-MANAGER'] }, component: () => import('@/views/portal/ProjectReportView.vue') },
+  { path: '/admin/expert-applications', name: 'admin-expert-applications', meta: { zh: '专家申请审核', en: 'EXPERT REVIEW', roles: ['R-MANAGER', 'R-ADMIN'] }, component: () => import('@/views/admin/ExpertApplicationsView.vue') },
   { path: '/admin/guide-suggestions', name: 'admin-guide-suggestions', meta: { zh: '指南建议审核', en: 'GUIDE SUGGESTION REVIEW', roles: ['R-MANAGER', 'R-ADMIN'] }, component: () => import('@/views/admin/GuideSuggestionsView.vue') },
   // —— 越权兜底 ——
   { path: '/forbidden', name: 'forbidden', meta: { zh: '无访问权限', en: 'FORBIDDEN', public: true }, component: () => import('@/views/ForbiddenView.vue') },

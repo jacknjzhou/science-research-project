@@ -55,6 +55,11 @@ const ROLE_CAPS: Record<string, string[]> = {
     // M1-c（policy.csv:443-458）：领导只读拨款 + 回单识别 + 核算开户
     '/api/v1/incomes/ocr-receipt POST',
     '/api/v1/projects/*/open-account POST',
+    // —— M2-c：专家门户（信用档案/邀请/学术活动）——
+    '/api/v1/portal/expert-apply POST',
+    '/api/v1/portal/expert/credit GET',
+    '/api/v1/portal/expert/reviews GET',
+    '/api/v1/portal/expert/activities GET',
   ],
   'R-MANAGER': [
     ...W(['GET']),
@@ -74,6 +79,10 @@ const ROLE_CAPS: Record<string, string[]> = {
     '/api/v1/projects/*/open-account POST',
     // M2-a（policy.csv:859-862）：外部机构资质审核台
     '/api/v1/partner-orgs GET', '/api/v1/partner-orgs/*/audit POST',
+    // —— M2-c：专家申请审核 + 信用档案 ——
+    '/api/v1/expert-applications GET',
+    '/api/v1/expert-applications/*/audit POST',
+    '/api/v1/experts/*/credit GET',
   ],
   // M2-a：外部机构用户——仅本机构门户与公开面（镜像 policy.csv R-PARTNER 段）
   'R-PARTNER': [
@@ -94,6 +103,11 @@ const ROLE_CAPS: Record<string, string[]> = {
     '/api/v1/apply/task-books/* POST',
     '/api/v1/project/*/progress-report GET', '/api/v1/project/*/progress-report POST',
     '/api/v1/project/*/final-accept GET', '/api/v1/project/*/final-accept POST',
+    // —— M2-c：专家申请与供应商门户（镜像 policy.csv M2-c 段）——
+    '/api/v1/portal/expert-apply POST',
+    '/api/v1/portal/supplier/inquiries GET',
+    '/api/v1/portal/supplier/inquiries/*:quote POST',
+    '/api/v1/portal/supplier/contracts GET',
   ],
   'R-STAFF': [
     ...W(['GET']),
@@ -141,7 +155,12 @@ const PAGE_GRANTS: Array<[string, string]> = [
   ['portal-guide-suggest', 'R-PARTNER'],
   ['portal-task-book', 'R-PARTNER'], ['portal-task-book', 'R-MANAGER'], ['portal-task-book', 'R-LEADER'],
   ['portal-project-report', 'R-PARTNER'], ['portal-project-report', 'R-STAFF'], ['portal-project-report', 'R-MANAGER'],
-  ['admin-guide-suggestions', 'R-MANAGER'], ['admin-guide-suggestions', 'R-ADMIN'],
+  ['admin-guide-suggestions', 'R-MANAGER'],
+  ['admin-expert-applications', 'R-MANAGER'],
+  ['portal-expert-apply', 'R-PARTNER'],
+  ['portal-expert-apply', 'R-EXPERT'],
+  ['portal-expert', 'R-EXPERT'],
+  ['portal-supplier', 'R-PARTNER'], ['admin-guide-suggestions', 'R-ADMIN'],
 ]
 
 function usernameFromToken(token: string): string {

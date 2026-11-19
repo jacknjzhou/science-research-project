@@ -201,6 +201,8 @@ const groups: NavGroup[] = [
     { v: 'admin-partner-orgs', ic: '◎', label: '机构资质审核', roles: ['R-MANAGER', 'R-ADMIN'] },
     // M2-b：外部机构提交的指南建议审核（采纳即生成指南草稿）
     { v: 'admin-guide-suggestions', ic: '✎', label: '指南建议审核', roles: ['R-MANAGER', 'R-ADMIN'] },
+    // M2-c：外部专家资质审核（通过即授 R-EXPERT 并邮件通知）
+    { v: 'admin-expert-applications', ic: '✧', label: '专家申请审核', roles: ['R-MANAGER', 'R-ADMIN'] },
   ]},
   { t: '机 构 门 户', items: [
     // M2-a：外部机构用户专属（R-PARTNER）；内部账号不看该组
@@ -210,6 +212,10 @@ const groups: NavGroup[] = [
     { v: 'portal-guide-suggest', ic: '❖', label: '指南建议', roles: ['R-PARTNER'] },
     { v: 'portal-task-book', ic: '⎙', label: '任务书签订', roles: ['R-PARTNER', 'R-MANAGER', 'R-LEADER'] },
     { v: 'portal-project-report', ic: '⟳', label: '汇报与验收', roles: ['R-PARTNER', 'R-STAFF', 'R-MANAGER'] },
+    // M2-c：外部专家与供应商自助（C3/C4）
+    { v: 'portal-expert-apply', ic: '✧', label: '专家申请', roles: ['R-PARTNER', 'R-EXPERT', 'R-STAFF'] },
+    { v: 'portal-expert', ic: '❋', label: '专家门户', roles: ['R-EXPERT'] },
+    { v: 'portal-supplier', ic: '⁂', label: '供应商门户', roles: ['R-PARTNER'] },
   ]},
 ]
 

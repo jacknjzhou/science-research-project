@@ -5,6 +5,8 @@
  *   GET /partner-orgs、POST /partner-orgs/{id}/audit
  */
 
+import { portalM2cOverrides } from './portalM2c'
+
 interface MockOrg {
   id: number
   code: string
@@ -355,3 +357,4 @@ export const portalM2bOverrides: Record<string, unknown> = {
 }
 
 Object.assign(overrides, portalM2bOverrides)
+Object.assign(overrides, portalM2cOverrides)
