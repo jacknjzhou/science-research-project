@@ -157,6 +157,26 @@ class Command(BaseCommand):
             )
         return env_pwd
 
+    def _rotate_password(self, user, override_pwd: str | None) -> bool:
+        """显式给了 ARK_SEED_PASSWORD 时，对**已存在**账号也轮换口令。
+
+        `get_or_create` 只在首次创建时写 password_hash，因此升级/重建环境时旧口令
+        （例如仓库默认的 admin/Admin@123456）会长期有效。这里把它改成「设了口令就
+        轮换」，使 ARK_SEED_PASSWORD 成为唯一有效凭据。
+        """
+        if user is None or not override_pwd:
+            return False
+        current = (user.password_hash or "").encode()
+        if current:
+            try:
+                if bcrypt.checkpw(override_pwd.encode(), current):
+                    return False
+            except ValueError:  # 库里是非法 hash → 直接覆盖
+                pass
+        user.password_hash = bcrypt.hashpw(override_pwd.encode(), bcrypt.gensalt()).decode()
+        user.save(update_fields=["password_hash"])
+        return True
+
     def handle(self, *args, **options):
         override_pwd = self._guard(options)
         n_roles = n_users = n_dicts = n_items = n_grants = 0
@@ -184,6 +204,7 @@ class Command(BaseCommand):
                     "creator_id": 1,
                 },
             )
+            self._rotate_password(u, override_pwd)
             user_objs[username] = u
             n_users += int(created)
             for code in USER_ROLES[username]:
@@ -211,7 +232,7 @@ class Command(BaseCommand):
             )
             n_grants += int(c)
 
-        n = self._seed_domains(user_objs)
+        n = self._seed_domains(user_objs, override_pwd)
         n.update(roles=n_roles, users=n_users, dicts=n_dicts, items=n_items, grants=n_grants)
         self.stdout.write(
             self.style.SUCCESS(
@@ -229,7 +250,7 @@ class Command(BaseCommand):
         valid = {f.name for f in model._meta.fields}
         return {k: v for k, v in kwargs.items() if k in valid}
 
-    def _seed_domains(self, users: dict) -> dict:
+    def _seed_domains(self, users: dict, override_pwd: str | None = None) -> dict:
         from datetime import date as _date
 
         from apps.activity.models import VActivity, VActivityParticipant
@@ -1115,7 +1136,9 @@ class Command(BaseCommand):
             },
         )
         cnt["partner"] = cnt.get("partner", 0) + int(created)
-        # 已存在则补归属列（幂等修数，不改密码/状态）
+        # 设了口令则轮换（旧默认 Partner@123456 不得长期有效）
+        self._rotate_password(partner_user, override_pwd)
+        # 已存在则补归属列（幂等修数，不改状态）
         if not created and (partner_user.org_id != ptn_a.id or partner_user.user_source != "EXTERNAL"):
             partner_user.org_id = ptn_a.id
             partner_user.user_source = "EXTERNAL"
@@ -1234,6 +1257,7 @@ class Command(BaseCommand):
                               ).decode(),
                               "remark": "M2-c 演示：外部评审专家（机构 A）"}, "user")
             if expert_ext is not None:
+                self._rotate_password(expert_ext, override_pwd)
                 role_ext = SysRole.objects.filter(tenant_id=T1, code="R-EXPERT").first()
                 if role_ext is not None:
                     SysUserRole.objects.get_or_create(

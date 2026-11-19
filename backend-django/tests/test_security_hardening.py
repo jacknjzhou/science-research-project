@@ -498,10 +498,14 @@ def test_payment_callback_blocks_dirty_cross_tenant_requisition(seed_auth):
 # ---------------------------------------------------------------- 终审 r2：prod 配置债
 
 
-def test_prod_settings_have_debug_off():
-    """Important（终审 r2）：必须存在 DEBUG=False 的生产配置，供 compose/部署选用。"""
+def test_prod_settings_have_debug_off(monkeypatch):
+    """Important（终审 r2）：必须存在 DEBUG=False 的生产配置，供 compose/部署选用。
+
+    E-8 起 prod 配置在 import 期校验密钥，因此这里必须先给出一个合规密钥。
+    """
     import importlib
 
+    monkeypatch.setenv("ARK_JWT_SECRET", "Z" * 40)
     prod = importlib.import_module("config.settings.prod")
     assert prod.DEBUG is False
 

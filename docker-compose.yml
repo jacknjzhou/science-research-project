@@ -23,9 +23,11 @@ services:
       # 必填：compose 内不提供默认值，未设置则直接起不来（避免公开密钥上线）
       # 生成：openssl rand -base64 32
       ARK_JWT_SECRET: ${ARK_JWT_SECRET:?必须设置 ARK_JWT_SECRET：openssl rand -base64 32}
-      # 演示开关：1 才播种演示数据；口令必须由 ARK_SEED_PASSWORD 提供
-      ARK_SEED_DEMO: ${ARK_SEED_DEMO:-1}
-      ARK_SEED_PASSWORD: ${ARK_SEED_PASSWORD:-Demo@123456}
+      # 演示开关：默认关闭（干净库，不建任何演示账号）。
+      # 要演示数据，起容器时显式给：ARK_SEED_DEMO=1 ARK_SEED_PASSWORD='自定义口令'
+      # 编排不提供默认口令——演示账号也不该带公开凭据。
+      ARK_SEED_DEMO: ${ARK_SEED_DEMO:-0}
+      ARK_SEED_PASSWORD: ${ARK_SEED_PASSWORD:-}
       # ninja 自省文档默认关闭；内网排障时临时 ARK_API_DOCS=1
       ARK_API_DOCS: ${ARK_API_DOCS:-0}
       # LLM（NewAPI OpenAI 兼容）：未配置时 AI 端点自动降级 REVIEW（不阻塞业务）
