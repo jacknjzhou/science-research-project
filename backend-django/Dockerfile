@@ -2,6 +2,8 @@
 FROM python:3.13-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+# E-8：镜像默认生产形态（DEBUG=False，启动即校验 ARK_JWT_SECRET）
+ENV DJANGO_SETTINGS_MODULE=config.settings.prod
 
 WORKDIR /app
 
@@ -15,5 +17,6 @@ COPY . .
 
 EXPOSE 8787
 
-# 启动：migrate（schema 唯一真源）→ 幂等播种 → gunicorn
-CMD ["sh", "-c", "python manage.py migrate --noinput && python manage.py seed_demo && gunicorn config.wsgi:application -b 0.0.0.0:8787 -w 4 --timeout 60"]
+# 启动：migrate（schema 唯一真源）→ 仅在显式开启时播种 → gunicorn
+# 演示数据不再无条件灌入：ARK_SEED_DEMO=1 才播种，且非 dev 形态还需 ARK_SEED_PASSWORD
+CMD ["sh", "-c", "python manage.py migrate --noinput && if [ \"${ARK_SEED_DEMO:-0}\" = \"1\" ]; then python manage.py seed_demo; fi && gunicorn config.wsgi:application -b 0.0.0.0:8787 -w 4 --timeout 60"]

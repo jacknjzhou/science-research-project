@@ -2,7 +2,7 @@
 
 面向科研院所的一体化科研管理平台：项目申报立项 → 过程管理 → 经费 → 成果 → 转化 → 诚信伦理 → 人员团队 → 决策大屏 → 采购合同 → 资产耗材 → 涉密多法人治理，共 11 个业务模块，契约驱动、前后端分离、多法人多租户。
 
-> **当前状态**：后端 Django 重写 **Phase 0–4 全部完成**（11 模块全量落地 + svc-ai AI 微服务），全量 500 pytest 通过，PG 端到端冒烟 30 项全过，`develop` 已推送。
+> **当前状态**：后端 Django 重写 **Phase 0–4 全部完成**（11 模块全量落地 + svc-ai AI 微服务），全量 506 pytest 通过，PG 端到端冒烟 30 项全过，`develop` 已推送。
 
 ## 技术栈（方案 C）
 
@@ -26,7 +26,7 @@
 │   ├── svc_ai/              # FastAPI AI 微服务（/ai/*）
 │   ├── config/              # settings(dev/test/base) + 集中路由 + casbin policy
 │   ├── scripts/             # PG 冒烟脚本 smoke_p3.py / smoke_p4.py
-│   └── tests/               # pytest 套件（500 个）
+│   └── tests/               # pytest 套件（506 个）
 ├── frontend/                # Vue3 SPA（契约 mock，13 屏）
 ├── prototype/               # 静态高保真原型
 ├── docs/superpowers/        # 重写 plan 与 spec（backend-django-rewrite-*）
@@ -38,8 +38,14 @@
 ## 快速开始（Docker Compose）
 
 ```bash
+# JWT 密钥必填：compose 不再提供默认值，未设置会直接报错退出
+export ARK_JWT_SECRET="$(openssl rand -base64 32)"
 docker compose up -d --build
 ```
+
+> **演示数据**：容器启动仅在 `ARK_SEED_DEMO=1`（compose 默认开）时播种，且口令取自
+> `ARK_SEED_PASSWORD`（compose 默认 `Demo@123456`）。要一个干净库：
+> `ARK_SEED_DEMO=0 docker compose up -d --build`。
 
 启动后（全部容器 healthcheck 通过约 1 分钟）：
 
@@ -70,7 +76,7 @@ python manage.py migrate                                    # 默认连 localhos
 python manage.py seed_demo                                  # 幂等播种
 
 # 全量测试（sqlite 内存库，不依赖 PG）
-python -m pytest tests -q                                   # 当前 500 passed
+python -m pytest tests -q                                   # 当前 506 passed
 
 > **冒烟后门（仅本地/演示）**：`ark/ark` 登录默认**关闭**；需同时满足 `DEBUG=True` 与
 > 环境变量 `ARK_DEV_LOGIN=1` 才会签发一个最小权限（`R-STAFF`）令牌，数据域由
@@ -157,7 +163,10 @@ uvicorn svc_ai.main:app --port 8900
 |------|------|------|
 | `ARK_DATABASE_URL` | PostgreSQL DSN | `postgres://ark:ark@localhost:5432/ark` |
 | `ARK_REDIS_ADDR` | Redis | `127.0.0.1:6379` |
-| `ARK_JWT_SECRET` / `ARK_JWT_TTL_SEC` | JWT | dev-secret / 7200 |
+| `ARK_JWT_SECRET` / `ARK_JWT_TTL_SEC` | JWT 签名密钥 / 有效期 | **必填**（`openssl rand -base64 32`，prod 配置拒绝弱密钥）/ 7200 |
+| `ARK_SEED_DEMO` / `ARK_SEED_PASSWORD` | 是否播种演示数据 / 演示账号口令 | `0`（compose 演示为 `1`）/ 空（非 dev 形态必须显式给） |
+| `ARK_API_DOCS` | 自省文档 `/docs`、`/openapi.json` | 关（`1` 临时开；DEBUG 下默认开） |
+| `ARK_DEV_LOGIN` / `ARK_DEV_TENANT` | 本地 `ark/ark` 快速登录（仅 DEBUG 生效） | 关 / `1` |
 | `ARK_LLM_BASE_URL` / `API_KEY` / `MODEL` / `TIMEOUT_SEC` | LLM 网关（NewAPI OpenAI 兼容） | 空（降级）/ `gpt-4o-mini` / 30 |
 | `ARK_DB_ENGINE=sqlite` | 测试切 sqlite 内存库 | — |
 | `ARK_S3_*` | MinIO 对象存储 | minioadmin…/ark-docs |
@@ -165,7 +174,7 @@ uvicorn svc_ai.main:app --port 8900
 ## 部署
 
 - **开发/演示**：`docker compose up -d --build`（见上文）。
-- **生产**：非容器化——systemd 多实例（`django-api.service` gunicorn / `django-worker` / `django-beat` / `svc-ai.service` uvicorn / `django-migrate` oneshot）+ Nginx 反向代理多活（`/api/ → django`、`/ai/ → svc-ai` 内网）。详见 `docs/superpowers/specs/2026-10-17-backend-django-rewrite-spec.md` §九。
+- **生产**：**先设置强 JWT 密钥**（`config.settings.prod` 在 `ARK_JWT_SECRET` 缺失/为仓库默认值/短于 32 字符时直接拒绝启动）；**不要**设 `ARK_SEED_DEMO`（否则会灌入演示账号）。非容器化——systemd 多实例（`django-api.service` gunicorn / `django-worker` / `django-beat` / `svc-ai.service` uvicorn / `django-migrate` oneshot）+ Nginx 反向代理多活（`/api/ → django`、`/ai/ → svc-ai` 内网）。详见 `docs/superpowers/specs/2026-10-17-backend-django-rewrite-spec.md` §九。
 
 ## 文档索引
 
