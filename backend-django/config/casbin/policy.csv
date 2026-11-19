@@ -917,3 +917,8 @@ p, R-EXPERT,  /api/v1/portal/expert/reviews,          GET
 p, R-EXPERT,  /api/v1/portal/expert/activities,       GET
 p, R-MANAGER, /api/v1/experts/*/credit,               GET
 p, R-LEADER,  /api/v1/experts/*/credit,               GET
+# M2-c（C4）：供应商门户询价与合同进度（外部机构用户）
+p, R-PARTNER, /api/v1/portal/supplier/inquiries,          GET
+p, R-PARTNER, /api/v1/portal/supplier/inquiries/*:quote,  POST
+p, R-PARTNER, /api/v1/portal/supplier/contracts,          GET
+p, R-MANAGER, /api/v1/portal/supplier/inquiries,          GET

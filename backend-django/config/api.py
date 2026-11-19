@@ -751,6 +751,7 @@ api.post("/students", auth=ark_auth, tags=["staff"])(staff_api.register_student)
 api.get("/talent/analysis", auth=ark_auth, tags=["staff"])(staff_api.talent_analysis)
 
 from apps.procure import api as procure_api
+from apps.procure import portal as procure_portal
 from apps.asset import api as asset_api
 
 # —— G 采购与合同（/procurement/*、/contract/*、/supplier、/finance/expense）——
@@ -810,3 +811,7 @@ api.post("/security/classify", auth=ark_auth, tags=["classify"])(confsec_api.sub
 api.post("/security/log", auth=ark_auth, tags=["log"])(confsec_api.write_sec_log)
 api.get("/security/log", auth=ark_auth, tags=["log"])(confsec_api.query_sec_log)
 api.post("/security/personnel/review", auth=ark_auth, tags=["personnel"])(confsec_api.personnel_review)
+# M2-c 供应商门户（C4）：询价可见/在线应价 + 合同进度脱敏
+api.get("/portal/supplier/inquiries", auth=ark_auth, tags=["procure"])(procure_portal.list_supplier_inquiries)
+api.post("/portal/supplier/inquiries/{id}:quote", auth=ark_auth, tags=["procure"])(procure_portal.quote_inquiry)
+api.get("/portal/supplier/contracts", auth=ark_auth, tags=["procure"])(procure_portal.list_supplier_contracts)

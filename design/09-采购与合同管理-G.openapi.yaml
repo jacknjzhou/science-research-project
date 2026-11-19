@@ -575,6 +575,79 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /portal/supplier/inquiries:
+    get:
+      tags: [procure]
+      operationId: listSupplierInquiries
+      summary: 我被邀请的询价（脱敏：不含需求预算金额）
+      responses:
+        '200':
+          description: 询价列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/SupplierInquiryList' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /portal/supplier/inquiries/{id}:quote:
+    post:
+      tags: [procure]
+      operationId: quoteSupplierInquiry
+      summary: 在线应价（同供应商重报覆盖；已定标不可报）
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SupplierQuoteRequest' }
+      responses:
+        '200':
+          description: 应价已提交
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:          { type: integer }
+                          totalAmount: { type: string }
+                          quoted:      { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: 询价已定标
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponse' }
+
+  /portal/supplier/contracts:
+    get:
+      tags: [procure]
+      operationId: listSupplierContracts
+      summary: 我方合同执行进度（对外脱敏只读）
+      responses:
+        '200':
+          description: 合同列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/SupplierContractList' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
   /supplier:
     get:
       tags: [supplier]
@@ -711,6 +784,53 @@ components:
           example: { code: 50301, message: "AI 服务暂时不可用", data: null, traceId: "t-123", timestamp: 1700000000000 }
 
   schemas:
+  SupplierQuoteRequest:
+    type: object
+    required: [totalAmount]
+    properties:
+      totalAmount: { type: string, description: 报价总额（两位小数字符串，兼容 number） }
+      remark:      { type: string, maxLength: 512 }
+
+  SupplierInquiryList:
+    type: object
+    properties:
+      list:
+        type: array
+        items:
+          type: object
+          properties:
+            id:       { type: integer }
+            code:     { type: string, nullable: true }
+            method:   { type: string }
+            status:   { type: string, description: PUBLICIZING/AWARDED/CHALLENGE }
+            title:    { type: string, nullable: true, description: 需求品名 }
+            category: { type: string, nullable: true }
+            open_at:  { type: string, nullable: true }
+            quoted:   { type: boolean, description: 我是否已报价 }
+            my_amount: { type: string, nullable: true }
+      total: { type: integer }
+
+  SupplierContractList:
+    type: object
+    properties:
+      list:
+        type: array
+        items:
+          type: object
+          description: 对外脱敏视图（不含甲方/备注/AI 风险/需求单号）
+          properties:
+            id:              { type: integer }
+            code:            { type: string, nullable: true }
+            name:            { type: string }
+            amount:          { type: string }
+            signed_at:       { type: string, nullable: true }
+            end_date:        { type: string, nullable: true }
+            status:          { type: string }
+            pay_phase_count: { type: integer }
+            paid_amount:     { type: string }
+            paid_ratio:      { type: string }
+      total: { type: integer }
+
     ApiResponse:
       type: object
       description: 统一响应包裹；code=0 表示成功，非 0 为业务错误，HTTP 状态表达传输层。
