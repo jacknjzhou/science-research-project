@@ -66,7 +66,14 @@ def _is_ephemeral_test_db() -> bool:
     if not str(db.get("ENGINE", "")).endswith("sqlite3"):
         return False
     name = str(db.get("NAME", "") or "")
-    return name in ("", ":memory:") or name.startswith("file:memory")
+    if name in ("", ":memory:"):
+        return True
+    # URI 形态要显式声明内存：`file:memory:foo` 不带 `?mode=memory` 时 SQLite
+    # 会把库**写到磁盘**上（r9-I1 实测生成 1.2MB 文件），不能按名字前缀判。
+    if name.startswith("file:"):
+        params = name.split("?", 1)[1] if "?" in name else ""
+        return "mode=memory" in params
+    return False
 
 
 def _assert_settings_module_deployable(*, strict: bool = True) -> None:

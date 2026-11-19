@@ -700,3 +700,33 @@ def test_test_settings_cannot_migrate_persistent_db(tmp_path: Path):
     assert res.returncode != 0, f"持久库 + 测试配置不该迁移成功: {res.stdout[-500:]}"
     assert "IS_TEST_SETTINGS" in res.stderr
     assert not (tmp_path / "persist.sqlite3").exists(), "持久库文件不该被创建"
+
+
+@pytest.mark.parametrize(
+    ("engine", "name", "expected"),
+    [
+        ("django.db.backends.sqlite3", ":memory:", True),
+        ("django.db.backends.sqlite3", "", True),
+        ("django.db.backends.sqlite3", "file:memdb1?mode=memory&cache=shared", True),
+        # r9-I1：不带 mode=memory 的 file:memory:x 会落盘成 `memory:x`
+        ("django.db.backends.sqlite3", "file:memory:foo", False),
+        ("django.db.backends.sqlite3", "/tmp/whatever.sqlite3", False),
+        ("django.db.backends.postgresql", "ark", False),
+    ],
+    ids=["memory", "empty", "uri-memory", "uri-not-memory", "file", "postgres"],
+)
+def test_ephemeral_test_db_detection(settings, engine, name, expected):
+    """`_is_ephemeral_test_db()` 只认真正不落盘的库。"""
+    from core import startup
+
+    settings.DATABASES = {"default": {"ENGINE": engine, "NAME": name}}
+    assert startup._is_ephemeral_test_db() is expected
+
+
+def test_manage_test_runner_passes_with_sqlite(legacy_db: Path):
+    """`manage.py test` 运行器自己就是测试进程，守卫不能把它挡死。"""
+    res = _run(
+        [sys.executable, "manage.py", "test", "tests.test_login_auth", "-v", "1"],
+        _env(legacy_db, prod=True),
+    )
+    assert res.returncode == 0, res.stderr[-3000:]
