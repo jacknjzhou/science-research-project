@@ -263,9 +263,10 @@ def to_api_publicity_public(r: TPublicity) -> dict[str, Any]:
     """公开通道序列化（R2-I2）：异议人姓名/联系方式一律脱敏，
     匿名访客无法通过公示页拿到 PII。"""
     data = to_api_publicity(r)
+    # handle_result 是管理员自由文本（可能含姓名/联系方式），公开通道一律不返回（R3-I2）
     data["objections"] = [
         {**o, "submitter": _mask_name(o.get("submitter")),
-         "contact": _mask_contact(o.get("contact"))}
+         "contact": _mask_contact(o.get("contact")), "handle_result": None}
         for o in (r.objections or [])
     ]
     return data

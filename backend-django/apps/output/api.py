@@ -232,7 +232,9 @@ def _process_claim(request: HttpRequest, action: str):
     results = []
     for it in items:
         oid = (it or {}).get("output_id")
-        o = ROutput.objects.filter(id=oid, deleted=0).first() if oid else None
+        # E-7 补扫：认领/退回必须落在本租户，否则可改他租户成果状态
+        o = (ROutput.objects.filter(id=oid, tenant_id=d.tenant_id, deleted=0).first()
+             if oid else None)
         if o is None:
             results.append({"output_id": oid, "success": False, "message": "成果不存在或状态冲突"})
             continue

@@ -156,12 +156,12 @@ def create_disclosure(request: HttpRequest):
     # R2-B：body 引用不得指向他租户对象（存在性不强制——历史数据无 FK 约束；
     # 仅当对象确实存在且属于他租户时 404，不泄露对方是否存在）
     out_ref = int(b["output_id"])
-    if ROutput.objects.filter(id=out_ref, deleted=0).exclude(tenant_id=dom.tenant_id).exists():
+    if ROutput.objects.filter(id=out_ref).exclude(tenant_id=dom.tenant_id).exists():
         raise ApiError(404, CODE_NOT_FOUND, "成果不存在")
     project_ref = b.get("project_id") or None
     if project_ref is not None:
         project_ref = int(project_ref)
-        if EProject.objects.filter(id=project_ref, deleted=0).exclude(
+        if EProject.objects.filter(id=project_ref).exclude(
                 tenant_id=dom.tenant_id).exists():
             raise ApiError(404, CODE_NOT_FOUND, "项目不存在")
     d = TDisclosure.objects.create(

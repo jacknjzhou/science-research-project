@@ -78,8 +78,13 @@ def _gen_case_code(tenant_id: int) -> str:
     return f"ETH-{year}-{seq:06d}"
 
 
-def _get_case_or_404(cid: int) -> CEthicsCase:
-    c = CEthicsCase.objects.filter(id=cid, deleted=0).first()
+def _get_case_or_404(request: HttpRequest, cid: int) -> CEthicsCase:
+    """按租户取案卷（E-7 补扫）：跨租户 id 与不存在同口径 404。
+
+    此前按主键裸查，任何租户令牌都能读到/改写他租户伦理案卷（12 个写接口）。
+    """
+    tenant_id = domain_from(request).tenant_id
+    c = CEthicsCase.objects.filter(id=cid, tenant_id=tenant_id, deleted=0).first()
     if c is None:
         raise ApiError(404, CODE_NOT_FOUND, "伦理案卷不存在")
     return c
@@ -152,7 +157,7 @@ def create_ethics_case(request: HttpRequest):
 
 def get_ethics_case(request: HttpRequest, id: int):
     dom = domain_from(request)
-    c = _get_case_or_404(id)
+    c = _get_case_or_404(request, id)
     data = to_api_case(c)
     # 委员意见：PI 视角匿名（reviewer_user_id 不透出）
     opinions = CReviewOpinion.objects.filter(case=c, deleted=0).exclude(status="SUPERSEDED")
@@ -171,7 +176,7 @@ def get_ethics_case(request: HttpRequest, id: int):
 def submit_ethics_case(request: HttpRequest, id: int):
     """提交送审：DRAFT/NEEDS_REVISION → FORMAL_CHECK（补件重提复用）。"""
     dom = domain_from(request)
-    c = _get_case_or_404(id)
+    c = _get_case_or_404(request, id)
     _guard(c, {"DRAFT", "NEEDS_REVISION"}, "提交送审")
     b = read_json(request)
     if mats := b.get("materials"):
@@ -188,7 +193,7 @@ def submit_ethics_case(request: HttpRequest, id: int):
 @transaction.atomic
 def ai_prescreen_ethics(request: HttpRequest, id: int):
     """C-17 关键要素完整性预审（确定性规则；LLM 增强由 svc-ai 承接）。"""
-    c = _get_case_or_404(id)
+    c = _get_case_or_404(request, id)
     missing = []
     if not c.protocol_summary:
         missing.append("protocol_summary")
@@ -209,7 +214,7 @@ def ai_prescreen_ethics(request: HttpRequest, id: int):
 def formal_check(request: HttpRequest, id: int):
     """形式审查（管理员/秘书）：齐备→UNDER_REVIEW，缺件→NEEDS_REVISION。"""
     dom = domain_from(request)
-    c = _get_case_or_404(id)
+    c = _get_case_or_404(request, id)
     _guard(c, {"FORMAL_CHECK", "NEEDS_REVISION"}, "形式审查")
     b = read_json(request)
     result = b.get("result")
@@ -231,7 +236,7 @@ def formal_check(request: HttpRequest, id: int):
 def assign_reviewers(request: HttpRequest, id: int):
     """分派主审+委员（C-03）；利益冲突：与申请人同人强制拒绝，COI 标记留痕。"""
     dom = domain_from(request)
-    c = _get_case_or_404(id)
+    c = _get_case_or_404(request, id)
     _guard(c, {"UNDER_REVIEW"}, "分派")
     b = read_json(request)
     items = b.get("assignments") or []
@@ -263,7 +268,7 @@ def assign_reviewers(request: HttpRequest, id: int):
 def submit_opinion(request: HttpRequest, id: int):
     """委员打分与意见（C-03/C-04）；须为已分派委员，一人一份。"""
     dom = domain_from(request)
-    c = _get_case_or_404(id)
+    c = _get_case_or_404(request, id)
     _guard(c, {"UNDER_REVIEW"}, "意见提交")
     b = read_json(request)
     rec = b.get("recommendation")
@@ -292,7 +297,7 @@ def submit_opinion(request: HttpRequest, id: int):
 @transaction.atomic
 def meeting_check_in(request: HttpRequest, id: int):
     dom = domain_from(request)
-    c = _get_case_or_404(id)
+    c = _get_case_or_404(request, id)
     _guard(c, {"UNDER_REVIEW"}, "会议签到")
     b = read_json(request)
     attendees = b.get("attendees") or []
@@ -313,7 +318,7 @@ def meeting_check_in(request: HttpRequest, id: int):
 def meeting_vote(request: HttpRequest, id: int):
     """表决与生成纪要（C-04）：approve>reject 且达法定人数 → 决议生效。"""
     dom = domain_from(request)
-    c = _get_case_or_404(id)
+    c = _get_case_or_404(request, id)
     _guard(c, {"UNDER_REVIEW"}, "会议表决")
     b = read_json(request)
     decision = b.get("decision")
@@ -355,7 +360,7 @@ def meeting_vote(request: HttpRequest, id: int):
 def issue_decision_letter(request: HttpRequest, id: int):
     """主审签发批件（1:1）；publish=true → PUBLISHED 并生成公开验证页。"""
     dom = domain_from(request)
-    c = _get_case_or_404(id)
+    c = _get_case_or_404(request, id)
     _guard(c, {"APPROVED", "REJECTED"}, "批件签发")
     if CDecisionLetter.objects.filter(case=c, deleted=0).exists():
         raise ApiError(409, CODE_CONFLICT, "批件已签发（1:1）")
@@ -404,7 +409,7 @@ def verify_decision_letter(request: HttpRequest, letterNo: str):
 @transaction.atomic
 def submit_amendment(request: HttpRequest, id: int):
     dom = domain_from(request)
-    c = _get_case_or_404(id)
+    c = _get_case_or_404(request, id)
     _guard(c, {"APPROVED", "MONITORING"}, "修正案提交")
     b = read_json(request)
     if not b.get("change_summary"):
@@ -443,7 +448,7 @@ def decide_amendment(request: HttpRequest, id: int):
 def report_adverse_event(request: HttpRequest, id: int):
     """不良事件（C-09）；SERIOUS/SUSAR 触发主审快速评估 → 案卷 MONITORING。"""
     dom = domain_from(request)
-    c = _get_case_or_404(id)
+    c = _get_case_or_404(request, id)
     _guard(c, {"APPROVED", "MONITORING", "UNDER_REVIEW"}, "不良事件报告")
     b = read_json(request)
     if b.get("severity") not in SEVERITIES or not b.get("description") or not b.get("event_date"):
@@ -464,7 +469,7 @@ def report_adverse_event(request: HttpRequest, id: int):
 @transaction.atomic
 def submit_annual_review(request: HttpRequest, id: int):
     dom = domain_from(request)
-    c = _get_case_or_404(id)
+    c = _get_case_or_404(request, id)
     _guard(c, {"APPROVED", "MONITORING"}, "年度复审提交")
     b = read_json(request)
     if not b.get("review_year") or not b.get("progress_summary"):

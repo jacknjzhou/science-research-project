@@ -91,8 +91,10 @@ def _parse_date(s):
     return None
 
 
-def _get_project_or_404(project_id: int) -> EProject:
-    p = EProject.objects.filter(id=project_id, deleted=0).first()
+def _get_project_or_404(request: HttpRequest, project_id: int) -> EProject:
+    """按租户取项目（E-7 补扫）：跨租户 id 与不存在同口径 404。"""
+    tenant_id = domain_from(request).tenant_id
+    p = EProject.objects.filter(id=project_id, tenant_id=tenant_id, deleted=0).first()
     if p is None:
         raise ApiError(404, CODE_NOT_FOUND, "项目不存在")
     return p
@@ -128,11 +130,11 @@ def list_my_projects(request: HttpRequest):
 
 
 def get_project(request: HttpRequest, id: int):
-    return ok(request, to_api_project(_get_project_or_404(id)))
+    return ok(request, to_api_project(_get_project_or_404(request, id)))
 
 
 def list_tasks(request: HttpRequest, id: int):
-    _get_project_or_404(id)
+    _get_project_or_404(request, id)
     qs = ETask.objects.filter(project_id=id, deleted=0)
     if request.GET.get("status"):
         qs = qs.filter(status=request.GET["status"])
@@ -140,7 +142,7 @@ def list_tasks(request: HttpRequest, id: int):
 
 
 def list_milestones(request: HttpRequest, id: int):
-    _get_project_or_404(id)
+    _get_project_or_404(request, id)
     rows = EMilestone.objects.filter(project_id=id, deleted=0).order_by("id")
     return ok(request, {"list": [to_api_milestone(m) for m in rows]})
 
@@ -241,7 +243,7 @@ def project_board(request: HttpRequest, id: int):
 
 
 def update_task(request: HttpRequest, id: int, task_id: int):
-    _get_project_or_404(id)
+    _get_project_or_404(request, id)
     body = read_json(request)
     status = body.get("status")
     if not status:
@@ -1460,8 +1462,10 @@ _ARCHIVE_DEFAULT_ITEMS = [
 ]
 
 
-def _get_project_or_404(project_id: int) -> EProject:
-    p = EProject.objects.filter(id=project_id, deleted=0).first()
+def _get_project_or_404(request: HttpRequest, project_id: int) -> EProject:
+    """按租户取项目（E-7 补扫）：跨租户 id 与不存在同口径 404。"""
+    tenant_id = domain_from(request).tenant_id
+    p = EProject.objects.filter(id=project_id, tenant_id=tenant_id, deleted=0).first()
     if p is None:
         raise ApiError(404, CODE_NOT_FOUND, "项目不存在")
     return p
@@ -1473,7 +1477,7 @@ def list_risk_warnings(request: HttpRequest, id: int):
     规则：经费执行率（>100% HIGH / ≥90% MID）、里程碑逾期（HIGH）、
     健康分（<60 HIGH / <80 MID）、项目风险级（HIGH → HIGH）。
     """
-    p = _get_project_or_404(id)
+    p = _get_project_or_404(request, id)
     warnings: list[dict] = []
 
     total, spent = float(p.total_budget or 0), float(p.spent_amount or 0)
@@ -1548,7 +1552,7 @@ def _checklist_payload(row: EArchiveChecklist) -> dict:
 
 def get_archive_checklist(request: HttpRequest, id: int):
     """GET /project/{id}/archive-checklist?stage= —— EArchiveChecklist 幂等初始化 + 契约输出。"""
-    p = _get_project_or_404(id)
+    p = _get_project_or_404(request, id)
     stage = request.GET.get("stage") or "FINAL"
     row = _get_checklist_or_init(request, p, stage)
     return ok(request, _checklist_payload(row))
@@ -1560,7 +1564,7 @@ def update_checklist_item(request: HttpRequest, id: int):
     body: {item: 清单项名, doc_id: O 域文档 id | null, uploaded: bool（缺省 true）}。
     doc_id 须真实存在（o_document），否则 40902 引用冲突。
     """
-    p = _get_project_or_404(id)
+    p = _get_project_or_404(request, id)
     body = read_json(request)
     item_name = (body.get("item") or "").strip()
     if not item_name:

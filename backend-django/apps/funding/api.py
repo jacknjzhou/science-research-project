@@ -250,7 +250,8 @@ def _reject_foreign_ref(model, obj_id, tenant_id: int, label: str) -> None:
         oid = int(obj_id)
     except (TypeError, ValueError):
         raise ApiError(400, CODE_BAD_REQUEST, f"{label} id 非法")
-    if model.objects.filter(id=oid, deleted=0).exclude(tenant_id=tenant_id).exists():
+    # 不排除软删行（R3-I1）：他租户软删对象仍属他租户，引用同样是越权
+    if model.objects.filter(id=oid).exclude(tenant_id=tenant_id).exists():
         raise ApiError(404, CODE_NOT_FOUND, f"{label}不存在")
 
 

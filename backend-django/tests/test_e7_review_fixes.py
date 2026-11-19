@@ -234,7 +234,9 @@ def _public_case(status: str = "PUBLISHED", contact: str = "13800000000"):
         objections=[{
             "objection_id": "OBJ1", "submitter": "张三丰", "contact": contact,
             "content": "权属存在争议", "submitted_at": dj_tz.now().isoformat(),
-            "handle_status": "OPEN", "handle_result": None, "handled_at": None,
+            "handle_status": "PROCESSING", "handled_at": None,
+            # 管理员自由文本里可能含 PII，公开通道必须不返回（R3-I2）
+            "handle_result": "已联系张三丰 13800000000 补交权属材料",
         }],
     )
     return deal, p
@@ -339,3 +341,75 @@ def test_create_disclosure_rejects_foreign_output(seed_auth):
     assert r.status_code == 404, r.content.decode()
     assert _json(r)["code"] == 40401
     assert not TDisclosure.objects.filter(output_id=out.id).exists()
+
+
+# --- R3-D 存量跨租户裸查（ethics / project / output）------------------------
+def test_ethics_case_is_tenant_scoped(seed_auth):
+    from apps.ethics.models import CEthicsCase
+
+    case = CEthicsCase.objects.create(
+        tenant_id=2, creator_id=1, code="ETH-2026-000099",
+        protocol_title="他租户伦理案卷", applicant_user_id=1,
+        review_type="HUMAN", status="DRAFT",
+    )
+    r = Client().get(f"/api/v1/ethics/{case.id}",
+                     **bearer(1, ["R-STAFF"], tenant_id=1))
+    assert r.status_code == 404, r.content.decode()
+
+    r2 = Client().post(f"/api/v1/ethics/{case.id}/submit",
+                       **bearer(1, ["R-STAFF"], tenant_id=1))
+    assert r2.status_code == 404, "他租户案卷不得被提交"
+    case.refresh_from_db()
+    assert case.status == "DRAFT"
+
+
+def test_project_task_update_is_tenant_scoped(seed_auth):
+    from apps.project.models import ETask
+
+    prj = _project(tenant_id=2, code="PRJ-E7-T2")
+    task = ETask.objects.create(
+        tenant_id=2, creator_id=1, project_id=prj.id, name="他租户任务",
+        status="TODO", progress_percent=0,
+    )
+    r = Client().put(f"/api/v1/project/{prj.id}/tasks/{task.id}", data=json.dumps({
+        "status": "DONE", "progress_percent": 100,
+    }), content_type="application/json", **bearer(1, ["R-STAFF"], tenant_id=1))
+    assert r.status_code == 404, r.content.decode()
+    task.refresh_from_db()
+    assert task.status != "DONE", "他租户任务不得被改写"
+
+
+def test_output_claim_rejects_foreign_output(seed_auth):
+    from apps.output.models import ROutput
+
+    o = ROutput.objects.create(tenant_id=2, creator_id=1, title="他租户成果",
+                               status="PENDING_CLAIM", claim_status="UNCLAIMED")
+    r = Client().post("/api/v1/output/claim", data=json.dumps({
+        "items": [{"output_id": o.id}],
+    }), content_type="application/json", **bearer(1, ["R-STAFF"], tenant_id=1))
+    assert r.status_code == 200, r.content.decode()
+    assert _json(r)["data"]["results"][0]["success"] is False, "他租户成果不得被认领"
+    o.refresh_from_db()
+    assert o.claim_status == "UNCLAIMED"
+
+
+# --- R3-I1 软删的他租户对象同样拒绝 -----------------------------------------
+def test_create_expense_rejects_soft_deleted_foreign_project(seed_auth):
+    prj = _project(tenant_id=2, code="PRJ-E7-SD")
+    prj.deleted = 1
+    prj.save(update_fields=["deleted"])
+    r = Client().post("/api/v1/expenses", data=json.dumps({
+        "project_id": prj.id, "legal_entity_id": 1, "amount": "88.00",
+        "expense_type": "MATERIAL",
+    }), content_type="application/json", **bearer(1, ["R-STAFF"], tenant_id=1))
+    assert r.status_code == 404, r.content.decode()
+
+
+# --- R3-I2 公开通道不返回管理员自由文本 handle_result ------------------------
+def test_public_publicity_hides_handle_result(db):
+    _, p = _public_case()
+    r = Client().get(f"/api/v1/publicity/{p.deal_id}")
+    assert r.status_code == 200
+    body = r.content.decode()
+    assert "张三丰" not in body and "13800000000" not in body
+    assert _json(r)["data"]["objections"][0]["handle_result"] is None

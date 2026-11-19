@@ -61,33 +61,3 @@ def sync_permissions_from_csv(policy_path: str | None = None) -> tuple[int, int]
         link_created += int(link_created_flag)
 
     return perm_created, link_created
-
-
-def purge_stale_policy_rows(policy_path: str | None = None) -> int:
-    """删除 policy.csv 里已不存在的角色-权限指派（R2-M2）。
-
-    历史上从 CSV 移除的规则只留在 DB（`sync_permissions_from_csv` 只增不删），
-    旧库上会持续给已下线的路径预授权。这里按「当前 CSV 的 (obj, act) 全集」
-    清理 SysRolePermission，返回删除条数。
-    """
-    path = Path(policy_path or settings.CASBIN_POLICY_PATH)
-    keep: set[tuple[str, str]] = set()
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = [p.strip() for p in line.split(",")]
-        if len(parts) != 4 or parts[0] != "p":
-            continue
-        _, _role, obj, act = parts
-        keep.add((obj, act))
-
-    stale_ids = [
-        link.id
-        for link in SysRolePermission.objects.select_related("permission")
-        if (link.permission.obj, link.permission.act) not in keep
-    ]
-    if not stale_ids:
-        return 0
-    deleted, _ = SysRolePermission.objects.filter(id__in=stale_ids).delete()
-    return deleted
