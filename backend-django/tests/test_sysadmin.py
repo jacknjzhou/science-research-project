@@ -344,7 +344,8 @@ def test_seed_demo_idempotent(db):
     from apps.sysadmin.models import SysDict, SysDictItem, SysRole, SysUser
 
     assert SysRole.objects.count() == 9  # 8 基础角色 + M2-a R-PARTNER
-    assert SysUser.objects.count() == 5  # 4 内部演示账号 + M2-a 外部机构账号 partner
+    # 4 内部演示账号 + M2-a 外部机构账号 partner + M2-c 外部专家 expert_ext
+    assert SysUser.objects.count() == 6
     assert SysDict.objects.count() == 5
     assert SysDictItem.objects.count() == 26
     # 演示账号可登录

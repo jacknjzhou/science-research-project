@@ -78,6 +78,8 @@ def list_supplier_inquiries(request: HttpRequest):
     for b in bids:
         r = reqs.get(b.requisition_id)
         mine = [x for x in (b.bids_json or []) if int(x.get("supplierId", 0) or 0) == s.id]
+        # 历史 bids_json 可能是自由结构（缺 totalAmount），不能让历史脏数据 500
+        my_amount = mine[-1].get("totalAmount") if mine else None
         rows.append(
             {
                 "id": b.id,
@@ -88,7 +90,7 @@ def list_supplier_inquiries(request: HttpRequest):
                 "category": (r.category if r else None),
                 "open_at": b.bid_open_at.isoformat() if b.bid_open_at else None,
                 "quoted": bool(mine),
-                "my_amount": mine[-1]["totalAmount"] if mine else None,
+                "my_amount": my_amount,
             }
         )
     return ok(request, {"list": rows, "total": len(rows)})
@@ -131,7 +133,24 @@ def quote_inquiry(request: HttpRequest, id: int):
         b.modifier_id = d.user_id
         b.save(update_fields=["bids_json", "modifier_id", "updated_at"])
 
+    _notify_quote(b, s, amount)
     return ok(request, {"id": b.id, "totalAmount": _num2(amount), "quoted": True})
+
+
+def _notify_quote(b: GBid, s: GSupplier, amount: Decimal) -> None:
+    """应价回执（C5 终审 C-1）：通知采购发起人，外部供应商报价必须有人看到。"""
+    try:
+        from apps.notify.email import notify_user
+
+        if not b.creator_id:
+            return
+        notify_user(
+            b.tenant_id, b.creator_id, "TODO", "收到供应商报价",
+            f"{s.name} 已对 {b.code} 应价 {_num2(amount)} 元",
+            f"bid:{b.id}",
+        )
+    except Exception:  # noqa: BLE001  通知永不阻断应价
+        logger.warning("quote notify failed", exc_info=True)
 
 
 # ---------------------------------------------------------------- 合同进度（脱敏）

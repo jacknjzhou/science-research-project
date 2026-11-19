@@ -24,6 +24,24 @@ def has_external_role(roles: list[str] | None) -> bool:
     return bool(set(roles or []) & set(EXTERNAL_ROLES))
 
 
+def normalize_roles_for_account(roles: list[str] | None, user_source: str | None) -> list[str]:
+    """按角色语义 + 账号来源裁剪角色（M2-c 终审 I-2 修复）。
+
+    规则（从严到宽）：
+    1. 令牌里有 **R-PARTNER** → 恒按外部口径，只留外部允许集（剥掉全部内部角色）。
+       R-PARTNER 语义就是"外部机构用户"，院内账号不该持有；存量脏数据一律不外溢。
+    2. 只有 **R-EXPERT** 且账号来源是 EXTERNAL → 只留外部允许集（外部专家不得兼内部角色）。
+    3. 只有 R-EXPERT 且账号来源是院内/未知 → 原样保留（院内专家是合法形态，不降权）。
+    4. 无外部角色 → 原样保留。
+    """
+    codes = [str(r) for r in (roles or []) if r]
+    if "R-PARTNER" in codes:
+        return external_roles_of(codes)
+    if (user_source or "").upper() == "EXTERNAL" and has_external_role(codes):
+        return external_roles_of(codes)
+    return codes
+
+
 def current_org_id(d) -> int | None:
     """当前用户所属外部机构 id；院内用户/无 org 返回 None。"""
     uid = getattr(d, "user_id", 0) or 0

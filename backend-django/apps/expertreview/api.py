@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import logging
 import random
 import time
 from datetime import datetime
@@ -13,6 +14,8 @@ from decimal import Decimal
 
 from django.http import HttpRequest
 from django.utils import timezone as dj_tz
+
+logger = logging.getLogger(__name__)
 
 from apps.expertreview.mappings import (
     num2,
@@ -292,8 +295,8 @@ def invite_experts(request: HttpRequest, id: int):
     t = _get_task_or_404(domain_from(request).tenant_id, id)
     t.status = "INVITING"
     t.save(update_fields=["status", "updated_at"])
+    invites = list(NReviewInvitation.objects.filter(task_id=t.id))
     if t.biz_type == "MID_CHECK" and t.target_id:
-        invites = list(NReviewInvitation.objects.filter(task_id=t.id))
         user_ids = []
         for iv in invites:
             ex = NExpert.objects.filter(id=iv.expert_id).first()
@@ -302,7 +305,26 @@ def invite_experts(request: HttpRequest, id: int):
         if user_ids:
             from apps.project.api import set_mid_check_experts
             set_mid_check_experts(t.target_id, user_ids)
+    _notify_invitees(t, invites)
     return ok(request, None)
+
+
+def _notify_invitees(t: NReviewTask, invites: list[NReviewInvitation]) -> None:
+    """邀请发出即通知专家（C5：外部专家必须收到邮件才能应允）。best-effort。"""
+    try:
+        from apps.notify.email import notify_user
+
+        for iv in invites:
+            ex = NExpert.objects.filter(id=iv.expert_id, deleted=0).first()
+            if ex is None or not ex.user_id:
+                continue
+            notify_user(
+                t.tenant_id, ex.user_id, "TODO", "评审邀请",
+                f"{t.title or '评审任务'}（{t.biz_type}），请尽快接受或拒绝邀请",
+                f"review-task:{t.id}",
+            )
+    except Exception:  # noqa: BLE001  通知永不阻断邀请
+        logger.warning("review invite notify failed", exc_info=True)
 
 
 def _respond(request: HttpRequest, id: int, resp: str):
@@ -370,12 +392,27 @@ def submit_score(request: HttpRequest, id: int):
         raise ApiError(400, CODE_BAD_REQUEST, "请求参数错误") from None
     sc.comment = b.get("comment")
     sc.save()
+    _refresh_expert_stats(expert.id, t.tenant_id)
     submitted = NReviewScore.objects.filter(task_id=id).count()
     accepted = NReviewInvitation.objects.filter(task_id=id, response="ACCEPT").count()
     if accepted > 0 and submitted >= accepted:
         t.status = "COLLECTING"
         t.save(update_fields=["status", "updated_at"])
     return ok(request, to_api_score(sc))
+
+
+def _refresh_expert_stats(expert_id: int, tenant_id: int) -> None:
+    """回填专家档案的评审次数与最近评审时间（终审 I-3）。
+
+    原实现这两个列全仓无人更新 → 信用档案恒为 0/null，「专家画像」形同虚设。
+    这里按 N_REVIEW_SCORE 实际行数重算（幂等，重复提交不会双计）。
+    """
+    rows = NReviewScore.objects.filter(expert_id=expert_id, tenant_id=tenant_id)
+    count = rows.count()
+    last = rows.order_by("-submitted_at", "-id").values_list("submitted_at", flat=True).first()
+    NExpert.objects.filter(id=expert_id, tenant_id=tenant_id).update(
+        review_count=count, last_review_at=last
+    )
 
 
 def _build_score_summary(task_id: int) -> dict:

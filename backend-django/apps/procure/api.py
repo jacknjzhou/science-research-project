@@ -7,6 +7,7 @@ TO_SIGN→ACTIVE；供应商黑名单/未入库/资质过期硬拦截 40913）�
 """
 from __future__ import annotations
 
+import logging
 import time
 
 from django.db import transaction
@@ -23,8 +24,11 @@ from apps.procure.models import (
     GRequisition,
     GSupplier,
 )
+from apps.sysadmin.models import SysUser
 from core.auth.deps import domain_from
-from core.httpx import (
+logger = logging.getLogger(__name__)
+
+from core.httpx import (  # noqa: E402
     ApiError,
     CODE_BAD_REQUEST,
     CODE_CONFLICT,
@@ -314,8 +318,35 @@ def create_bid(request: HttpRequest):
     )
     r.status = "BIDDING"
     r.save(update_fields=["status", "updated_at"])
+    _notify_bid_invite(bid, r)
     return ok(request, {"id": bid.id, "code": bid.code, "status": bid.status,
                         "requisition_id": r.id, "method": bid.method})
+
+
+def _notify_bid_invite(bid: GBid, req: GRequisition) -> None:
+    """发标通知受邀供应商（C5：外部供应商对接人必须收到邮件）。best-effort。"""
+    try:
+        from apps.notify.email import notify_user
+
+        for sid in (bid.invited_supplier_ids or []):
+            sup = GSupplier.objects.filter(
+                id=int(sid), tenant_id=bid.tenant_id, deleted=0
+            ).first()
+            if sup is None or not sup.org_id:
+                continue
+            uids = list(
+                SysUser.objects.filter(
+                    tenant_id=bid.tenant_id, org_id=sup.org_id, deleted=0, status="ACTIVE"
+                ).values_list("id", flat=True)
+            )
+            for uid in uids:
+                notify_user(
+                    bid.tenant_id, uid, "TODO", "询价邀请",
+                    f"{req.item_name or '采购需求'}（{bid.code}），请在门户提交报价",
+                    f"bid:{bid.id}",
+                )
+    except Exception:  # noqa: BLE001  通知永不阻断发标
+        logger.warning("bid invite notify failed", exc_info=True)
 
 
 @validate_body(AwardIn)
@@ -772,7 +803,22 @@ def _my_supplier(d) -> GSupplier | None:
     org_id = current_org_id(d)
     if not org_id:
         return None
-    # 只认已入库供应商：PENDING/REJECTED/EXPIRED/黑名单都不得进门户
-    return GSupplier.objects.filter(
-        tenant_id=d.tenant_id, org_id=org_id, deleted=0, status="IN_LIBRARY"
-    ).first()
+    # 只认"可用"供应商（终审 I-1）：已入库 + 未黑名单 + 资质未过期 + 机构已批。
+    # PENDING/REJECTED/EXPIRED/黑名单/机构未批 一律视为无门户身份。
+    from apps.sysadmin.models import SysPartnerOrg
+
+    org_ok = SysPartnerOrg.objects.filter(
+        id=org_id, tenant_id=d.tenant_id, deleted=0, status="APPROVED"
+    ).exists()
+    if not org_ok:
+        return None
+
+    today = dj_tz.localdate()
+    rows = GSupplier.objects.filter(
+        tenant_id=d.tenant_id, org_id=org_id, deleted=0, status="IN_LIBRARY",
+    ).exclude(blacklist=True)
+    for sup in rows:
+        if sup.qualification_expire_date and sup.qualification_expire_date < today:
+            continue
+        return sup
+    return None

@@ -1020,11 +1020,12 @@ def decide_application(request: HttpRequest, id: int):
             a.remark = comment
             fields.append("remark")
         a.save(update_fields=fields)
-    _notify(
-        a.pi_user_id, "ANNOUNCE",
+    # C5 终审 C-1：决议通知 PI 必须走双通道（站内信+邮件），否则外部申报人收不到
+    _notify_user(
+        d.tenant_id, a.pi_user_id, "ANNOUNCE",
         "申报评审结果已发布" if decision == "PUBLISHED" else "申报已决议",
         f"《{a.title}》评审状态更新为 {decision}，可生成任务书并签署立项。",
-        f"application:{a.id}", d.tenant_id,
+        f"application:{a.id}",
     )
     return ok(request, to_api_application(a))
 

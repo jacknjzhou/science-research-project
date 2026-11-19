@@ -48,18 +48,21 @@ const ROLE_CAPS: Record<string, string[]> = {
     '/api/v1/projects/*/open-account POST',
   ], // 只读为主 + M1-a 经费写（与 policy.csv 同口径）
   'R-ETHICS': W(['GET']),
-  'R-EXPERT': [...W(['GET']), '/api/v1/review* POST', '/api/v1/review* PUT'],
+  'R-EXPERT': [...W(['GET']), '/api/v1/review* POST', '/api/v1/review* PUT',
+    // M2-c（policy.csv:911-915）：外部专家自助申请 + 专家门户只读
+    '/api/v1/portal/expert-apply POST',
+    '/api/v1/portal/expert/credit GET',
+    '/api/v1/portal/expert/reviews GET',
+    '/api/v1/portal/expert/activities GET',
+  ],
   'R-LEADER': [...W(['GET']), '/api/v1/apply/* PUT',
     // M1-b（policy.csv:414-440）：领导可审批决算（approve 由 /settlements/* 通配覆盖）
     '/api/v1/settlements/* POST',
     // M1-c（policy.csv:443-458）：领导只读拨款 + 回单识别 + 核算开户
     '/api/v1/incomes/ocr-receipt POST',
     '/api/v1/projects/*/open-account POST',
-    // —— M2-c：专家门户（信用档案/邀请/学术活动）——
-    '/api/v1/portal/expert-apply POST',
-    '/api/v1/portal/expert/credit GET',
-    '/api/v1/portal/expert/reviews GET',
-    '/api/v1/portal/expert/activities GET',
+    // M2-c（policy.csv:918-919）：领导可看专家信用档案（门户三条属专家本人，不授予领导）
+    '/api/v1/experts/*/credit GET',
   ],
   'R-MANAGER': [
     ...W(['GET']),
@@ -83,6 +86,7 @@ const ROLE_CAPS: Record<string, string[]> = {
     '/api/v1/expert-applications GET',
     '/api/v1/expert-applications/*/audit POST',
     '/api/v1/experts/*/credit GET',
+    '/api/v1/portal/supplier/inquiries GET',
   ],
   // M2-a：外部机构用户——仅本机构门户与公开面（镜像 policy.csv R-PARTNER 段）
   'R-PARTNER': [

@@ -67,14 +67,31 @@ def apply_expert(request: HttpRequest):
         raise ApiError(400, CODE_BAD_REQUEST, "姓名过长")
     if not d.user_id:
         raise ApiError(403, CODE_FORBIDDEN, "未认证")
-    if NExpert.objects.filter(
+    existing = NExpert.objects.filter(
         tenant_id=d.tenant_id, user_id=d.user_id, deleted=0
-    ).exists():
+    ).first()
+    if existing is not None and existing.status in ("CANDIDATE", "ACTIVE"):
         raise ApiError(409, CODE_CONFLICT, "已提交过专家申请")
 
     tags = body.get("field_tags")
     if tags is not None and not isinstance(tags, list):
         raise ApiError(400, CODE_BAD_REQUEST, "field_tags 必须为数组")
+
+    if existing is not None:
+        # 终审 I-4：被驳回/停用的申请可重新提交——复用原档案复位为待审，
+        # 而不是再建一条（否则 (tenant,user) 维度会堆出多条幽灵档案）。
+        existing.status = "CANDIDATE"
+        existing.name = name
+        existing.title = (body.get("title") or "").strip()[:64] or existing.title
+        existing.org_name = (body.get("org_name") or "").strip()[:128] or existing.org_name
+        existing.email = (body.get("email") or "").strip()[:128] or existing.email
+        existing.phone = (body.get("phone") or "").strip()[:32] or existing.phone
+        if tags is not None:
+            existing.field_tags = [str(t) for t in tags if str(t).strip()]
+        existing.reject_reason = None
+        existing.modifier_id = d.user_id
+        existing.save()
+        return ok(request, {"id": existing.id, "status": existing.status, "code": existing.code})
 
     e = NExpert.objects.create(
         tenant_id=d.tenant_id,
@@ -183,10 +200,18 @@ def audit_expert_application(request: HttpRequest, id: int):
 
 
 def _grant_expert_role(tenant_id: int, user_id: int | None):
-    """授予 R-EXPERT（外部账号只允许外部角色，内部角色不会因此追加）。"""
+    """授予 R-EXPERT（外部账号只允许外部角色，内部角色不会因此追加）。
+
+    终审 I-5：授角色前必须确认目标用户属于**本租户**且未删除——否则审核台可
+    跨租户给别人发权限（专家档案的 user_id 一旦被写脏就会放大成提权面）。
+    """
     if not user_id:
         return None
-    from apps.sysadmin.models import SysRole, SysUserRole
+    from apps.sysadmin.models import SysRole, SysUserRole, SysUser
+
+    owner = SysUser.objects.filter(id=user_id, tenant_id=tenant_id, deleted=0).first()
+    if owner is None:
+        raise ApiError(400, CODE_BAD_REQUEST, "专家档案绑定的用户不存在或不属于本租户")
 
     role = SysRole.objects.filter(code="R-EXPERT", tenant_id=tenant_id).first()
     if role is None:

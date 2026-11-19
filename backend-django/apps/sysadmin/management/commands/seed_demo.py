@@ -1189,14 +1189,29 @@ class Command(BaseCommand):
                 app_h.code = f"NEX-{today.year}-{app_h.id:06d}"
                 app_h.save(update_fields=["code"])
 
-            e_demo = NExpert.objects.filter(tenant_id=T1, name="王振华（演示）").first()
-            if e_demo is not None and not e_demo.user_id:
-                # 已生效档案绑定内部专家账号后，「专家门户」可直接演示信用档案
-                demo_expert_user = SysUser.objects.filter(
-                    tenant_id=T1, username="expert", deleted=0
-                ).first()
-                if demo_expert_user is not None:
-                    e_demo.user_id = demo_expert_user.id
+            # 外部专家账号（C3 验收：外部专家线上注册→审核→门户看信用档案）
+            expert_ext = put(SysUser,
+                             {"tenant_id": T1, "username": "expert_ext"},
+                             {"real_name": "王振华（外部专家）", "email": "expert@example.edu.cn",
+                              "phone": "13800000002", "staff_no": "EXT-0001",
+                              "status": "ACTIVE", "user_source": "EXTERNAL",
+                              "org_id": ptn_a.id, "legal_entity_id": None,
+                              "security_level": "PUBLIC", "creator_id": C1,
+                              "password_hash": bcrypt.hashpw(
+                                  b"Expert@123456", bcrypt.gensalt()
+                              ).decode(),
+                              "remark": "M2-c 演示：外部评审专家（机构 A）"}, "user")
+            if expert_ext is not None:
+                role_ext = SysRole.objects.filter(tenant_id=T1, code="R-EXPERT").first()
+                if role_ext is not None:
+                    SysUserRole.objects.get_or_create(
+                        user=expert_ext, role=role_ext, tenant_id=T1
+                    )
+
+                e_demo = NExpert.objects.filter(tenant_id=T1, name="王振华（演示）").first()
+                if e_demo is not None and e_demo.user_id != expert_ext.id:
+                    # 已生效档案绑到该外部专家账号后，「专家门户」可直接演示信用档案
+                    e_demo.user_id = expert_ext.id
                     e_demo.field_tags = e_demo.field_tags or ["材料科学"]
                     e_demo.save(update_fields=["user_id", "field_tags"])
 

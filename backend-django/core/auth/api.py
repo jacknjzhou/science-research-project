@@ -58,11 +58,11 @@ def login(request: HttpRequest) -> object:
             .values_list("role__code", flat=True)
         )
         codes = [r for r in roles if r]
-        # 外部角色独占（M2-c 允许集）：存量混合角色账号签发时只保留外部允许集内的角色
-        from core.org_scope import external_roles_of, has_external_role
+        # 角色归一（M2-c 允许集 + 终审 I-2）：外部账号只留外部允许集，
+        # 院内账号保留内部角色、只剥 R-PARTNER（院内 R-EXPERT 专家不被降权）
+        from core.org_scope import normalize_roles_for_account
 
-        if has_external_role(codes):
-            codes = external_roles_of(codes)
+        codes = normalize_roles_for_account(codes, user.user_source)
         claims = _issue(
             request,
             user.id,
