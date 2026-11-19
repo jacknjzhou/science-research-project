@@ -51,10 +51,22 @@ def _assert_settings_module_deployable() -> None:
     """
     import os
 
+    from django.conf import settings as dj_settings
+
+    if running_under_tests():
+        return
+
+    # 判据一：settings 里带 `IS_TEST_SETTINGS` 标记。用模块名判断会被
+    # `from config.settings.test import *` 这种别名绕过（r6-C2），而 `import *`
+    # 会把普通模块级变量一起复制过来，所以标记比模块名可靠。
+    if getattr(dj_settings, "IS_TEST_SETTINGS", False):
+        raise ImproperlyConfigured(
+            "这份 settings 是测试配置（IS_TEST_SETTINGS），不能作为部署配置。"
+            "请使用 config.settings.prod（或你自己的生产 settings）。"
+        )
+
     module = os.environ.get("DJANGO_SETTINGS_MODULE", "")
-    if module in ("config.settings.test",):
-        if running_under_tests():
-            return
+    if module == "config.settings.test":
         raise ImproperlyConfigured(
             "config.settings.test 仅供 pytest 使用，不能作为部署配置。"
             "请使用 config.settings.prod（或你自己的生产 settings）。"
@@ -237,20 +249,33 @@ def assert_no_default_credentials(*, attempts: int = 5, delay: float = 2.0) -> N
 # —— 进程级守卫：所有 Django 进程（wsgi/asgi/celery/manage/django-admin）都必须过 ——
 # 这些管理命令允许在「库里有默认口令」时运行——它们正是用来修复/初始化状态的。
 GUARD_EXEMPT_COMMANDS = frozenset({
+    # 修复/初始化：不豁免则无法自愈
     "migrate", "makemigrations", "showmigrations",
-    "rotate_demo_credentials", "seed_demo",
-    "test", "shell", "dbshell", "createsuperuser",
-    "dumpdata", "loaddata", "flush", "collectstatic",
+    "rotate_demo_credentials", "seed_demo", "createsuperuser",
+    # 无服务的本地调试/导出
+    "test", "shell", "dbshell", "dumpdata", "loaddata", "flush", "collectstatic",
+    # 纯信息输出：不该因为库有问题而看不出这是哪个版本
+    "help", "version",
 })
 
 
 def _current_management_command() -> str | None:
+    """识别「这是哪条管理命令」，仅用于判断豁免。
+
+    `python -m django <cmd>` 的 `argv[0]` 是 `.../django/__main__.py`，不是
+    `manage.py`——早期版本漏了这一形态，于是 `python -m django migrate` 被当成
+    「未知命令」走完整守卫，恢复库时会被自己的门禁挡住。
+    """
     import sys
 
     argv = list(getattr(sys, "argv", []))
     if len(argv) < 2:
         return None
-    if os.path.basename(argv[0]).startswith(("manage.py", "django-admin")):
+    entry = os.path.basename(argv[0])
+    is_entry = entry.startswith(("manage.py", "django-admin")) or (
+        entry == "__main__.py" and f"{os.sep}django{os.sep}" in argv[0]
+    )
+    if is_entry:
         return argv[1].split(":")[0]
     return None
 
@@ -267,6 +292,8 @@ def enforce_process_guard() -> None:
     if getattr(dj_settings, "DEBUG", False):
         return
     validate_runtime_secrets()
+    if running_under_tests():
+        return
     if _current_management_command() in GUARD_EXEMPT_COMMANDS:
         return
     assert_no_default_credentials()

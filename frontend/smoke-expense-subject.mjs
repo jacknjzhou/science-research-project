@@ -1,9 +1,14 @@
 import { chromium } from 'playwright'
 
-// E-8：演示口令不再写死在脚本里（部署方用 ARK_SEED_PASSWORD 指定）。
-const DEMO_PASSWORDS = {admin: 'Admin@123456', manager: 'Manager@123456',
-  staff: 'Staff@123456', finance: 'Finance@123456'};
-const smokePwd = (who) => process.env.ARK_SMOKE_PASSWORD || DEMO_PASSWORDS[who];
+// E-8：脚本不内置演示口令——口令由部署方通过 ARK_SEED_PASSWORD 指定。
+const smokePwd = (who) => {
+  const pwd = process.env.ARK_SMOKE_PASSWORD;
+  if (!pwd) {
+    console.error('缺少 ARK_SMOKE_PASSWORD（演示账号口令由部署方指定，脚本不内置）');
+    process.exit(1);
+  }
+  return pwd;
+};
 
 // 冒烟：报销单科目下拉对齐经费配置语义
 // ① staff 报销页「支出科目」仅列所选预算的水位行科目（带余额）

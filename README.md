@@ -54,7 +54,7 @@ docker compose up -d --build
 > 已存在库重播种时，`ARK_SEED_PASSWORD` 会**轮换**全部演示账号口令
 > （`admin`/`manager`/`staff`/`finance`/`partner`/`expert_ext`），旧默认口令随即失效。
 >
-> **升级旧数据卷（E-8 之前建的库）**：那类库里 `admin/Admin@123456` 等公开口令仍然有效。
+> **升级旧数据卷（E-8 之前建的库）**：那类库里仍是仓库早期的公开演示口令（如 `Admin@123456`，**不要再用它登录**）。
 > 生产启动会**直接拒绝**（`检测到仍在使用仓库默认口令的账号：…`），因为「默认口令的 R-ADMIN」
 > 等同没有口令。修复只需一条命令，之后容器正常起来：
 >
@@ -96,7 +96,7 @@ python manage.py migrate                                    # 默认连 localhos
 python manage.py seed_demo                                  # 幂等播种
 
 # 全量测试（sqlite 内存库，不依赖 PG）
-python -m pytest tests -q                                   # 当前 522 passed
+python -m pytest tests -q                                   # 当前 537 passed
 
 > **冒烟后门（仅本地/演示）**：`ark/ark` 登录默认**关闭**；需同时满足 `DEBUG=True` 与
 > 环境变量 `ARK_DEV_LOGIN=1` 才会签发一个最小权限（`R-STAFF`）令牌，数据域由

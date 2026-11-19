@@ -420,6 +420,10 @@ def test_process_guard_blocks_non_exempt_command(settings, monkeypatch):
     settings.JWT_SECRET = "Z" * 40
     _make_admin_with("Admin@123456")
     monkeypatch.setattr(startup, "_current_management_command", lambda: "runserver", raising=False)
+    # guard 在 pytest 进程里按测试形态放行（否则套件自身无法启动）；
+    # 这里模拟的是「真实服务进程」，所以显式关掉测试形态判定。
+    # 真实子进程路径由 test_manage_check_blocks_legacy_db 等用例覆盖。
+    monkeypatch.setattr(startup, "running_under_tests", lambda: False, raising=False)
     with pytest.raises(ImproperlyConfigured):
         startup.enforce_process_guard()
 
@@ -477,6 +481,7 @@ def test_manage_command_gate_blocks_check_on_default_credentials(settings, monke
     settings.JWT_SECRET = "Z" * 40
     _make_admin_with("Admin@123456")
     monkeypatch.setattr(startup, "_current_management_command", lambda: "check", raising=False)
+    monkeypatch.setattr(startup, "running_under_tests", lambda: False, raising=False)
     with pytest.raises(ImproperlyConfigured):
         startup.enforce_process_guard()
 
@@ -525,3 +530,107 @@ def test_demo_seed_switch_ignored_outside_debug_and_tests(settings, monkeypatch)
     monkeypatch.setattr(startup, "running_under_tests", lambda: False, raising=False)
     with pytest.raises(CommandError):  # 视为未授权播种
         _seed()
+
+
+# —— r6 回归：真实进程验证（不再 mock 命令识别）——
+# 上一轮的 manage 用例把 `_current_management_command` monkeypatch 成 "check"，
+# 于是「守卫在哪一层被调用」从来没被验证过：r5 的 bug 正是 manage.py 根本没调
+# 完整守卫，而测试全绿。这里一律起真进程。
+
+import os
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+_STRONG_SECRET = "Z" * 44
+
+
+def _env(db_path: Path, *, prod: bool) -> dict:
+    env = os.environ.copy()
+    env.pop("DJANGO_SETTINGS_MODULE", None)
+    env.pop("ARK_DEV_LOGIN", None)
+    env.update(
+        {
+            "ARK_DB_ENGINE": "sqlite",
+            "ARK_DB_NAME": str(db_path),
+            "ARK_JWT_SECRET": _STRONG_SECRET,
+            "PYTHONPATH": str(BACKEND_DIR),
+        }
+    )
+    if prod:
+        env["DJANGO_SETTINGS_MODULE"] = "config.settings.prod"
+    else:
+        env["DJANGO_SETTINGS_MODULE"] = "config.settings.dev"
+    return env
+
+
+def _run(args: list[str], env: dict) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        args, cwd=str(BACKEND_DIR), env=env, capture_output=True, text=True, timeout=180
+    )
+
+
+@pytest.fixture(scope="module")
+def legacy_db(tmp_path_factory) -> Path:
+    """一个「E-8 之前建的」库：migrate + seed_demo，六个公开默认口令账号在库。"""
+    db = tmp_path_factory.mktemp("legacy") / "legacy.sqlite3"
+    env = _env(db, prod=False)
+    for args in (["migrate", "--noinput"], ["seed_demo"]):
+        res = _run([sys.executable, "manage.py", *args], env)
+        assert res.returncode == 0, res.stderr[-2000:]
+    return db
+
+
+@pytest.mark.parametrize(
+    "settings_arg",
+    ["--settings=config.settings.prod", "env"],
+    ids=["cli-settings-flag", "env-settings-module"],
+)
+def test_manage_check_blocks_legacy_db(legacy_db: Path, settings_arg: str):
+    """r6-C1：`manage.py check` 在旧库上必须 exit 1，且 `--settings` 传 prod 也不能被降级。
+
+    曾经的实现把守卫放在 `execute_from_command_line` 之前，那时 `--settings` 还没解析，
+    `manage.py check --settings=config.settings.prod` 会用默认 dev 配置初始化 →
+    `settings.DEBUG is True` → 守卫直接返回，于是「看起来守住了」。
+    """
+    env = _env(legacy_db, prod=settings_arg == "env")
+    args = [sys.executable, "manage.py", "check"]
+    if settings_arg != "env":
+        args.append(settings_arg)
+    res = _run(args, env)
+    assert res.returncode == 1, f"期望 exit 1，实际 {res.returncode}: {res.stdout}{res.stderr}"
+    assert "默认口令" in res.stderr
+    assert "rotate_demo_credentials" in res.stderr
+
+
+def test_django_admin_check_blocks_legacy_db(legacy_db: Path):
+    """`python -m django check`（不经 manage.py）同样要过凭据门禁。"""
+    res = _run([sys.executable, "-m", "django", "check"], _env(legacy_db, prod=True))
+    assert res.returncode == 1
+    assert "默认口令" in res.stderr
+
+
+def test_manage_help_still_works_on_legacy_db(legacy_db: Path):
+    """`help` 是纯信息命令：库不可用/带病时也必须能看出这是哪个版本。"""
+    res = _run([sys.executable, "manage.py", "help"], _env(legacy_db, prod=True))
+    assert res.returncode == 0, res.stderr[-2000:]
+    assert "rotate_demo_credentials" in res.stdout
+
+
+def test_alias_test_settings_module_is_refused(tmp_path: Path):
+    """r6-C2：`from config.settings.test import *` 的别名模块不能当部署配置。
+
+    按模块名匹配会被这种别名绕过；现在认 settings 里的 `IS_TEST_SETTINGS` 标记。
+    """
+    alias_dir = tmp_path / "aliaspkg"
+    alias_dir.mkdir()
+    (alias_dir / "mydeploy.py").write_text("from config.settings.test import *  # noqa\n")
+    db = tmp_path / "alias.sqlite3"
+    env = _env(db, prod=False)
+    env["DJANGO_SETTINGS_MODULE"] = "mydeploy"
+    env["PYTHONPATH"] = f"{alias_dir}{os.pathsep}{BACKEND_DIR}"
+    res = _run([sys.executable, "-c", "import django; django.setup()"], env)
+    assert res.returncode != 0
+    assert "IS_TEST_SETTINGS" in res.stderr
