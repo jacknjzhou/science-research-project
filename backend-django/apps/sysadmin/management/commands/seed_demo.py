@@ -142,7 +142,14 @@ class Command(BaseCommand):
         返回「覆盖所有演示账号口令」的替代口令（None 表示用各自的默认口令）。
         两把锁：①是否允许播种；②非开发形态必须由环境提供口令。
         """
-        demo_mode = bool(getattr(settings, "ALLOW_DEMO_SEED", False))
+        from core.startup import running_under_tests
+
+        # `ALLOW_DEMO_SEED` 是「本机都允许播种」的开关，只能在本机（DEBUG）或测试
+        # 进程里生效。否则一份带该开关的配置（例如被误当生产配置使用的
+        # config.settings.test）就能种出公开口令账号。
+        demo_mode = bool(getattr(settings, "ALLOW_DEMO_SEED", False)) and (
+            bool(getattr(settings, "DEBUG", False)) or running_under_tests()
+        )
         opt_in = bool(options.get("force")) or os.environ.get("ARK_SEED_DEMO") == "1"
         if not (demo_mode or opt_in):
             raise CommandError(

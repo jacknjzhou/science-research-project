@@ -30,6 +30,37 @@ SECRET_MIN_LEN = 32
 SECRET_HINT = "生成方式：openssl rand -base64 32"
 
 
+def running_under_tests() -> bool:
+    """当前进程是不是测试进程（pytest / manage.py test）。
+
+    只用来判断「测试专用配置能否生效」，不用于放宽任何生产检查。
+    """
+    import sys
+
+    if "pytest" in sys.modules:
+        return True
+    return _current_management_command() == "test"
+
+
+def _assert_settings_module_deployable() -> None:
+    """`config.settings.test` / `.dev` 不是部署形态，误用即拒绝服务。
+
+    这两份配置带着仓库内置的密钥与「允许播种演示账号」开关；一旦被当成生产
+    settings 用（`DJANGO_SETTINGS_MODULE=config.settings.test gunicorn …`），
+    守卫看到的一切都是「合规」的，攻击面却是公开的。因此在服务进程里直接拒绝。
+    """
+    import os
+
+    module = os.environ.get("DJANGO_SETTINGS_MODULE", "")
+    if module in ("config.settings.test",):
+        if running_under_tests():
+            return
+        raise ImproperlyConfigured(
+            "config.settings.test 仅供 pytest 使用，不能作为部署配置。"
+            "请使用 config.settings.prod（或你自己的生产 settings）。"
+        )
+
+
 def validate_runtime_secrets() -> None:
     """生产形态（`settings.DEBUG is False`）的 JWT 密钥硬化检查。
 
@@ -45,6 +76,8 @@ def validate_runtime_secrets() -> None:
 
     if getattr(dj_settings, "DEBUG", False):
         return  # 本地 dev 形态：允许使用仓库缺省密钥
+
+    _assert_settings_module_deployable()
 
     # 校验**真正用于签名**的值：`core/auth/jwt_util` 读的是 settings.JWT_SECRET，
     # 自定义 settings 可以直接把它覆盖成弱值（而环境变量看起来是合规的）。

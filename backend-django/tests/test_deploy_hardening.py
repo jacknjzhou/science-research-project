@@ -464,3 +464,64 @@ def test_account_table_ready_treats_partial_schema_as_unknown(settings, monkeypa
         connection.introspection, "table_names", lambda *a, **k: ["sys_user"]
     )
     assert startup._account_table_ready() is True
+
+
+# —— r5 回归（manage 命令也要拦 / 测试配置不可部署）——
+
+@pytest.mark.django_db
+def test_manage_command_gate_blocks_check_on_default_credentials(settings, monkeypatch):
+    """r5-C1：`manage.py check` 在旧库上不能 exit 0——运维必须看到「库里有默认口令」。"""
+    from core import startup
+
+    settings.DEBUG = False
+    settings.JWT_SECRET = "Z" * 40
+    _make_admin_with("Admin@123456")
+    monkeypatch.setattr(startup, "_current_management_command", lambda: "check", raising=False)
+    with pytest.raises(ImproperlyConfigured):
+        startup.enforce_process_guard()
+
+
+@pytest.mark.django_db
+def test_manage_command_gate_still_allows_remediation(settings, monkeypatch):
+    """修复命令不被拦（否则 `manage.py rotate_demo_credentials` 永远跑不起来）。"""
+    from core import startup
+
+    settings.DEBUG = False
+    settings.JWT_SECRET = "Z" * 40
+    _make_admin_with("Admin@123456")
+    monkeypatch.setattr(
+        startup, "_current_management_command", lambda: "rotate_demo_credentials", raising=False
+    )
+    startup.enforce_process_guard()
+
+
+def test_test_settings_module_is_not_deployable(settings, monkeypatch):
+    """r5-I2：`config.settings.test` 带内置密钥与播种开关，不能被当成部署配置。"""
+    from core import startup
+
+    settings.DEBUG = False
+    settings.JWT_SECRET = "Z" * 40
+    monkeypatch.setenv("DJANGO_SETTINGS_MODULE", "config.settings.test")
+    monkeypatch.setattr(startup, "running_under_tests", lambda: False, raising=False)
+    with pytest.raises(ImproperlyConfigured):
+        startup.validate_runtime_secrets()
+
+    # pytest 进程里放行（否则套件自身无法启动）
+    monkeypatch.setattr(startup, "running_under_tests", lambda: True, raising=False)
+    startup.validate_runtime_secrets()
+
+
+def test_demo_seed_switch_ignored_outside_debug_and_tests(settings, monkeypatch):
+    """r5-I2：`ALLOW_DEMO_SEED` 只在 DEBUG/测试进程生效，避免「一份配置到处播种」。"""
+    from django.core.management.base import CommandError
+
+    from core import startup
+
+    settings.ALLOW_DEMO_SEED = True
+    settings.DEBUG = False
+    settings.JWT_SECRET = "Z" * 40
+    monkeypatch.delenv("ARK_SEED_DEMO", raising=False)
+    monkeypatch.delenv("ARK_SEED_PASSWORD", raising=False)
+    monkeypatch.setattr(startup, "running_under_tests", lambda: False, raising=False)
+    with pytest.raises(CommandError):  # 视为未授权播种
+        _seed()
