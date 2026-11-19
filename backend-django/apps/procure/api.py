@@ -381,13 +381,16 @@ def award_bid(request: HttpRequest, id: int):
         bid.status = "CHALLENGE"
         bid.remark = "; ".join(filter(None, [bid.remark, f"voided:{b.get('void_reason') or '未填原因'}"]))
         r = bid.requisition
-        if r.frozen_amount and r.frozen_amount > 0:
+        if r is not None and r.tenant_id != dom.tenant_id:
+            # 历史脏行（C-2 窗口内建的单据）不得跨租户释放预算冻结
+            raise ApiError(409, CODE_CONFLICT, "招标关联的采购申请不属于本租户，已阻断")
+        if r is not None and r.frozen_amount and r.frozen_amount > 0:
             from apps.funding.models import FBudgetLine, FSubject
             sub = FSubject.objects.filter(tenant_id=r.tenant_id, code=r.budget_subject_code,
                                           deleted=0).first()
             if sub is not None:
                 line = FBudgetLine.objects.filter(id=int((r.remark or "").split("budget_line=")[-1].split(";")[0] or 0),
-                                                  deleted=0).first()
+                                                  tenant_id=r.tenant_id, deleted=0).first()
                 if line is None:
                     line = FBudgetLine.objects.filter(tenant_id=r.tenant_id, subject_id=sub.id,
                                                       deleted=0).first()
@@ -782,6 +785,9 @@ def payment_callback(request: HttpRequest):
         raise ApiError(409, CODE_PAYMENT_EXCEED, "累计实付超合同额")
     # 冻结→实扣：合同关联申请冻结转实扣（有 requisition 且冻结未释放）
     r = c.requisition
+    if r is not None and r.tenant_id != dom.tenant_id:
+        # 历史脏行（C-2 窗口内建的单据）不得跨租户实扣预算
+        raise ApiError(409, CODE_CONFLICT, "合同关联的采购申请不属于本租户，已阻断")
     if r is not None and r.frozen_amount and r.frozen_amount > 0:
         from apps.funding.models import FBudgetLine, FSubject
         sub = FSubject.objects.filter(tenant_id=r.tenant_id, code=r.budget_subject_code,

@@ -345,25 +345,45 @@ def test_create_contract_rejects_foreign_requisition(seed_auth):
     assert r.status_code == 404
 
 
-def test_asset_convert_rejects_foreign_order(seed_auth):
-    """E-2 同族：资产转固不得引用他租户订单。"""
+def _accepted_order(tenant_id: int, req=None, sup=None):
     from decimal import Decimal
 
     from apps.procure.models import GOrder
 
-    sup2 = _sup_row(2, "他租户供应商")
-    req2 = _req_row(2, "他租户订单来源")
-    o2 = GOrder.objects.create(
-        tenant_id=2, creator_id=1, requisition=req2, supplier=sup2,
+    return GOrder.objects.create(
+        tenant_id=tenant_id, creator_id=1,
+        requisition=req or _req_row(tenant_id), supplier=sup or _sup_row(tenant_id),
         order_amount=Decimal("1000"), delivery_status="ACCEPTED",
     )
+
+
+def test_asset_from_receipt_rejects_foreign_order(seed_auth):
+    """E-2 同族：资产转固（/asset/from-receipt）不得引用他租户订单。"""
+    o2 = _accepted_order(2)
     r = Client().post(
-        "/api/v1/asset/from-order",
-        data=json.dumps({"orderId": o2.id, "category": "设备", "name": "服务器"}),
+        "/api/v1/asset/from-receipt",
+        data=json.dumps({"orderId": o2.id}),
         content_type="application/json",
-        **bearer(seed_auth["admin"].id, ["R-STAFF"]),
+        **bearer(seed_auth["admin"].id, ["R-MANAGER"]),
     )
     assert r.status_code == 404
+    o2.refresh_from_db()
+    assert o2.converted_asset is False
+
+
+def test_asset_from_receipt_allows_same_tenant_order(seed_auth):
+    """正向对照：本租户 ACCEPTED 订单可正常转固（证明上一条不是路由空转）。"""
+    o1 = _accepted_order(1)
+    r = Client().post(
+        "/api/v1/asset/from-receipt",
+        data=json.dumps({"orderId": o1.id}),
+        content_type="application/json",
+        **bearer(seed_auth["admin"].id, ["R-MANAGER"]),
+    )
+    assert r.status_code == 200, r.content
+    assert r.json()["data"]["order_id"] == o1.id
+    o1.refresh_from_db()
+    assert o1.converted_asset is True
 
 
 def test_score_rejects_draft_task(seed_auth):
@@ -407,3 +427,72 @@ def test_dev_login_ignores_body_tenant(seed_auth, settings, monkeypatch):
     assert r.status_code == 200
     claims = parse_token(r.json()["data"]["access_token"])
     assert int(claims["tenant_id"]) == 1
+
+
+# ---------------------------------------------------------------- 终审 r2：脏行预算出口
+
+
+def test_payment_callback_blocks_dirty_cross_tenant_requisition(seed_auth):
+    """C-3（终审 r2）：历史脏行（合同挂在他人租户采购申请上）不得触发跨租户预算实扣。"""
+    from datetime import date, timedelta
+    from decimal import Decimal
+
+    from apps.expertreview.models import NExpert  # noqa: F401  保证 app 已加载
+    from apps.funding.models import FBudget, FBudgetLine, FSubject
+    from apps.procure.models import GContract, GContractPayment
+
+    # 受害租户 2：一条冻结了 1000 的预算行
+    sub2 = FSubject.objects.create(
+        tenant_id=2, creator_id=1, code="6601", name="他租户测试科目", status="ACTIVE",
+    )
+    bud2 = FBudget.objects.create(
+        tenant_id=2, creator_id=1, project_id=9001, legal_entity_id=1,
+        code="BUD-DIRTY-01", mode="预算制", total_approved=Decimal("5000"),
+    )
+    line2 = FBudgetLine.objects.create(
+        tenant_id=2, creator_id=1, budget_id=bud2.id, subject_id=sub2.id,
+        amount_planned=Decimal("5000"), amount_frozen=Decimal("1000"),
+        status="ACTIVE",
+    )
+    req2 = _req_row(2, "他租户脏申请")
+    req2.frozen_amount = Decimal("1000")
+    req2.budget_subject_code = "6601"
+    req2.remark = f"budget_line={line2.id}"
+    req2.save()
+
+    # 脏合同：tenant 1 的合同指向 tenant 2 的采购申请（C-2 修复前可造出）
+    sup1 = _sup_row(1, "本租户供应商")
+    c1 = GContract.objects.create(
+        tenant_id=1, creator_id=1, supplier=sup1, contract_type="采购",
+        party_a="本单位", party_b=sup1.name, amount=Decimal("4000"),
+        requisition=req2, sign_date=date.today(), start_date=date.today(),
+        end_date=date.today() + timedelta(days=30), status="ACTIVE",
+    )
+    p1 = GContractPayment.objects.create(
+        tenant_id=1, creator_id=1, contract=c1, phase="预付",
+        plan_amount=Decimal("1000"), paid_amount=Decimal("0"), status="PLANNED",
+    )
+    r = Client().post(
+        "/api/v1/finance/expense",
+        data=json.dumps({"payment_id": p1.id, "expense_id": 9101, "paid_amount": "1000"}),
+        content_type="application/json",
+        **bearer(seed_auth["admin"].id, ["R-FINANCE"]),
+    )
+    assert r.status_code == 409, r.content
+    line2.refresh_from_db()
+    assert line2.amount_frozen == Decimal("1000") and line2.amount_used == Decimal("0")
+    req2.refresh_from_db()
+    assert req2.frozen_amount == Decimal("1000")
+    p1.refresh_from_db()
+    assert p1.status == "PLANNED"
+
+
+# ---------------------------------------------------------------- 终审 r2：prod 配置债
+
+
+def test_prod_settings_have_debug_off():
+    """Important（终审 r2）：必须存在 DEBUG=False 的生产配置，供 compose/部署选用。"""
+    import importlib
+
+    prod = importlib.import_module("config.settings.prod")
+    assert prod.DEBUG is False
